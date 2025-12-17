@@ -1,0 +1,144 @@
+# =============================================================================
+# .gitignore for ROS 2 Gazebo Communication Simulator
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# ROS 2 Build Artifacts
+# -----------------------------------------------------------------------------
+build/
+install/
+log/
+*.pyc
+__pycache__/
+*.egg-info/
+
+# colcon
+.colcon/
+
+# -----------------------------------------------------------------------------
+# Python
+# -----------------------------------------------------------------------------
+*.py[cod]
+*$py.class
+*.so
+.Python
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+MANIFEST
+
+# Jupyter Notebook
+.ipynb_checkpoints
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# -----------------------------------------------------------------------------
+# IDE / Editor
+# -----------------------------------------------------------------------------
+# VS Code
+.vscode/
+*.code-workspace
+
+# JetBrains
+.idea/
+*.iml
+
+# Eclipse
+.project
+.cproject
+.pydevproject
+
+# Sublime Text
+*.sublime-project
+*.sublime-workspace
+
+# Vim
+*.swp
+*.swo
+*~
+
+# Emacs
+*~
+\#*\#
+/.emacs.desktop
+/.emacs.desktop.lock
+*.elc
+
+# -----------------------------------------------------------------------------
+# Docker
+# -----------------------------------------------------------------------------
+# Docker compose override (for local customization)
+docker-compose.override.yml
+
+# -----------------------------------------------------------------------------
+# Gazebo
+# -----------------------------------------------------------------------------
+# Gazebo cache (stored in volume, not tracked)
+.gz/
+.gazebo/
+
+# Downloaded Fuel models (large files)
+# Note: models/ directory is tracked, but downloaded cache is not
+models/.cache/
+
+# -----------------------------------------------------------------------------
+# OS Generated
+# -----------------------------------------------------------------------------
+# macOS
+.DS_Store
+.AppleDouble
+.LSOverride
+
+# Windows
+Thumbs.db
+ehthumbs.db
+Desktop.ini
+$RECYCLE.BIN/
+
+# Linux
+*~
+.directory
+
+# -----------------------------------------------------------------------------
+# Logs and Databases
+# -----------------------------------------------------------------------------
+*.log
+*.sql
+*.sqlite
+
+# Keep log directory structure but ignore contents
+log/sim_result/*
+!log/sim_result/.gitkeep
+
+# -----------------------------------------------------------------------------
+# Temporary Files
+# -----------------------------------------------------------------------------
+*.tmp
+*.temp
+*.bak
+*.backup
+
+# -----------------------------------------------------------------------------
+# Custom Exclusions
+# -----------------------------------------------------------------------------
+# Large mesh files (if downloaded separately)
+*.dae.bak
+*.stl.bak
+
+# Test outputs
+test_output/

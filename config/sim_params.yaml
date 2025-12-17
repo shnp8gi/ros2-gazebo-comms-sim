@@ -1,0 +1,115 @@
+# =============================================================================
+# ROS 2 Gazebo Communication Simulator - Configuration Parameters
+# =============================================================================
+
+# -----------------------------------------------------------------------------
+# Communication Simulator Node Parameters
+# -----------------------------------------------------------------------------
+comms_simulator_node:
+  ros__parameters:
+    # Sampling rate for communication quality calculation [Hz]
+    sampling_rate: 1.0
+    
+    # AWGN noise variance (initial value) [dB]
+    noise_variance: 2.0
+    
+    # Antenna gain CSV file paths
+    e_plane_path: "/workspace/config/e_plane.csv"
+    h_plane_path: "/workspace/config/h_plane.csv"
+    
+    # Model paths (for reference)
+    suv_model_path: "/workspace/models/SUV"
+    antenna_model_path: "/workspace/models/antenna"
+    
+    # Communication data limit [Mb] (-1.0 for unlimited)
+    comm_data_limit_mb: -1.0
+    
+    # Path loss model parameters
+    path_loss:
+      # Reference distance [m]
+      d0: 1.0
+      # Path loss at reference distance [dB]
+      pl0: 40.0
+      # Path loss exponent (n)
+      # Free space: 2.0, Urban: 2.7-3.5, Indoor LOS: 1.6-1.8
+      exponent: 2.0
+    
+    # Transmit power [dBm]
+    tx_power: 20.0
+
+# -----------------------------------------------------------------------------
+# UGV Controller Node Parameters
+# -----------------------------------------------------------------------------
+ugv_controller_node:
+  ros__parameters:
+    # Waypoint list: [X, Y, Z, V] where V is target velocity [m/s]
+    # Format: [[x1, y1, z1, v1], [x2, y2, z2, v2], ...]
+    waypoints:
+      - [10.0, 0.0, 0.0, 2.0]    # Start position
+      - [50.0, 0.0, 0.0, 3.0]    # Move forward
+      - [50.0, 50.0, 0.0, 2.5]   # Turn right
+      - [100.0, 50.0, 0.0, 4.0]  # Continue forward
+      - [100.0, 100.0, 0.0, 3.0] # Turn right again
+      - [50.0, 100.0, 0.0, 2.0]  # Move back
+      - [50.0, 50.0, 0.0, 2.5]   # Return path
+      - [10.0, 0.0, 0.0, 2.0]    # Return to start
+    
+    # Waypoint tolerance [m] - distance threshold to consider waypoint reached
+    waypoint_tolerance: 2.0
+    
+    # Control loop rate [Hz]
+    control_rate: 10.0
+    
+    # Maximum angular velocity [rad/s]
+    max_angular_velocity: 1.0
+    
+    # Heading control gain (proportional)
+    heading_gain: 1.5
+
+# -----------------------------------------------------------------------------
+# ROS-Gazebo Bridge Configuration
+# -----------------------------------------------------------------------------
+ros_gz_bridge:
+  ros__parameters:
+    # Bridge configuration for topics
+    config_file: ""
+
+# -----------------------------------------------------------------------------
+# Simulation Settings
+# -----------------------------------------------------------------------------
+simulation:
+  # World file path
+  world_file: "/workspace/comms_sim_pkg/resource/minimal_world.sdf"
+  
+  # Gazebo verbosity level (0-4)
+  verbosity: 3
+  
+  # Real-time factor (1.0 = real-time, >1.0 = faster)
+  real_time_factor: 1.0
+
+# -----------------------------------------------------------------------------
+# Spawn Entities Configuration
+# Models to be spawned dynamically via launch file
+# -----------------------------------------------------------------------------
+spawn_entities:
+  # Ground Station (Base Station) - Static antenna tower
+  antenna:
+    model_uri: "model://antenna"
+    name: "antenna"
+    # Pose: [x, y, z, roll, pitch, yaw]
+    pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    static: true
+    # Antenna height offset from model base [m]
+    # (Used for communication calculation: antenna_position = pose + [0, 0, antenna_height_offset])
+    # Based on antenna.dae mesh: collision cylinder height is 1.9m, center at 0.95m
+    antenna_height_offset: 1.9
+  
+  # SUV (Mobile Vehicle) - UGV with sensors
+  suv:
+    model_uri: "model://SUV"
+    name: "suv"
+    # Pose: [x, y, z, roll, pitch, yaw]
+    pose: [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    static: false
+    # Antenna height offset from vehicle base [m]
+    antenna_height_offset: 1.3

@@ -1,0 +1,120 @@
+# =============================================================================
+# ROS 2 Gazebo Communication Simulator - Docker Compose Configuration
+# =============================================================================
+
+services:
+  # ===========================================================================
+  # GUI Mode - With X11 Forwarding for Gazebo visualization
+  # ===========================================================================
+  sim-gui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ros2-gazebo-comms-sim:humble-harmonic
+    container_name: comms_sim_gui
+    
+    # X11 Forwarding settings for GUI
+    environment:
+      - DISPLAY=${DISPLAY}
+      - QT_X11_NO_MITSHM=1
+      - LIBGL_ALWAYS_SOFTWARE=1
+      - GZ_SIM_RESOURCE_PATH=/workspace/models
+      - ROS_DOMAIN_ID=0
+    
+    volumes:
+      # Mount workspace
+      - .:/workspace:rw
+      # X11 socket for GUI
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # Gazebo cache (optional, for faster model loading)
+      - gz_cache:/root/.gz
+    
+    # Network mode for ROS 2 DDS communication
+    network_mode: host
+    
+    # Allow GPU access (if available)
+    privileged: true
+    
+    stdin_open: true
+    tty: true
+    
+    working_dir: /workspace
+    
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        if [ -f /workspace/install/setup.bash ]; then
+          source /workspace/install/setup.bash
+        fi &&
+        echo 'ROS 2 Humble + Gazebo Harmonic environment ready (GUI mode)' &&
+        bash
+      "
+
+  # ===========================================================================
+  # CUI Mode - Headless simulation for faster computation
+  # ===========================================================================
+  sim-cui:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ros2-gazebo-comms-sim:humble-harmonic
+    container_name: comms_sim_cui
+    
+    environment:
+      - GZ_SIM_RESOURCE_PATH=/workspace/models
+      - ROS_DOMAIN_ID=0
+      # Headless mode flag
+      - HEADLESS=1
+    
+    volumes:
+      # Mount workspace
+      - .:/workspace:rw
+      # Gazebo cache
+      - gz_cache:/root/.gz
+    
+    network_mode: host
+    
+    stdin_open: true
+    tty: true
+    
+    working_dir: /workspace
+    
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        if [ -f /workspace/install/setup.bash ]; then
+          source /workspace/install/setup.bash
+        fi &&
+        echo 'ROS 2 Humble + Gazebo Harmonic environment ready (CUI/Headless mode)' &&
+        bash
+      "
+
+  # ===========================================================================
+  # Build Only - For building the ROS 2 workspace
+  # ===========================================================================
+  build:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: ros2-gazebo-comms-sim:humble-harmonic
+    container_name: comms_sim_build
+    
+    volumes:
+      - .:/workspace:rw
+    
+    working_dir: /workspace
+    
+    command: >
+      bash -c "
+        source /opt/ros/humble/setup.bash &&
+        cd /workspace &&
+        colcon build --symlink-install &&
+        echo 'Build completed successfully!'
+      "
+
+# =============================================================================
+# Volumes
+# =============================================================================
+volumes:
+  gz_cache:
+    name: gazebo_harmonic_cache
