@@ -29,6 +29,7 @@ import csv
 import os
 from datetime import datetime
 from typing import Optional, List, Tuple
+from enum import Enum
 
 import numpy as np
 import rclpy
@@ -81,12 +82,23 @@ def quaternion_to_euler(x: float, y: float, z: float, w: float) -> Tuple[float, 
     return roll, pitch, yaw
 
 
+class LinkState(Enum):
+    """Communication link state enumeration."""
+    DISCONNECTED = 0      # RSSI below threshold
+    ESTABLISHING = 1      # Link establishment in progress
+    CONNECTED = 2         # Link established and active
+
+
 class CommsSimulatorNode(Node):
     """
     ROS 2 node for communication simulation.
     
     Calculates RSSI and throughput based on UGV position/orientation
     and base station location using configurable propagation models.
+    
+    Implements link establishment delay:
+    - When RSSI crosses minimum threshold, wait for link establishment time
+    - Only after establishment, data transmission begins
     """
     
     def __init__(self) -> None:
@@ -103,11 +115,12 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('path_loss.d0', 1.0)
         self.declare_parameter('path_loss.pl0', 40.0)
         self.declare_parameter('path_loss.exponent', 2.0)
-        self.declare_parameter('tx_power', 20.0)
-        # Base station position parameters (from spawn_entities)
+        self.declare_parameter('tx_power', -7.0)
         self.declare_parameter('base_station_position', [0.0, 0.0, 0.0])
         self.declare_parameter('base_station_antenna_offset', 10.5)
         self.declare_parameter('ugv_antenna_offset', 1.3)
+        self.declare_parameter('mcs_table_path', '')
+        self.declare_parameter('link_establishment_time_ms', 2.0)
         
         # Get parameters
         self.sampling_rate = self.get_parameter('sampling_rate').value
@@ -116,6 +129,8 @@ class CommsSimulatorNode(Node):
         self.h_plane_path = self.get_parameter('h_plane_path').value
         self.comm_data_limit_mb = self.get_parameter('comm_data_limit_mb').value
         self.tx_power = self.get_parameter('tx_power').value
+        self.mcs_table_path = self.get_parameter('mcs_table_path').value
+        self.link_establishment_time = self.get_parameter('link_establishment_time_ms').value / 1000.0  # ms to s
         
         # Path loss parameters
         d0 = self.get_parameter('path_loss.d0').value
@@ -134,8 +149,12 @@ class CommsSimulatorNode(Node):
         self.comms_calculator = CommsCalculator(
             propagation_model=self.propagation_model,
             tx_power_dbm=self.tx_power,
-            noise_variance=self.noise_variance
+            noise_variance=self.noise_variance,
+            mcs_table_path=self.mcs_table_path
         )
+        
+        # Get RSSI threshold from MCS table (minimum RSSI)
+        self.rssi_threshold = self.comms_calculator.rssi_min
         
         # Antenna pattern parser
         self.antenna_parser = AntennaPatternParser()
@@ -169,6 +188,10 @@ class CommsSimulatorNode(Node):
         self.total_data_transmitted: float = 0.0  # [Mb]
         self.comm_active: bool = True
         self.simulation_start_time: Optional[float] = None
+        
+        # Link establishment state management
+        self.link_state: LinkState = LinkState.DISCONNECTED
+        self.link_establishment_start_time: Optional[float] = None
         
         # Data log for CSV output
         self.data_log: List[dict] = []
@@ -228,8 +251,13 @@ class CommsSimulatorNode(Node):
             f'  Sampling rate: {self.sampling_rate} Hz\n'
             f'  TX Power: {self.tx_power} dBm\n'
             f'  Noise variance: {self.noise_variance} dB\n'
+            f'  Link establishment time: {self.link_establishment_time*1000:.1f} ms\n'
+            f'  RSSI threshold: {self.rssi_threshold:.1f} dBm (from MCS table)\n'
+            f'  RSSI min: {self.comms_calculator.rssi_min:.1f} dBm\n'
+            f'  RSSI max: {self.comms_calculator.rssi_max:.1f} dBm\n'
             f'  Data limit: {self.comm_data_limit_mb} Mb\n'
-            f'  Model: {self.propagation_model.model_name}'
+            f'  Model: {self.propagation_model.model_name}\n'
+            f'  MCS table: {self.mcs_table_path}'
         )
     
     def set_base_station_position(
@@ -297,6 +325,64 @@ class CommsSimulatorNode(Node):
         """
         self.ugv_local_position = position
     
+    def _update_link_state(self, rssi: float, current_time: float) -> bool:
+        """
+        Update link establishment state based on RSSI.
+        
+        State transitions:
+        - DISCONNECTED -> ESTABLISHING: RSSI crosses above threshold
+        - ESTABLISHING -> CONNECTED: Link establishment time elapsed
+        - ESTABLISHING -> DISCONNECTED: RSSI drops below threshold
+        - CONNECTED -> DISCONNECTED: RSSI drops below threshold
+        
+        Args:
+            rssi: Current RSSI [dBm]
+            current_time: Current simulation time [s]
+            
+        Returns:
+            True if communication is allowed, False otherwise
+        """
+        if self.link_state == LinkState.DISCONNECTED:
+            # Check if RSSI crossed above threshold
+            if rssi > self.rssi_threshold:
+                self.link_state = LinkState.ESTABLISHING
+                self.link_establishment_start_time = current_time
+                self.get_logger().info(
+                    f'Link establishment started (RSSI: {rssi:.1f} dBm)'
+                )
+            return False
+        
+        elif self.link_state == LinkState.ESTABLISHING:
+            # Check if RSSI dropped below threshold
+            if rssi <= self.rssi_threshold:
+                self.link_state = LinkState.DISCONNECTED
+                self.link_establishment_start_time = None
+                self.get_logger().info('Link establishment aborted (RSSI dropped)')
+                return False
+            
+            # Check if establishment time elapsed
+            elapsed = current_time - self.link_establishment_start_time
+            if elapsed >= self.link_establishment_time:
+                self.link_state = LinkState.CONNECTED
+                self.get_logger().info(
+                    f'Link established after {elapsed*1000:.1f} ms'
+                )
+                return True
+            
+            return False
+        
+        elif self.link_state == LinkState.CONNECTED:
+            # Check if RSSI dropped below threshold
+            if rssi <= self.rssi_threshold:
+                self.link_state = LinkState.DISCONNECTED
+                self.link_establishment_start_time = None
+                self.get_logger().info('Link disconnected (RSSI dropped)')
+                return False
+            
+            return True
+        
+        return False
+    
     def calculate_and_publish(self) -> None:
         """Periodic callback to calculate and publish communication quality."""
         # Check if we have required data
@@ -345,24 +431,32 @@ class CommsSimulatorNode(Node):
             add_noise=True
         )
         
-        # Update total data transmitted
-        if self.comm_active and metrics['throughput'] > 0:
-            # Convert Gbps to Mb for the sampling period
-            period = 1.0 / self.sampling_rate
-            data_this_period = metrics['throughput'] * 1000 * period  # Gbps * s = Gb -> Mb
-            self.total_data_transmitted += data_this_period
-            
-            # Check data limit
-            if self.comm_data_limit_mb > 0:
-                if self.total_data_transmitted >= self.comm_data_limit_mb:
-                    self.comm_active = False
-                    self.get_logger().info(
-                        f'Data limit reached: {self.total_data_transmitted:.2f} Mb'
-                    )
-        
-        # Calculate elapsed time
+        # Get current time
         current_time = self.get_clock().now().nanoseconds / 1e9
         elapsed = current_time - (self.simulation_start_time or current_time)
+        
+        # Update link state based on RSSI
+        link_ready = self._update_link_state(metrics['rssi'], current_time)
+        
+        # Calculate actual throughput (considering link state)
+        actual_throughput = 0.0
+        if link_ready and self.comm_active:
+            actual_throughput = metrics['throughput']
+            
+            # Update total data transmitted
+            if metrics['throughput'] > 0:
+                # Convert Gbps to Mb for the sampling period
+                period = 1.0 / self.sampling_rate
+                data_this_period = metrics['throughput'] * 1000 * period  # Gbps * s = Gb -> Mb
+                self.total_data_transmitted += data_this_period
+                
+                # Check data limit
+                if self.comm_data_limit_mb > 0:
+                    if self.total_data_transmitted >= self.comm_data_limit_mb:
+                        self.comm_active = False
+                        self.get_logger().info(
+                            f'Data limit reached: {self.total_data_transmitted:.2f} Mb'
+                        )
         
         # Log data
         log_entry = {
@@ -375,11 +469,12 @@ class CommsSimulatorNode(Node):
             'bs_z': self.base_station_position[2] + self.base_station_antenna_offset,
             'distance': metrics['distance'],
             'rssi': metrics['rssi'],
-            'throughput': metrics['throughput'] if self.comm_active else 0.0,
+            'throughput': actual_throughput,
             'total_data_mb': self.total_data_transmitted,
             'path_loss': metrics['path_loss'],
             'e_gain': e_gain,
             'h_gain': h_gain,
+            'link_state': self.link_state.name,
         }
         self.data_log.append(log_entry)
         
@@ -391,7 +486,7 @@ class CommsSimulatorNode(Node):
             msg.header.frame_id = 'world'
             msg.distance = metrics['distance']
             msg.rssi = metrics['rssi']
-            msg.throughput = metrics['throughput'] if self.comm_active else 0.0
+            msg.throughput = actual_throughput
             msg.total_data_transmitted = self.total_data_transmitted
             msg.ugv_x = ugv_pos[0]
             msg.ugv_y = ugv_pos[1]
@@ -407,10 +502,11 @@ class CommsSimulatorNode(Node):
             self.quality_pub.publish(msg)
         
         # Log info
+        link_status = f"[{self.link_state.name}]"
         self.get_logger().info(
-            f'[{elapsed:.1f}s] D={metrics["distance"]:.1f}m, '
+            f'[{elapsed:.1f}s] {link_status} D={metrics["distance"]:.1f}m, '
             f'RSSI={metrics["rssi"]:.1f}dBm, '
-            f'TP={metrics["throughput"]:.2f}Gbps, '
+            f'TP={actual_throughput:.2f}Gbps, '
             f'Total={self.total_data_transmitted:.1f}Mb',
             throttle_duration_sec=1.0
         )
@@ -451,7 +547,7 @@ class CommsSimulatorNode(Node):
                     'time_s', 'ugv_x', 'ugv_y', 'ugv_z',
                     'bs_x', 'bs_y', 'bs_z',
                     'distance', 'rssi', 'throughput', 'total_data_mb',
-                    'path_loss', 'e_gain', 'h_gain'
+                    'path_loss', 'e_gain', 'h_gain', 'link_state'
                 ]
                 writer = csv.DictWriter(f, fieldnames=fieldnames)
                 writer.writeheader()

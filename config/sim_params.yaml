@@ -2,6 +2,66 @@
 # ROS 2 Gazebo Communication Simulator - Configuration Parameters
 # =============================================================================
 
+
+# -----------------------------------------------------------------------------
+# ROS-Gazebo Bridge Configuration
+# -----------------------------------------------------------------------------
+ros_gz_bridge:
+  ros__parameters:
+    # Bridge configuration: topic mappings between ROS 2 and Gazebo
+    # Format: "gz_topic@ros_msg_type[gz_msg_type" or "gz_topic@ros_msg_type]gz_msg_type"
+    # [: gz->ros (subscribe from Gazebo, publish to ROS)
+    # ]: ros->gz (subscribe from ROS, publish to Gazebo)
+    
+    # Note: World name placeholder {world_name} will be replaced at launch time
+    bridge_topics:
+      # GPS/NavSat sensor
+      - "/world/{world_name}/model/suv/link/chassis/sensor/navsat_sensor/navsat@sensor_msgs/msg/NavSatFix[gz.msgs.NavSat"
+      
+      # IMU sensor
+      - "/world/{world_name}/model/suv/link/chassis/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU"
+      
+      # Odometry
+      - "/model/suv/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry"
+      
+      # Command velocity (ROS -> Gazebo)
+      - "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist"
+      
+      # Clock (for simulation time)
+      - "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"
+
+
+# -----------------------------------------------------------------------------
+# Simulation Settings
+# -----------------------------------------------------------------------------
+simulation:
+  # World file path
+  world_file: "/workspace/comms_sim_pkg/resource/minimal_world.sdf"
+  
+  # World name (must match the name in world SDF file)
+  world_name: "comms_sim_world"
+  
+  # Gazebo verbosity level (0-4)
+  verbosity: 3
+  
+  # Real-time factor (1.0 = real-time, >1.0 = faster)
+  real_time_factor: 1.0
+  
+  # Headless mode (true: no GUI, false: with GUI)
+  headless: false
+  
+  # Model path prefix for spawning entities
+  model_path_prefix: "/workspace/models"
+  
+  # Timing configuration for node startup delays
+  timing:
+    gazebo_startup_delay: 3.0      # Gazebo起動待機時間 [s]
+    entity_spawn_interval: 1.0     # エンティティ間のスポーン間隔 [s]
+    bridge_startup_delay: 2.0      # ブリッジ起動待機時間 [s]
+    comms_node_delay: 5.0          # 通信ノード起動待機時間 [s]
+    ugv_controller_delay: 6.0      # UGVコントローラ起動待機時間 [s]
+
+
 # -----------------------------------------------------------------------------
 # Communication Simulator Node Parameters
 # -----------------------------------------------------------------------------
@@ -17,12 +77,15 @@ comms_simulator_node:
     e_plane_path: "/workspace/config/e_plane.csv"
     h_plane_path: "/workspace/config/h_plane.csv"
     
-    # Model paths (for reference)
-    suv_model_path: "/workspace/models/SUV"
-    antenna_model_path: "/workspace/models/antenna"
+    # MCS (Modulation and Coding Scheme) table path
+    mcs_table_path: "/workspace/config/MCStable.csv"
+    
+    # Link establishment (association) time [ms]
+    # Time required to establish communication link after RSSI exceeds threshold
+    link_establishment_time_ms: 2.0
     
     # Communication data limit [Mb] (-1.0 for unlimited)
-    comm_data_limit_mb: -1.0
+    comm_data_limit_mb: 100
     
     # Path loss model parameters
     path_loss:
@@ -35,7 +98,36 @@ comms_simulator_node:
       exponent: 2.0
     
     # Transmit power [dBm]
-    tx_power: 20.0
+    tx_power: -7.0
+    
+
+# -----------------------------------------------------------------------------
+# Spawn Entities Configuration
+# Models to be spawned dynamically via launch file
+# -----------------------------------------------------------------------------
+spawn_entities:
+  # Ground Station (Base Station) - Static antenna tower
+  antenna:
+    model_uri: "models://antenna"
+    name: "antenna"
+    # Pose: [x, y, z, roll, pitch, yaw]
+    pose: [0.0, 6.0, 0.0, 0.0, 0.0, 0.0]
+    static: true
+    # Antenna height offset from model base [m]
+    # (Used for communication calculation: antenna_position = pose + [0, 0, antenna_height_offset])
+    # Based on antenna.dae mesh: collision cylinder height is 3.0m, center at 0.95m
+    antenna_height_offset: 3.0
+  
+  # SUV (Mobile Vehicle) - UGV with sensors
+  suv:
+    model_uri: "models://SUV"
+    name: "suv"
+    # Pose: [x, y, z, roll, pitch, yaw]
+    pose: [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    static: false
+    # Antenna height offset from vehicle base [m]
+    antenna_height_offset: 1.9
+
 
 # -----------------------------------------------------------------------------
 # UGV Controller Node Parameters
@@ -45,14 +137,8 @@ ugv_controller_node:
     # Waypoint list: [X, Y, Z, V] where V is target velocity [m/s]
     # Format: [[x1, y1, z1, v1], [x2, y2, z2, v2], ...]
     waypoints:
-      - [10.0, 0.0, 0.0, 2.0]    # Start position
-      - [50.0, 0.0, 0.0, 3.0]    # Move forward
-      - [50.0, 50.0, 0.0, 2.5]   # Turn right
-      - [100.0, 50.0, 0.0, 4.0]  # Continue forward
-      - [100.0, 100.0, 0.0, 3.0] # Turn right again
-      - [50.0, 100.0, 0.0, 2.0]  # Move back
-      - [50.0, 50.0, 0.0, 2.5]   # Return path
-      - [10.0, 0.0, 0.0, 2.0]    # Return to start
+      - [-20.0, 0.0, 0.0, 2.78]  # 10 km/h
+      - [20.0, 0.0, 0.0, 0.0]  # Stop
     
     # Waypoint tolerance [m] - distance threshold to consider waypoint reached
     waypoint_tolerance: 2.0
@@ -65,51 +151,3 @@ ugv_controller_node:
     
     # Heading control gain (proportional)
     heading_gain: 1.5
-
-# -----------------------------------------------------------------------------
-# ROS-Gazebo Bridge Configuration
-# -----------------------------------------------------------------------------
-ros_gz_bridge:
-  ros__parameters:
-    # Bridge configuration for topics
-    config_file: ""
-
-# -----------------------------------------------------------------------------
-# Simulation Settings
-# -----------------------------------------------------------------------------
-simulation:
-  # World file path
-  world_file: "/workspace/comms_sim_pkg/resource/minimal_world.sdf"
-  
-  # Gazebo verbosity level (0-4)
-  verbosity: 3
-  
-  # Real-time factor (1.0 = real-time, >1.0 = faster)
-  real_time_factor: 1.0
-
-# -----------------------------------------------------------------------------
-# Spawn Entities Configuration
-# Models to be spawned dynamically via launch file
-# -----------------------------------------------------------------------------
-spawn_entities:
-  # Ground Station (Base Station) - Static antenna tower
-  antenna:
-    model_uri: "model://antenna"
-    name: "antenna"
-    # Pose: [x, y, z, roll, pitch, yaw]
-    pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    static: true
-    # Antenna height offset from model base [m]
-    # (Used for communication calculation: antenna_position = pose + [0, 0, antenna_height_offset])
-    # Based on antenna.dae mesh: collision cylinder height is 1.9m, center at 0.95m
-    antenna_height_offset: 1.9
-  
-  # SUV (Mobile Vehicle) - UGV with sensors
-  suv:
-    model_uri: "model://SUV"
-    name: "suv"
-    # Pose: [x, y, z, roll, pitch, yaw]
-    pose: [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    static: false
-    # Antenna height offset from vehicle base [m]
-    antenna_height_offset: 1.3

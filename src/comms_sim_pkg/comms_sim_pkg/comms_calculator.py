@@ -10,8 +10,10 @@ Uses Strategy pattern for swappable propagation models.
 """
 
 from abc import ABC, abstractmethod
-from typing import Tuple, Optional
+from typing import Tuple, Optional, List
 import numpy as np
+import csv
+import os
 
 
 # =============================================================================
@@ -212,22 +214,12 @@ class CommsCalculator:
     Uses Strategy pattern to allow swapping propagation models.
     """
     
-    # Throughput lookup table based on RSSI thresholds
-    THROUGHPUT_TABLE = [
-        (-51.0, 6.0),    # RSSI > -51.0 dBm -> 6.0 Gbps
-        (-55.0, 4.7),    # -55.0 < RSSI <= -51.0 -> 4.7 Gbps
-        (-58.5, 2.7),    # -58.5 < RSSI <= -55.0 -> 2.7 Gbps
-        (-61.5, 2.15),   # -61.5 < RSSI <= -58.5 -> 2.15 Gbps
-        (-63.5, 1.1),    # -63.5 < RSSI <= -61.5 -> 1.1 Gbps
-        (-65.5, 0.5),    # -65.5 < RSSI <= -63.5 -> 0.5 Gbps
-        (float('-inf'), 0.0)  # RSSI <= -65.5 -> 0.0 Gbps
-    ]
-    
     def __init__(
         self,
         propagation_model: Optional[PropagationModel] = None,
         tx_power_dbm: float = 20.0,
-        noise_variance: float = 2.0
+        noise_variance: float = 2.0,
+        mcs_table_path: Optional[str] = None
     ) -> None:
         """
         Initialize communication calculator.
@@ -236,11 +228,105 @@ class CommsCalculator:
             propagation_model: Propagation model strategy (default: LogDistance)
             tx_power_dbm: Transmit power [dBm]
             noise_variance: AWGN variance [dB]
+            mcs_table_path: Path to MCS table CSV file
         """
         self.propagation_model = propagation_model or LogDistancePathLossModel()
         self.tx_power_dbm = tx_power_dbm
         self.noise_variance = noise_variance
         self._rng = np.random.default_rng()
+        
+        # Load MCS table
+        self.mcs_rssi: List[float] = []
+        self.mcs_throughput: List[float] = []
+        
+        # RSSI thresholds (will be set from MCS table)
+        self.rssi_min: float = 0.0
+        self.rssi_max: float = 0.0
+        
+        if mcs_table_path:
+            self._load_mcs_table(mcs_table_path)
+        else:
+            # Default MCS table if not provided
+            self._init_default_mcs_table()
+        
+        # Set RSSI thresholds from loaded MCS table
+        if self.mcs_rssi:
+            self.rssi_min = min(self.mcs_rssi)
+            self.rssi_max = max(self.mcs_rssi)
+        else:
+            raise ValueError("MCS table is empty. Cannot determine RSSI thresholds.")
+    
+    def _load_mcs_table(self, csv_path: str) -> None:
+        """
+        Load MCS table from CSV file.
+        
+        CSV format:
+            RSSI [dBm], Throughput [Gbps]
+            -39, 13.1413
+            -45, 9.856
+            ...
+        
+        Args:
+            csv_path: Path to MCS table CSV file
+            
+        Raises:
+            FileNotFoundError: If CSV file doesn't exist
+            ValueError: If CSV format is invalid
+        """
+        if not os.path.exists(csv_path):
+            raise FileNotFoundError(
+                f"\n{'='*70}\n"
+                f"ERROR: MCS table file not found!\n"
+                f"{'='*70}\n"
+                f"Expected location: {csv_path}\n"
+                f"Please ensure MCStable.csv exists in the config directory.\n"
+                f"{'='*70}\n"
+            )
+        
+        rssi_list = []
+        throughput_list = []
+        
+        try:
+            with open(csv_path, 'r', encoding='utf-8') as f:
+                reader = csv.reader(f)
+                for row in reader:
+                    # Skip empty lines and comments
+                    if not row or row[0].strip().startswith(('#', '//')):
+                        continue
+                    
+                    if len(row) < 2:
+                        continue
+                    
+                    try:
+                        rssi = float(row[0].strip())
+                        throughput = float(row[1].strip())
+                        rssi_list.append(rssi)
+                        throughput_list.append(throughput)
+                    except ValueError:
+                        continue
+            
+            if not rssi_list:
+                raise ValueError("No valid data found in MCS table")
+            
+            # Sort by RSSI (ascending order for interpolation)
+            sorted_pairs = sorted(zip(rssi_list, throughput_list))
+            self.mcs_rssi = [pair[0] for pair in sorted_pairs]
+            self.mcs_throughput = [pair[1] for pair in sorted_pairs]
+            
+        except Exception as e:
+            raise ValueError(
+                f"\n{'='*70}\n"
+                f"ERROR: Failed to load MCS table!\n"
+                f"{'='*70}\n"
+                f"File: {csv_path}\n"
+                f"Error: {e}\n"
+                f"{'='*70}\n"
+            )
+    
+    def _init_default_mcs_table(self) -> None:
+        """Initialize default MCS table (fallback)."""
+        self.mcs_rssi = [-61, -58, -55, -51, -45, -39]
+        self.mcs_throughput = [2.5813, 3.2853, 5.1627, 6.5707, 9.856, 13.1413]
     
     def set_propagation_model(self, model: PropagationModel) -> None:
         """
@@ -311,7 +397,12 @@ class CommsCalculator:
     
     def calculate_throughput(self, rssi: float) -> float:
         """
-        Determine throughput from RSSI using lookup table.
+        Calculate throughput from RSSI using linear interpolation on MCS table.
+        
+        Rules:
+        - RSSI <= rssi_min: 0 Gbps (no communication)
+        - rssi_min < RSSI < rssi_max: Linear interpolation
+        - RSSI >= rssi_max: Maximum throughput (saturated)
         
         Args:
             rssi: Received signal strength [dBm]
@@ -319,10 +410,18 @@ class CommsCalculator:
         Returns:
             Throughput [Gbps]
         """
-        for threshold, throughput in self.THROUGHPUT_TABLE:
-            if rssi > threshold:
-                return throughput
-        return 0.0
+        # Below minimum threshold: no communication
+        if rssi <= self.rssi_min:
+            return 0.0
+        
+        # Above maximum threshold: saturate at max throughput
+        if rssi >= self.rssi_max:
+            return self.mcs_throughput[-1]
+        
+        # Linear interpolation between MCS table points
+        throughput = np.interp(rssi, self.mcs_rssi, self.mcs_throughput)
+        
+        return float(throughput)
     
     def calculate_all(
         self,

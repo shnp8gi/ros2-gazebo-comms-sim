@@ -1,0 +1,293 @@
+#!/usr/bin/env python3
+# -*- coding: utf-8 -*-
+# =============================================================================
+# Simulation Launch File
+# Launches Gazebo, ROS-GZ Bridge, and ROS 2 nodes
+# =============================================================================
+"""
+Launch file for the communication simulation.
+
+This launch file:
+1. Loads parameters from sim_params.yaml
+2. Starts Gazebo Harmonic with the world file
+3. Spawns entities based on configuration
+4. Starts ROS-Gazebo bridge for sensor topics
+5. Launches comms_simulator_node and ugv_controller_node
+
+All configurations are defined in sim_params.yaml including:
+- Headless mode (GUI on/off)
+- World file path
+- Spawn entities
+- Bridge topics
+- Node parameters
+
+Usage:
+    ros2 launch comms_sim_pkg sim_launch.py
+"""
+
+import os
+
+import yaml
+from ament_index_python.packages import get_package_share_directory
+from launch import LaunchDescription
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    OpaqueFunction,
+    TimerAction,
+)
+from launch.substitutions import LaunchConfiguration
+from launch_ros.actions import Node
+
+
+def load_yaml_config(yaml_path: str) -> dict:
+    """
+    Load YAML configuration file with error handling.
+    
+    Args:
+        yaml_path: Path to YAML configuration file
+        
+    Returns:
+        Dictionary containing configuration
+        
+    Raises:
+        FileNotFoundError: If config file doesn't exist
+        ValueError: If YAML is invalid or empty
+    """
+    if not os.path.exists(yaml_path):
+        raise FileNotFoundError(
+            f"\n{'='*70}\n"
+            f"ERROR: Configuration file not found!\n"
+            f"{'='*70}\n"
+            f"Expected location: {yaml_path}\n"
+            f"Please ensure sim_params.yaml exists in the config directory.\n"
+            f"{'='*70}\n"
+        )
+    
+    try:
+        with open(yaml_path, 'r', encoding='utf-8') as f:
+            config = yaml.safe_load(f)
+            
+        if config is None:
+            raise ValueError(
+                f"\n{'='*70}\n"
+                f"ERROR: Empty YAML file!\n"
+                f"{'='*70}\n"
+                f"File: {yaml_path}\n"
+                f"The configuration file is empty or contains only comments.\n"
+                f"{'='*70}\n"
+            )
+            
+        return config
+        
+    except yaml.YAMLError as e:
+        raise ValueError(
+            f"\n{'='*70}\n"
+            f"ERROR: Invalid YAML syntax!\n"
+            f"{'='*70}\n"
+            f"File: {yaml_path}\n"
+            f"Error: {e}\n"
+            f"Please check the file for syntax errors (indentation, colons, etc.)\n"
+            f"{'='*70}\n"
+        )
+
+
+def launch_setup(context, *args, **kwargs):
+    """
+    Setup function for launch (called with context).
+    
+    This allows us to evaluate LaunchConfiguration values.
+    """
+    # Get launch configurations
+    use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
+    
+    # Paths
+    pkg_share = get_package_share_directory('comms_sim_pkg')
+    config_path = os.path.join('/workspace', 'config', 'sim_params.yaml')
+    
+    # Load configuration
+    config = load_yaml_config(config_path)
+    
+    # Get simulation settings from YAML
+    sim_config = config.get('simulation', {})
+    world_file = sim_config.get('world_file', 
+        os.path.join(pkg_share, 'resource', 'minimal_world.sdf'))
+    world_name = sim_config.get('world_name', 'comms_sim_world')
+    verbosity = sim_config.get('verbosity', 3)
+    headless = sim_config.get('headless', False)
+    model_prefix = sim_config.get('model_path_prefix', '/workspace/models')
+    
+    # Get timing configuration from YAML
+    timing = sim_config.get('timing', {})
+    gazebo_startup_delay = timing.get('gazebo_startup_delay', 3.0)
+    entity_spawn_interval = timing.get('entity_spawn_interval', 1.0)
+    bridge_startup_delay = timing.get('bridge_startup_delay', 2.0)
+    comms_node_delay = timing.get('comms_node_delay', 5.0)
+    ugv_controller_delay = timing.get('ugv_controller_delay', 6.0)
+    
+    # Get spawn entity configurations from YAML
+    spawn_entities = config.get('spawn_entities', {})
+    
+    actions = []
+    
+    # =========================================================================
+    # Gazebo Simulation
+    # =========================================================================
+    if headless:
+        # Headless mode (server only) - from YAML
+        gz_cmd = ['gz', 'sim', '-s', '-v', str(verbosity), '-r', world_file]
+    else:
+        # GUI mode - from YAML
+        gz_cmd = ['gz', 'sim', '-v', str(verbosity), '-r', world_file]
+    
+    gz_sim = ExecuteProcess(
+        cmd=gz_cmd,
+        name='gazebo',
+        output='screen',
+        additional_env={'GZ_SIM_RESOURCE_PATH': '/workspace/models'}
+    )
+    actions.append(gz_sim)
+    
+    # =========================================================================
+    # Spawn Entities (with delay to ensure Gazebo is ready)
+    # =========================================================================
+    spawn_delay = gazebo_startup_delay  # Use YAML configuration
+    
+    for entity_key, entity_config in spawn_entities.items():
+        model_uri = entity_config.get('model_uri', '')
+        name = entity_config.get('name', entity_key)
+        pose = entity_config.get('pose', [0, 0, 0, 0, 0, 0])
+        
+        # Validate pose
+        if not isinstance(pose, list) or len(pose) != 6:
+            raise ValueError(
+                f"Invalid pose for entity '{entity_key}': {pose}\n"
+                f"Pose must be a list of 6 numbers: [x, y, z, roll, pitch, yaw]"
+            )
+        
+        x, y, z = pose[0], pose[1], pose[2]
+        roll, pitch, yaw = pose[3], pose[4], pose[5]
+        
+        # Convert model:// URI to actual SDF file path
+        # model://antenna -> /workspace/models/antenna/model.sdf
+        model_path = model_uri.replace('model://', f'{model_prefix}/') + '/model.sdf'
+        
+        # Use ros_gz_sim create node for spawning
+        spawn_entity = TimerAction(
+            period=spawn_delay,
+            actions=[
+                Node(
+                    package='ros_gz_sim',
+                    executable='create',
+                    name=f'spawn_{name}',
+                    output='screen',
+                    arguments=[
+                        '-world', world_name,
+                        '-file', model_path,
+                        '-name', name,
+                        '-x', str(x),
+                        '-y', str(y),
+                        '-z', str(z),
+                        '-R', str(roll),
+                        '-P', str(pitch),
+                        '-Y', str(yaw),
+                    ]
+                )
+            ]
+        )
+        actions.append(spawn_entity)
+        spawn_delay += entity_spawn_interval  # Use YAML configuration
+    
+    # =========================================================================
+    # ROS-Gazebo Bridge
+    # =========================================================================
+    # Load bridge topics from YAML and replace {world_name} placeholder
+    bridge_topics_raw = config.get('ros_gz_bridge', {}).get('ros__parameters', {}).get('bridge_topics', [])
+    
+    if not bridge_topics_raw:
+        print("WARNING: No bridge topics configured. ROS-Gazebo communication may not work.")
+    
+    bridge_config = [topic.replace('{world_name}', world_name) for topic in bridge_topics_raw]
+    
+    ros_gz_bridge = TimerAction(
+        period=bridge_startup_delay,
+        actions=[
+            Node(
+                package='ros_gz_bridge',
+                executable='parameter_bridge',
+                name='ros_gz_bridge',
+                output='screen',
+                arguments=bridge_config,
+                parameters=[
+                    config_path,
+                    {'use_sim_time': use_sim_time == 'true'}
+                ]
+            )
+        ]
+    )
+    actions.append(ros_gz_bridge)
+    
+    # =========================================================================
+    # Communication Simulator Node
+    # =========================================================================
+    comms_node = TimerAction(
+        period=comms_node_delay,
+        actions=[
+            Node(
+                package='comms_sim_pkg',
+                executable='comms_node.py',
+                name='comms_simulator_node',
+                output='screen',
+                parameters=[
+                    config_path,
+                    {'use_sim_time': use_sim_time == 'true'},
+                ],
+                remappings=[
+                    (f'/world/{world_name}/model/suv/link/chassis/sensor/navsat_sensor/navsat', '/gps/fix'),
+                    (f'/world/{world_name}/model/suv/link/chassis/sensor/imu_sensor/imu', '/imu/data'),
+                ]
+            )
+        ]
+    )
+    actions.append(comms_node)
+    
+    # =========================================================================
+    # UGV Controller Node
+    # =========================================================================
+    ugv_node = TimerAction(
+        period=ugv_controller_delay,
+        actions=[
+            Node(
+                package='comms_sim_pkg',
+                executable='ugv_controller_node.py',
+                name='ugv_controller_node',
+                output='screen',
+                parameters=[
+                    config_path,
+                    {'use_sim_time': use_sim_time == 'true'},
+                ],
+                remappings=[
+                    ('/odom', '/model/suv/odometry'),
+                ]
+            )
+        ]
+    )
+    actions.append(ugv_node)
+    
+    return actions
+
+
+def generate_launch_description():
+    """Generate launch description."""
+    
+    # Declare launch arguments
+    declare_use_sim_time = DeclareLaunchArgument(
+        'use_sim_time',
+        default_value='true',
+        description='Use simulation time'
+    )
+    
+    return LaunchDescription([
+        declare_use_sim_time,
+        OpaqueFunction(function=launch_setup),
+    ])

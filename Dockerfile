@@ -64,9 +64,6 @@ RUN apt-get update && apt-get install -y \
 # =============================================================================
 RUN apt-get update && apt-get install -y \
     ros-humble-ros-gzharmonic \
-    ros-humble-ros-gz-bridge \
-    ros-humble-ros-gz-sim \
-    ros-humble-ros-gz-interfaces \
     && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================

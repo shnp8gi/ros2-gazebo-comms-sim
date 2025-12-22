@@ -115,14 +115,21 @@ xhost +local:docker
 # GUIモードでコンテナ起動
 docker-compose run --rm sim-gui
 
-# コンテナ内でシミュレーション起動
+# 以下コンテナ内
+# パッケージのビルド
+colcon build --cmake-args -DBUILD_TESTING=ON
+
+# ビルドしたパッケージをROS2の環境に設定する
+. install/setup.sh
+
+# シミュレーション起動
 ros2 launch comms_sim_pkg sim_launch.py
 ```
 
 #### Windows (WSL2 + X Server)
 
 1. VcXsrv等のXサーバーをインストール・起動
-2. WSL2のDISPLAY変数を設定
+2. WSL2のDISPLAY変数を設 定
 ```bash
 export DISPLAY=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}'):0.0
 ```
@@ -151,34 +158,38 @@ ros2 launch comms_sim_pkg sim_launch.py headless:=true
 
 ### config/sim_params.yaml
 
-主要なパラメータは `config/sim_params.yaml` で設定します。
+主要なパラメータは `config/sim_params.yaml` で設定します。このYAMLファイルは起動時に各ノードに直接読み込まれます。
 
 #### 通信シミュレーションパラメータ
 
 ```yaml
 comms_simulator_node:
   ros__parameters:
-    sampling_rate: 1.0          # 計算頻度 [Hz]
-    noise_variance: 2.0         # AWGN分散 [dB]
-    comm_data_limit_mb: -1.0    # データ上限 [Mb] (-1.0: 無制限)
-    tx_power: 20.0              # 送信電力 [dBm]
+    sampling_rate: value          # 計算頻度 [Hz] (default: 1.0)
+    noise_variance: value         # AWGN分散 [dB] (default: 2.0)
+    e_plane_path: value           # E面アンテナゲインCSVパス (default: "/workspace/config/e_plane.csv")
+    h_plane_path: value           # H面アンテナゲインCSVパス (default: "/workspace/config/h_plane.csv")
+    comm_data_limit_mb: value     # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
+    tx_power: value               # 送信電力 [dBm] (default: 20.0)
     
     path_loss:
-      d0: 1.0                   # 基準距離 [m]
-      pl0: 40.0                 # 基準距離でのパスロス [dB]
-      exponent: 2.0             # パスロス指数
+      d0: value                   # 基準距離 [m] (default: 1.0)
+      pl0: value                  # 基準距離でのパスロス [dB] (default: 40.0)
+      exponent: value             # パスロス指数 (default: 2.0)
 ```
+
+**注意**: `base_station_position`, `base_station_antenna_offset`, `ugv_antenna_offset` は `spawn_entities` セクションから自動的に設定されます。
 
 #### UGV制御パラメータ
 
 ```yaml
 ugv_controller_node:
   ros__parameters:
-    waypoints:                  # ウェイポイント [X, Y, Z, V]
-      - [10.0, 0.0, 0.0, 2.0]
-      - [50.0, 0.0, 0.0, 3.0]
+    waypoints:                    # ウェイポイント [X, Y, Z, V]
+      - [value, value, value, value]  # (例: [10.0, 0.0, 0.0, 2.0])
+      - [value, value, value, value]  # (例: [50.0, 0.0, 0.0, 3.0])
       # ...
-    waypoint_tolerance: 2.0     # 到達判定距離 [m]
+    waypoint_tolerance: value     # 到達判定距離 [m] (default: 2.0)
 ```
 
 #### エンティティスポーン設定
@@ -186,11 +197,11 @@ ugv_controller_node:
 ```yaml
 spawn_entities:
   antenna:
-    pose: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    antenna_height_offset: 1.9  # アンテナ高さ [m]
+    pose: [value, value, value, value, value, value]  # [X, Y, Z, Roll, Pitch, Yaw] (default: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    antenna_height_offset: value  # アンテナ高さ [m] (default: 1.9)
   suv:
-    pose: [10.0, 0.0, 0.0, 0.0, 0.0, 0.0]
-    antenna_height_offset: 1.3
+    pose: [value, value, value, value, value, value]  # [X, Y, Z, Roll, Pitch, Yaw] (default: [10.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    antenna_height_offset: value  # アンテナ高さ [m] (default: 1.3)
 ```
 
 ## 📊 出力データ
@@ -312,35 +323,6 @@ calculator = CommsCalculator(propagation_model=nlos_model)
 
 # または動的に切り替え
 calculator.set_propagation_model(nlos_model)
-```
-
-### 拡張例: 反射波モデル
-
-```python
-class ReflectionModel(PropagationModel):
-    """反射波を考慮したモデル"""
-    
-    def __init__(self, reflection_coef: float = 0.7):
-        self.reflection_coef = reflection_coef
-    
-    def calculate_path_loss(self, distance: float, frequency_ghz: float = 60.0) -> float:
-        # 直接波
-        direct_loss = 20 * np.log10(distance) + 20 * np.log10(frequency_ghz) + 92.45
-        
-        # 反射波（簡易モデル）
-        reflected_distance = distance * 1.2  # 反射経路は長い
-        reflected_loss = 20 * np.log10(reflected_distance) + 20 * np.log10(frequency_ghz) + 92.45
-        reflected_power = 10 ** (-reflected_loss / 10) * self.reflection_coef
-        
-        # 合成
-        direct_power = 10 ** (-direct_loss / 10)
-        total_power = direct_power + reflected_power
-        
-        return -10 * np.log10(total_power)
-    
-    @property
-    def model_name(self) -> str:
-        return "Reflection Propagation Model"
 ```
 
 ## 🔍 トラブルシューティング
