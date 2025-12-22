@@ -223,9 +223,7 @@ def launch_setup(context, *args, **kwargs):
     if not bridge_topics_raw:
         print("WARNING: No bridge topics configured. ROS-Gazebo communication may not work.")
     
-    
-    ros_params = config.get('ros_gz_bridge', {}).get('ros__parameters', {})
-    
+    bridge_topic = [t.replace('{world_name}', world_name) for t in bridge_topics_raw]
     ros_gz_bridge = TimerAction(
         period=bridge_startup_delay,
         actions=[
@@ -234,11 +232,8 @@ def launch_setup(context, *args, **kwargs):
                 executable='parameter_bridge',
                 name='ros_gz_bridge',
                 output='screen',
-                arguments=bridge_config,
-                parameters=[
-                    ros_params,
-                    {'use_sim_time': use_sim_time == 'true'}
-                ]
+                arguments=bridge_topic,
+                parameters={'use_sim_time': use_sim_time == 'true'}
             )
         ]
     )
@@ -257,7 +252,19 @@ def launch_setup(context, *args, **kwargs):
                 name='comms_simulator_node',
                 output='screen',
                 parameters=[
-                    comms_params,
+                    {
+                        'sampling_rate': str(comms_params.get('sampling_rate', 1.0)),
+                        'noise_variance': str(comms_params.get('noise_variance', 2.0)),
+                        'e_plane_path': comms_params.get('e_plane_path', ''),
+                        'h_plane_path': comms_params.get('h_plane_path', ''),
+                        'mcs_table_path': comms_params.get('mcs_table_path', ''),
+                        'link_establishment_time_ms': str(comms_params.get('link_establishment_time_ms', 2.0)),
+                        'comm_data_limit_mb':str(comms_params.get('comm_data_limit_mb', 100.0)),
+                        'path_loss.d0': str(comms_params.get('path_loss', {}).get('d0', 1.0)),
+                        'path_loss.pl0': str(comms_params.get('path_loss', {}).get('pl0', 40.0)),
+                        'path_loss.exponent': str(comms_params.get('path_loss', {}).get('exponent', 2.0)),
+                        'tx_power': str(comms_params.get('tx_power', -7.0)),
+                    },
                     {'use_sim_time': use_sim_time == 'true'},
                 ],
                 remappings=[
@@ -272,7 +279,7 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     # UGV Controller Node
     # =========================================================================
-    ugv_controller_params = config.get('ugv_controller_node', {}).get('ros__parameters', {})
+    ugv_params = config.get('ugv_controller_node', {}).get('ros__parameters', {})
     ugv_node = TimerAction(
         period=ugv_controller_delay,
         actions=[
@@ -282,7 +289,13 @@ def launch_setup(context, *args, **kwargs):
                 name='ugv_controller_node',
                 output='screen',
                 parameters=[
-                    ugv_controller_params,
+                    {
+                        'waypoints': str(ugv_params.get('waypoints', [])),
+                        'waypoint_tolerance': str(ugv_params.get('waypoint_tolerance', 2.0)),
+                        'control_rate': str(ugv_params.get('control_rate', 10.0)),
+                        'max_angular_velocity': str(ugv_params.get('max_angular_velocity', 1.0)),
+                        'heading_gain': str(ugv_params.get('heading_gain', 1.5)),
+                    },
                     {'use_sim_time': use_sim_time == 'true'},
                 ],
                 remappings=[

@@ -82,10 +82,10 @@ comms_simulator_node:
     
     # Link establishment (association) time [ms]
     # Time required to establish communication link after RSSI exceeds threshold
-    link_establishment_time_ms: 2.0
+    link_establishment_time: 2.0
     
     # Communication data limit [Mb] (-1.0 for unlimited)
-    comm_data_limit_mb: 100
+    comm_data_limit: 100
     
     # Path loss model parameters
     path_loss:
