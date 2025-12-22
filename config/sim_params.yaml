@@ -55,11 +55,11 @@ simulation:
   
   # Timing configuration for node startup delays
   timing:
-    gazebo_startup_delay: 3.0      # Gazebo起動待機時間 [s]
-    entity_spawn_interval: 1.0     # エンティティ間のスポーン間隔 [s]
-    bridge_startup_delay: 2.0      # ブリッジ起動待機時間 [s]
-    comms_node_delay: 5.0          # 通信ノード起動待機時間 [s]
-    ugv_controller_delay: 6.0      # UGVコントローラ起動待機時間 [s]
+    gazebo_startup_delay: 3.0      # Gazebo startup wait time [s]
+    entity_spawn_interval: 1.0     # Spawn interval between entities [s]
+    bridge_startup_delay: 2.0      # Bridge startup wait time [s]
+    comms_node_delay: 5.0          # Communication node startup wait time [s]
+    ugv_controller_delay: 6.0      # UGV controller startup wait time [s]
 
 
 # -----------------------------------------------------------------------------
@@ -82,10 +82,10 @@ comms_simulator_node:
     
     # Link establishment (association) time [ms]
     # Time required to establish communication link after RSSI exceeds threshold
-    link_establishment_time: 2.0
+    link_establishment_time_ms: 2.0
     
     # Communication data limit [Mb] (-1.0 for unlimited)
-    comm_data_limit: 100
+    comm_data_limit_mb: 100.0
     
     # Path loss model parameters
     path_loss:

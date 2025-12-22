@@ -28,8 +28,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
 # =============================================================================
 # Install Python modules
 # =============================================================================
-# Install Python package
-# ament_python_install_package(${PROJECT_NAME})
+ament_python_install_package(${PROJECT_NAME})
 
 # =============================================================================
 # Install Python executables
@@ -41,16 +40,13 @@ install(PROGRAMS
 )
 
 # =============================================================================
-# Install launch files
+# Install launch and resource files
 # =============================================================================
 install(DIRECTORY
   launch
   DESTINATION share/${PROJECT_NAME}
 )
 
-# =============================================================================
-# Install resource files (world, config, etc.)
-# =============================================================================
 install(DIRECTORY
   resource
   DESTINATION share/${PROJECT_NAME}

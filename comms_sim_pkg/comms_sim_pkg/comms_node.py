@@ -38,12 +38,25 @@ from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import NavSatFix, Imu
 from std_msgs.msg import Header
 
-from .antenna_parser import AntennaPatternParser
-from .comms_calculator import (
-    CommsCalculator,
-    LogDistancePathLossModel,
-    TwoRayGroundModel,
-)
+# Prefer absolute imports so this file can be executed as a script via ros2 launch
+try:
+    from comms_sim_pkg.antenna_parser import AntennaPatternParser
+    from comms_sim_pkg.comms_calculator import (
+        CommsCalculator,
+        LogDistancePathLossModel,
+        TwoRayGroundModel,
+    )
+    # Optional: only present in newer revisions
+    from comms_sim_pkg.mcs_parser import MCSTableParser  # type: ignore
+except ImportError:
+    # Fallback for module execution (python -m comms_sim_pkg.comms_node)
+    from .antenna_parser import AntennaPatternParser  # type: ignore
+    from .comms_calculator import (  # type: ignore
+        CommsCalculator,
+        LogDistancePathLossModel,
+        TwoRayGroundModel,
+    )
+    from .mcs_parser import MCSTableParser  # type: ignore
 
 # Import custom message (will be available after build)
 try:
