@@ -8,12 +8,13 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV）と固定�
 
 ### 主な機能
 
-- **通信品質シミュレーション**: 対数距離減衰モデルによるRSSI計算
-- **アンテナ指向性**: E面/H面ゲインパターンの考慮（CSVファイルから読み込み）
-- **AWGN雑音**: 時間変動するガウス雑音のシミュレーション
-- **スループット推定**: RSSI閾値ベースのルックアップテーブル
-- **ウェイポイント追従**: UGVの経路制御
-- **データロギング**: CSV形式での結果出力
+- **リアルタイム通信品質計算**: RSSI、スループット、パスロスを動的に計算
+- **MCSテーブルベースのスループット推定**: CSVファイルから読み込み、線形補間による推定
+- **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始
+- **指向性アンテナモデル**: E面/H面パターンCSVに基づく3次元ゲイン計算
+- **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音
+- **マルチウェイポイント追従**: UGVの区間速度制御と自動経路追従
+- **通信データ量制限**: 設定可能な送信データ上限とCSVロギング
 
 ## 🛠️ 技術スタック
 
@@ -28,50 +29,54 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV）と固定�
 ## 📁 ディレクトリ構造
 
 ```
-ros2-gazebo-comms-sim/
-├── models/
-│   ├── antenna/                # 基地局アンテナモデル
+os2-gazebo-comms-sim/
+├── config/                        # 設定ファイル
+│   ├── sim_params.yaml           # メインパラメータファイル
+│   ├── e_plane.csv               # Eプレーン（垂直面）アンテナパターン
+│   ├── h_plane.csv               # Hプレーン（水平面）アンテナパターン
+│   └── MCStable.csv              # MCS（変調・符号化方式）テーブル
+│
+├── models/                        # Gazeboモデル
+│   ├── antenna/                  # 基地局アンテナモデル
 │   │   ├── model.config
 │   │   ├── model.sdf
-│   │   ├── meshes/
-│   │   │   └── antenna.dae
-│   │   └── thumbnails/
-│   └── SUV/                    # 移動車両モデル
+│   │   └── meshes/
+│   └── SUV/                      # 移動車両モデル
 │       ├── model.config
 │       ├── model.sdf
-│       ├── meshes/
-│       │   ├── suv.obj
-│       │   └── suv.mtl
-│       ├── materials/
-│       │   └── textures/
-│       ├── thumbnails/
-│       └── metadata.pbtxt
-├── config/
-│   ├── sim_params.yaml         # シミュレーションパラメータ
-│   ├── e_plane.csv             # E面アンテナゲイン
-│   └── h_plane.csv             # H面アンテナゲイン
-├── comms_sim_pkg/
-│   ├── comms_sim_pkg/
-│   │   ├── __init__.py
-│   │   ├── comms_node.py       # 通信シミュレーションノード
-│   │   ├── comms_calculator.py # 伝搬路モデル（Strategy Pattern）
-│   │   ├── antenna_parser.py   # アンテナパターン解析
-│   │   └── ugv_controller_node.py  # UGV制御ノード
-│   ├── launch/
-│   │   └── sim_launch.py       # 起動ファイル
-│   ├── msg/
-│   │   └── CommsQuality.msg    # カスタムメッセージ
-│   ├── resource/
-│   │   └── minimal_world.sdf   # Gazeboワールド
-│   ├── package.xml
-│   ├── CMakeLists.txt
-│   └── setup.py
+│       └── meshes/
+│
+├── src/
+│   └── comms_sim_pkg/            # ROS 2パッケージ
+│       ├── comms_sim_pkg/        # Pythonモジュール
+│       │   ├── __init__.py
+│       │   ├── comms_node.py             # 通信シミュレータノード
+│       │   ├── comms_calculator.py       # 通信品質計算
+│       │   ├── antenna_parser.py         # アンテナパターン処理
+│       │   └── ugv_controller_node.py    # UGV制御ノード
+│       │
+│       ├── launch/               # 起動ファイル
+│       │   └── sim_launch.py
+│       │
+│       ├── msg/                  # カスタムメッセージ定義
+│       │   └── CommsQuality.msg
+│       │
+│       ├── resource/             # リソースファイル
+│       │   └── minimal_world.sdf # シミュレーションワールド
+│       │
+│       ├── CMakeLists.txt
+│       ├── package.xml
+│       └── setup.py
+│
 ├── log/
-│   └── sim_result/             # シミュレーション結果出力
-├── Dockerfile
-├── docker-compose.yml
-├── entrypoint.sh
-└── README.md
+│   └── sim_result/               # CSVログ出力ディレクトリ
+│
+├── docker-compose.yml             # Docker Compose設定
+├── Dockerfile                     # Dockerイメージ定義
+├── entrypoint.sh                  # コンテナエントリポイント
+├── README.md                      # このファイル
+├── specification.md               # 詳細仕様書
+└── .gitignore
 ```
 
 ## 🚀 クイックスタート
@@ -169,16 +174,17 @@ comms_simulator_node:
     noise_variance: value         # AWGN分散 [dB] (default: 2.0)
     e_plane_path: value           # E面アンテナゲインCSVパス (default: "/workspace/config/e_plane.csv")
     h_plane_path: value           # H面アンテナゲインCSVパス (default: "/workspace/config/h_plane.csv")
+    mcs_table_path: value         # MCSテーブルパス (default: "/workspace/config/MCStable.csv")
+    link_establishment_time_ms: value  # リンク確立時間 [ms] (default: 2.0)
     comm_data_limit_mb: value     # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
-    tx_power: value               # 送信電力 [dBm] (default: 20.0)
     
     path_loss:
       d0: value                   # 基準距離 [m] (default: 1.0)
       pl0: value                  # 基準距離でのパスロス [dB] (default: 40.0)
       exponent: value             # パスロス指数 (default: 2.0)
+    
+    tx_power: value               # 送信電力 [dBm] (default: 20.0)
 ```
-
-**注意**: `base_station_position`, `base_station_antenna_offset`, `ugv_antenna_offset` は `spawn_entities` セクションから自動的に設定されます。
 
 #### UGV制御パラメータ
 
@@ -186,10 +192,13 @@ comms_simulator_node:
 ugv_controller_node:
   ros__parameters:
     waypoints:                    # ウェイポイント [X, Y, Z, V]
-      - [value, value, value, value]  # (例: [10.0, 0.0, 0.0, 2.0])
-      - [value, value, value, value]  # (例: [50.0, 0.0, 0.0, 3.0])
+      - [value, value, value, value]  # (例: [-20.0, 0.0, 0.0, 2.78])
+      - [value, value, value, value]  # (例: [20.0, 0.0, 0.0, 0.0])
       # ...
     waypoint_tolerance: value     # 到達判定距離 [m] (default: 2.0)
+    control_rate: value           # 制御ループ周波数 [Hz] (default: 10.0)
+    max_angular_velocity: value   # 最大角速度 [rad/s] (default: 1.0)
+    heading_gain: value           # 方向制御ゲイン (default: 1.5)
 ```
 
 #### エンティティスポーン設定
@@ -197,11 +206,18 @@ ugv_controller_node:
 ```yaml
 spawn_entities:
   antenna:
-    pose: [value, value, value, value, value, value]  # [X, Y, Z, Roll, Pitch, Yaw] (default: [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    antenna_height_offset: value  # アンテナ高さ [m] (default: 1.9)
+    model_uri: value              # モデルURI (default: "models://antenna")
+    name: value                   # エンティティ名 (default: "antenna")
+    pose: [value, value, value, value, value, value]  # [X, Y, Z, Roll, Pitch, Yaw] (default: [0.0, 6.0, 0.0, 0.0, 0.0, 0.0])
+    static: value                 # 静的オブジェクト (default: true)
+    antenna_height_offset: value  # アンテナ高さ [m] (default: 3.0)
+  
   suv:
-    pose: [value, value, value, value, value, value]  # [X, Y, Z, Roll, Pitch, Yaw] (default: [10.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    antenna_height_offset: value  # アンテナ高さ [m] (default: 1.3)
+    model_uri: value              # モデルURI (default: "models://SUV")
+    name: value                   # エンティティ名 (default: "suv")
+    pose: [value, value, value, value, value, value]  # [X, Y, Z, Roll, Pitch, Yaw] (default: [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    static: value                 # 静的オブジェクト (default: false)
+    antenna_height_offset: value  # アンテナ高さ [m] (default: 1.9)
 ```
 
 ## 📊 出力データ
