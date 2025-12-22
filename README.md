@@ -46,8 +46,7 @@ os2-gazebo-comms-sim/
 │       ├── model.sdf
 │       └── meshes/
 │
-├── src/
-│   └── comms_sim_pkg/            # ROS 2パッケージ
+├── comms_sim_pkg/            # ROS 2パッケージ
 │       ├── comms_sim_pkg/        # Pythonモジュール
 │       │   ├── __init__.py
 │       │   ├── comms_node.py             # 通信シミュレータノード
@@ -113,21 +112,30 @@ X11 Forwardingを使用してGazeboのGUIを表示します。
 
 #### Linux / WSL2
 
+##### 1. X11アクセスを許可（初回のみ）
 ```bash
-# X11アクセスを許可
 xhost +local:docker
+```
 
-# GUIモードでコンテナ起動
+##### 2. GUIモードでコンテナ起動
+```bash
 docker-compose run --rm sim-gui
+```
 
-# 以下コンテナ内
-# パッケージのビルド
+ 以下コンテナ内
+
+##### 3. パッケージのビルド
+```bash
 colcon build --cmake-args -DBUILD_TESTING=ON
+```
 
-# ビルドしたパッケージをROS2の環境に設定する
+##### 4. ビルドしたパッケージをROS2の環境に設定する
+```bash
 . install/setup.sh
+```
 
-# シミュレーション起動
+##### 5. シミュレーション起動
+```bash
 ros2 launch comms_sim_pkg sim_launch.py
 ```
 

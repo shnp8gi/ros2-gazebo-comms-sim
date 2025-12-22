@@ -64,8 +64,7 @@ ros2-gazebo-comms-sim/
 │       ├── meshes/
 │       └── thumbnails/
 │
-├── src/
-│   └── comms_sim_pkg/            # ROS 2パッケージ
+├── comms_sim_pkg/            # ROS 2パッケージ
 │       ├── CMakeLists.txt
 │       ├── package.xml
 │       ├── setup.py

@@ -109,9 +109,25 @@ def launch_setup(context, *args, **kwargs):
     config = load_yaml_config(config_path)
     
     # Get simulation settings from YAML
+    default_world_path = os.path.join(pkg_share, 'resource', 'minimal_world.sdf')
     sim_config = config.get('simulation', {})
-    world_file = sim_config.get('world_file', 
-        os.path.join(pkg_share, 'resource', 'minimal_world.sdf'))
+    world_file = sim_config.get('world_file', default_world_path)
+    
+    if not os.path.exists(world_file):
+        alt_world_file = os.path.join('/workspace', world_file)
+        if os.path.exists(alt_world_file):
+            world_file = alt_world_file
+        else:
+            raise FileNotFoundError(
+                f"\n{'='*70}\n"
+                f"ERROR: World file not found!\n"
+                f"{'='*70}\n"
+                f"Tried paths:\n"
+                f"  1. {world_file}\n"
+                f"  2. {alt_world_file}\n"
+                f"Please check 'simulation.world_file' in sim_params.yaml\n"
+                f"{'='*70}\n"
+            )
     world_name = sim_config.get('world_name', 'comms_sim_world')
     verbosity = sim_config.get('verbosity', 3)
     headless = sim_config.get('headless', False)
@@ -196,7 +212,7 @@ def launch_setup(context, *args, **kwargs):
             ]
         )
         actions.append(spawn_entity)
-        spawn_delay += entity_spawn_interval  # Use YAML configuration
+        spawn_delay += entity_spawn_interval
     
     # =========================================================================
     # ROS-Gazebo Bridge
@@ -207,7 +223,8 @@ def launch_setup(context, *args, **kwargs):
     if not bridge_topics_raw:
         print("WARNING: No bridge topics configured. ROS-Gazebo communication may not work.")
     
-    bridge_config = [topic.replace('{world_name}', world_name) for topic in bridge_topics_raw]
+    
+    ros_params = config.get('ros_gz_bridge', {}).get('ros__parameters', {})
     
     ros_gz_bridge = TimerAction(
         period=bridge_startup_delay,
@@ -219,7 +236,7 @@ def launch_setup(context, *args, **kwargs):
                 output='screen',
                 arguments=bridge_config,
                 parameters=[
-                    config_path,
+                    ros_params,
                     {'use_sim_time': use_sim_time == 'true'}
                 ]
             )
@@ -230,6 +247,7 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     # Communication Simulator Node
     # =========================================================================
+    comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
     comms_node = TimerAction(
         period=comms_node_delay,
         actions=[
@@ -239,7 +257,7 @@ def launch_setup(context, *args, **kwargs):
                 name='comms_simulator_node',
                 output='screen',
                 parameters=[
-                    config_path,
+                    comms_params,
                     {'use_sim_time': use_sim_time == 'true'},
                 ],
                 remappings=[
@@ -254,6 +272,7 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     # UGV Controller Node
     # =========================================================================
+    ugv_controller_params = config.get('ugv_controller_node', {}).get('ros__parameters', {})
     ugv_node = TimerAction(
         period=ugv_controller_delay,
         actions=[
@@ -263,7 +282,7 @@ def launch_setup(context, *args, **kwargs):
                 name='ugv_controller_node',
                 output='screen',
                 parameters=[
-                    config_path,
+                    ugv_controller_params,
                     {'use_sim_time': use_sim_time == 'true'},
                 ],
                 remappings=[
