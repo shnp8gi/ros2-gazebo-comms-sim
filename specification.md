@@ -79,11 +79,14 @@ ros2-gazebo-comms-sim/
 │       ├── launch/               # 起動ファイル
 │       │   └── sim_launch.py    # メインランチファイル
 │       │
-│       ├── msg/                  # カスタムメッセージ定義
-│       │   └── CommsQuality.msg # 通信品質メッセージ
-│       │
 │       └── resource/             # リソースファイル
 │           └── minimal_world.sdf # シミュレーションワールド
+│
+├── comms_sim_msgs/           # メッセージ定義パッケージ
+│       ├── CMakeLists.txt
+│       ├── package.xml
+│       └── msg/
+│           └── CommsQuality.msg # 通信品質メッセージ
 │
 ├── log/
 │   └── sim_result/               # CSVログ出力ディレクトリ
