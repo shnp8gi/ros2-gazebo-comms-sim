@@ -12,7 +12,7 @@ Subscribes to:
     - /imu/data (sensor_msgs/Imu): UGV orientation
 
 Publishes:
-    - /comms/quality (comms_sim_pkg/CommsQuality): Communication metrics
+    - /comms/quality (comms_sim_msgs/CommsQuality): Communication metrics
 
 Parameters:
     - sampling_rate: Calculation frequency [Hz]
@@ -60,7 +60,7 @@ except ImportError:
 
 # Import custom message (will be available after build)
 try:
-    from comms_sim_pkg.msg import CommsQuality
+    from comms_sim_msgs.msg import CommsQuality
 except ImportError:
     CommsQuality = None
 

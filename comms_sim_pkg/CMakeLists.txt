@@ -15,15 +15,7 @@ find_package(std_msgs REQUIRED)
 find_package(sensor_msgs REQUIRED)
 find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
-find_package(rosidl_default_generators REQUIRED)
-
-# =============================================================================
-# Generate custom messages
-# =============================================================================
-rosidl_generate_interfaces(${PROJECT_NAME}
-  "msg/CommsQuality.msg"
-  DEPENDENCIES std_msgs
-)
+find_package(comms_sim_msgs REQUIRED)
 
 # =============================================================================
 # Install Python modules
@@ -63,5 +55,4 @@ endif()
 # =============================================================================
 # Export and finalize
 # =============================================================================
-ament_export_dependencies(rosidl_default_runtime)
 ament_package()

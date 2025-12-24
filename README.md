@@ -57,15 +57,18 @@ os2-gazebo-comms-sim/
 │       ├── launch/               # 起動ファイル
 │       │   └── sim_launch.py
 │       │
-│       ├── msg/                  # カスタムメッセージ定義
-│       │   └── CommsQuality.msg
-│       │
 │       ├── resource/             # リソースファイル
 │       │   └── minimal_world.sdf # シミュレーションワールド
 │       │
 │       ├── CMakeLists.txt
 │       ├── package.xml
 │       └── setup.py
+│
+├── comms_sim_msgs/           # メッセージ定義パッケージ
+│       ├── CMakeLists.txt
+│       ├── package.xml
+│       └── msg/
+│           └── CommsQuality.msg
 │
 ├── log/
 │   └── sim_result/               # CSVログ出力ディレクトリ
@@ -263,7 +266,7 @@ YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv
 | `/gps/fix` | `sensor_msgs/NavSatFix` | Sub | UGV GPS位置 |
 | `/imu/data` | `sensor_msgs/Imu` | Sub | UGV姿勢情報 |
 | `/cmd_vel` | `geometry_msgs/Twist` | Pub | 速度指令 |
-| `/comms/quality` | `comms_sim_pkg/CommsQuality` | Pub | 通信品質 |
+| `/comms/quality` | `comms_sim_msgs/CommsQuality` | Pub | 通信品質 |
 | `/odom` | `nav_msgs/Odometry` | Sub | オドメトリ |
 
 ### カスタムメッセージ: CommsQuality
