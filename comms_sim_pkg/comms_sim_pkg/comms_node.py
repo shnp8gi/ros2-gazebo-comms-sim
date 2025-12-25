@@ -46,8 +46,6 @@ try:
         LogDistancePathLossModel,
         TwoRayGroundModel,
     )
-    # Optional: only present in newer revisions
-    from comms_sim_pkg.mcs_parser import MCSTableParser  # type: ignore
 except ImportError:
     # Fallback for module execution (python -m comms_sim_pkg.comms_node)
     from .antenna_parser import AntennaPatternParser  # type: ignore
@@ -56,7 +54,6 @@ except ImportError:
         LogDistancePathLossModel,
         TwoRayGroundModel,
     )
-    from .mcs_parser import MCSTableParser  # type: ignore
 
 # Import custom message (will be available after build)
 try:
