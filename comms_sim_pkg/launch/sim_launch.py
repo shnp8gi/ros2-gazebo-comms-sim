@@ -287,10 +287,19 @@ def launch_setup(context, *args, **kwargs):
 
     # Generate ROS 2 params file for UGV to avoid launch parameter normalization issues
     ugv_param_file = os.path.join(tempfile.gettempdir(), 'ugv_controller_node.params.yaml')
+    waypoints_raw = ugv_params.get('waypoints', [])
+    waypoints_param = []
+    if waypoints_raw:
+        if isinstance(waypoints_raw[0], (list, tuple)):
+            for waypoint in waypoints_raw:
+                waypoints_param.extend(waypoint)
+        else:
+            waypoints_param = waypoints_raw
+
     ugv_param_yaml = {
         'ugv_controller_node': {
             'ros__parameters': {
-                'waypoints': ugv_params.get('waypoints', []),
+                'waypoints': waypoints_param,
                 'waypoint_tolerance': float(ugv_params.get('waypoint_tolerance', 2.0)),
                 'control_rate': float(ugv_params.get('control_rate', 10.0)),
                 'max_angular_velocity': float(ugv_params.get('max_angular_velocity', 1.0)),

@@ -105,7 +105,22 @@ class UGVControllerNode(Node):
         # Parse waypoints
         self.waypoints: List[Waypoint] = []
         if waypoints_raw:
-            for wp_data in waypoints_raw:
+            waypoint_groups: List[List[float]] = []
+            if isinstance(waypoints_raw, list) and waypoints_raw:
+                if isinstance(waypoints_raw[0], (list, tuple)):
+                    waypoint_groups = [list(wp) for wp in waypoints_raw]
+                else:
+                    if len(waypoints_raw) % 4 != 0:
+                        self.get_logger().warn(
+                            f'Waypoints flat list length should be multiple of 4, got {len(waypoints_raw)}'
+                        )
+                    waypoint_groups = [
+                        waypoints_raw[i:i + 4] for i in range(0, len(waypoints_raw), 4)
+                    ]
+            else:
+                self.get_logger().warn(f'Waypoints parameter has unexpected type: {type(waypoints_raw)}')
+
+            for wp_data in waypoint_groups:
                 try:
                     self.waypoints.append(Waypoint.from_list(wp_data))
                 except (ValueError, TypeError) as e:

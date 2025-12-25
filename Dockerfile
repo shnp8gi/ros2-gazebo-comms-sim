@@ -21,6 +21,7 @@ RUN apt-get update && apt-get install -y \
     python3 \
     python3-pip \
     python3-setuptools \
+    python3-yaml \
     locales \
     software-properties-common \
     && rm -rf /var/lib/apt/lists/*
@@ -69,10 +70,11 @@ RUN apt-get update && apt-get install -y \
 # =============================================================================
 # Python Dependencies for Communication Simulation
 # =============================================================================
-RUN pip3 install --no-cache-dir \
-    numpy \
-    scipy \
-    pandas
+RUN apt-get update && apt-get install -y \
+    python3-numpy \
+    python3-scipy \
+    python3-pandas \
+    && rm -rf /var/lib/apt/lists/*
 
 # =============================================================================
 # Environment Setup
