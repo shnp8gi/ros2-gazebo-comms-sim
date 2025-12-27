@@ -14,7 +14,7 @@ Publishes:
     - /cmd_vel (geometry_msgs/Twist): Velocity commands
 
 Parameters:
-    - waypoints: List of [X, Y, Z, V] waypoints
+    - waypoints: List of [X, Y, Z, V] waypoints (nested or flat list)
     - waypoint_tolerance: Distance threshold for waypoint reached
     - control_rate: Control loop frequency [Hz]
     - max_angular_velocity: Maximum turning speed [rad/s]
@@ -27,6 +27,8 @@ import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.parameter import Parameter
+from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
@@ -89,7 +91,13 @@ class UGVControllerNode(Node):
         # =====================================================================
         # Declare parameters
         # =====================================================================
-        self.declare_parameter('waypoints', [])
+        waypoints_descriptor = ParameterDescriptor(
+            description='Flat list of waypoints [x, y, z, v, ...]',
+        )
+        self.declare_parameters(
+            '',
+            [('waypoints', Parameter.Type.DOUBLE_ARRAY, waypoints_descriptor)],
+        )
         self.declare_parameter('waypoint_tolerance', 2.0)
         self.declare_parameter('control_rate', 10.0)
         self.declare_parameter('max_angular_velocity', 1.0)
