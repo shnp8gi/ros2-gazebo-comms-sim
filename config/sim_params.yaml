@@ -22,7 +22,7 @@ ros_gz_bridge:
       - "/world/{world_name}/model/suv/link/chassis/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU"
       
       # Odometry
-      - "/model/suv/odometry@nav_msgs/msg/Odometry[gz.msgs.Odometry"
+      - "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry"
       
       # Command velocity (ROS -> Gazebo)
       - "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist"

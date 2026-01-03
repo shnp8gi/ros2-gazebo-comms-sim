@@ -335,10 +335,7 @@ def launch_setup(context, *args, **kwargs):
                 executable='ugv_controller_node.py',
                 name='ugv_controller_node',
                 output='screen',
-                parameters=[ugv_param_file],
-                remappings=[
-                    ('/odom', '/model/suv/odometry'),
-                ]
+                parameters=[ugv_param_file]
             )
         ]
     )
