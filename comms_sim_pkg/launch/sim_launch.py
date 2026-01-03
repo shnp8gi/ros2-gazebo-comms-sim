@@ -102,7 +102,9 @@ def launch_setup(context, *args, **kwargs):
     """
     # Get launch configurations
     use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
+    headless_arg = LaunchConfiguration('headless').perform(context)
     use_sim_time_bool = (str(use_sim_time).lower() == 'true')
+    headless_arg_bool = (str(headless_arg).lower() == 'true')
     
     # Paths
     pkg_share = get_package_share_directory('comms_sim_pkg')
@@ -133,7 +135,7 @@ def launch_setup(context, *args, **kwargs):
             )
     world_name = sim_config.get('world_name', 'comms_sim_world')
     verbosity = sim_config.get('verbosity', 3)
-    headless = sim_config.get('headless', False)
+    headless = headless_arg_bool if headless_arg else sim_config.get('headless', False)
     model_prefix = sim_config.get('model_path_prefix', '/workspace/models')
     
     # Get timing configuration from YAML
@@ -354,8 +356,15 @@ def generate_launch_description():
         default_value='true',
         description='Use simulation time'
     )
+
+    declare_headless = DeclareLaunchArgument(
+        'headless',
+        default_value='false',
+        description='Run Gazebo in headless mode'
+    )
     
     return LaunchDescription([
         declare_use_sim_time,
+        declare_headless,
         OpaqueFunction(function=launch_setup),
     ])
