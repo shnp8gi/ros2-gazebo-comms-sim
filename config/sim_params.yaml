@@ -138,6 +138,7 @@ ugv_controller_node:
     # Format: [[x1, y1, z1, v1], [x2, y2, z2, v2], ...]
     waypoints:
       - [-20.0, 0.0, 0.0, 2.78]  # 10 km/h
+      - [20.0, 0.0, 0.0, 2.78]  # 10 km/h
       - [20.0, 0.0, 0.0, 0.0]  # Stop
     
     # Waypoint tolerance [m] - distance threshold to consider waypoint reached
