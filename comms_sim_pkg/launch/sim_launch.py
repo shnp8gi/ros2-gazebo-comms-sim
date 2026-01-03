@@ -274,8 +274,8 @@ def launch_setup(context, *args, **kwargs):
                     },
                 ],
                 remappings=[
-                    (f'/world/{world_name}/model/suv/link/chassis/sensor/navsat_sensor/navsat', '/gps/fix'),
-                    (f'/world/{world_name}/model/suv/link/chassis/sensor/imu_sensor/imu', '/imu/data'),
+                    ('/gps/fix', f'/world/{world_name}/model/suv/link/chassis/sensor/navsat_sensor/navsat'),
+                    ('/imu/data', f'/world/{world_name}/model/suv/link/chassis/sensor/imu_sensor/imu'),
                 ]
             )
         ]
