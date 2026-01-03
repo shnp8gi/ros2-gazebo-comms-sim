@@ -298,6 +298,17 @@ def launch_setup(context, *args, **kwargs):
         else:
             waypoints_param = waypoints_raw
 
+    # Provide spawn pose so the controller can align odom with world coordinates
+    suv_pose = None
+    if isinstance(spawn_entities, dict):
+        suv_cfg = spawn_entities.get('suv') or spawn_entities.get('SUV')
+        if isinstance(suv_cfg, dict):
+            pose = suv_cfg.get('pose')
+            if isinstance(pose, list) and len(pose) >= 3:
+                suv_pose = [pose[0], pose[1], pose[2]]
+    if suv_pose is None:
+        suv_pose = [-20.0, 0.0, 0.0]
+
     ugv_param_yaml = {
         'ugv_controller_node': {
             'ros__parameters': {
@@ -306,6 +317,7 @@ def launch_setup(context, *args, **kwargs):
                 'control_rate': float(ugv_params.get('control_rate', 10.0)),
                 'max_angular_velocity': float(ugv_params.get('max_angular_velocity', 1.0)),
                 'heading_gain': float(ugv_params.get('heading_gain', 1.5)),
+                'spawn_pose': suv_pose,
                 'use_sim_time': use_sim_time == 'true',
             }
         }

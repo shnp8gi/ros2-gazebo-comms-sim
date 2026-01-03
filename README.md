@@ -202,7 +202,7 @@ comms_simulator_node:
 ```yaml
 ugv_controller_node:
   ros__parameters:
-    waypoints:                    # ウェイポイント [X, Y, Z, V]
+    waypoints:                    # ウェイポイント [X, Y, Z, V] (ワールド座標)
       - [value, value, value, value]  # (例: [-20.0, 0.0, 0.0, 2.78])
       - [value, value, value, value]  # (例: [20.0, 0.0, 0.0, 0.0])
       # ...
@@ -210,7 +210,13 @@ ugv_controller_node:
     control_rate: value           # 制御ループ周波数 [Hz] (default: 10.0)
     max_angular_velocity: value   # 最大角速度 [rad/s] (default: 1.0)
     heading_gain: value           # 方向制御ゲイン (default: 1.5)
+    spawn_pose:                   # スポーン位置 [X, Y, Z] (ワールド座標)
+      - value
+      - value
+      - value
 ```
+
+※ `waypoints` はワールド座標として扱われます。`spawn_pose` を使って `/odom`（相対座標）とワールド座標の差分を補正するため、通常は `spawn_entities.suv.pose` と同じ値を指定します（launch が自動で渡します）。
 
 #### エンティティスポーン設定
 

@@ -102,6 +102,7 @@ class UGVControllerNode(Node):
         self.declare_parameter('control_rate', 10.0)
         self.declare_parameter('max_angular_velocity', 1.0)
         self.declare_parameter('heading_gain', 1.5)
+        self.declare_parameter('spawn_pose', [0.0, 0.0, 0.0])
         
         # Get parameters
         waypoints_raw = self.get_parameter('waypoints').value
@@ -109,6 +110,7 @@ class UGVControllerNode(Node):
         self.control_rate = self.get_parameter('control_rate').value
         self.max_angular_vel = self.get_parameter('max_angular_velocity').value
         self.heading_gain = self.get_parameter('heading_gain').value
+        self.spawn_pose = self.get_parameter('spawn_pose').value
         
         # Parse waypoints
         self.waypoints: List[Waypoint] = []
@@ -145,8 +147,15 @@ class UGVControllerNode(Node):
         self.current_y: float = 0.0
         self.current_z: float = 0.0
         self.current_yaw: float = 0.0
+        self.world_x: float = 0.0
+        self.world_y: float = 0.0
+        self.world_z: float = 0.0
         self.odom_received: bool = False
         self.mission_complete: bool = False
+        self.odom_offset_set: bool = False
+        self.odom_offset_x: float = 0.0
+        self.odom_offset_y: float = 0.0
+        self.odom_offset_z: float = 0.0
         
         # Callback for position updates (for comms node)
         self.position_callback: Optional[Callable[[np.ndarray], None]] = None
@@ -195,6 +204,7 @@ class UGVControllerNode(Node):
             f'  Control rate: {self.control_rate} Hz\n'
             f'  Max angular vel: {self.max_angular_vel} rad/s'
         )
+        self.get_logger().info(f'  Spawn pose: {self.spawn_pose}')
         
         for i, wp in enumerate(self.waypoints):
             self.get_logger().info(f'  WP{i}: {wp}')
@@ -229,10 +239,26 @@ class UGVControllerNode(Node):
             msg.pose.pose.orientation.w
         )
         self.odom_received = True
+
+        # Compute odom->world offset once using spawn pose
+        if (not self.odom_offset_set and isinstance(self.spawn_pose, (list, tuple))
+                and len(self.spawn_pose) >= 3):
+            self.odom_offset_x = float(self.spawn_pose[0]) - self.current_x
+            self.odom_offset_y = float(self.spawn_pose[1]) - self.current_y
+            self.odom_offset_z = float(self.spawn_pose[2]) - self.current_z
+            self.odom_offset_set = True
+            self.get_logger().info(
+                f'Computed odom offset: '
+                f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
+            )
+
+        self.world_x = self.current_x + self.odom_offset_x
+        self.world_y = self.current_y + self.odom_offset_y
+        self.world_z = self.current_z + self.odom_offset_z
         
         # Notify position callback
         if self.position_callback:
-            position = np.array([self.current_x, self.current_y, self.current_z])
+            position = np.array([self.world_x, self.world_y, self.world_z])
             self.position_callback(position)
     
     def control_loop(self) -> None:
@@ -252,8 +278,8 @@ class UGVControllerNode(Node):
         target = self.waypoints[self.current_waypoint_idx]
         
         # Calculate distance and heading to waypoint
-        distance = target.distance_to(self.current_x, self.current_y)
-        target_heading = target.heading_to(self.current_x, self.current_y)
+        distance = target.distance_to(self.world_x, self.world_y)
+        target_heading = target.heading_to(self.world_x, self.world_y)
         
         # Check if waypoint reached
         if distance < self.waypoint_tolerance:
@@ -269,7 +295,7 @@ class UGVControllerNode(Node):
             
             # Update target
             target = self.waypoints[self.current_waypoint_idx]
-            target_heading = target.heading_to(self.current_x, self.current_y)
+            target_heading = target.heading_to(self.world_x, self.world_y)
         
         # Calculate heading error
         heading_error = self.normalize_angle(target_heading - self.current_yaw)
