@@ -189,7 +189,13 @@ comms_simulator_node:
       exponent: value                  # パスロス指数 (default: 2.0)
 
     tx_power: value                    # 送信電力 [dBm] (default: -7.0)
+    ugv_spawn_pose:                    # UGVスポーン位置 [X, Y, Z] (ワールド座標)
+      - value
+      - value
+      - value
 ```
+
+※ 通信距離はワールド座標で計算されます。`/odom`（相対座標）からワールド座標へ変換するため、通常は `spawn_entities.suv.pose` と同じ値を指定します（launch が自動で渡します）。
 
 #### UGV制御パラメータ
 
