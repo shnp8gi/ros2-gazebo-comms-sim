@@ -121,9 +121,10 @@ $RECYCLE.BIN/
 *.sql
 *.sqlite
 
+
 # Keep log directory structure but ignore contents
-log/sim_result/*
-!log/sim_result/.gitkeep
+sim_results/*
+!sim_results/.gitkeep
 
 # -----------------------------------------------------------------------------
 # Temporary Files

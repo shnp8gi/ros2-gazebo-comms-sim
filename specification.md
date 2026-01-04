@@ -8,6 +8,7 @@
 | 2025/12/14 | ver 1.0 | 初版 |
 | 2025/12/14 | ver 2.0 | UGVのマルチウェイポイント追従と区間速度制御、アンテナゲインの動的参照、通信容量上限による通信停止機能の追加、およびCSVロギング仕様の確定 |
 | 2025/12/22 | ver 3.0 | MCSテーブルベースのスループット計算への変更、リンク確立時間（Association time）の実装、RSSI閾値の自動取得機能、YAMLベースの完全パラメータ化 |
+| 2026/01/04 | ver 3.1 | 実装（`sim_params.yaml`/`sim_launch.py`/`comms_node.py`）に合わせて、CSV出力先・ROSインターフェース・パラメータ定義の齟齬を修正 |
 
 ---
 
@@ -45,10 +46,10 @@ Gazebo Simで駆動する移動車両と固定基地局間の通信品質（RSSI
 ```
 ros2-gazebo-comms-sim/
 ├── config/                        # 設定ファイル
-│   ├── sim_params.yaml           # メインパラメータファイル
-│   ├── e_plane.csv               # Eプレーン（垂直面）アンテナパターン
-│   ├── h_plane.csv               # Hプレーン（水平面）アンテナパターン
-│   └── MCStable.csv              # MCS（変調・符号化方式）テーブル
+│   ├── sim_params.yaml            # メインパラメータファイル
+│   ├── e_plane.csv                # Eプレーン（垂直面）アンテナパターン
+│   ├── h_plane.csv                # Hプレーン（水平面）アンテナパターン
+│   └── MCStable.csv               # MCS（変調・符号化方式）テーブル
 │
 ├── models/                        # Gazeboモデル
 │   ├── antenna/                  # 基地局アンテナモデル
@@ -64,32 +65,32 @@ ros2-gazebo-comms-sim/
 │       ├── meshes/
 │       └── thumbnails/
 │
-├── comms_sim_pkg/            # ROS 2パッケージ
-│       ├── CMakeLists.txt
-│       ├── package.xml
-│       ├── setup.py
-│       │
-│       ├── comms_sim_pkg/        # Pythonモジュール
-│       │   ├── __init__.py
-│       │   ├── comms_node.py             # 通信シミュレータノード
-│       │   ├── comms_calculator.py       # 通信品質計算エンジン
-│       │   ├── antenna_parser.py         # アンテナパターン処理
-│       │   └── ugv_controller_node.py    # UGV制御ノード
-│       │
-│       ├── launch/               # 起動ファイル
-│       │   └── sim_launch.py    # メインランチファイル
-│       │
-│       └── resource/             # リソースファイル
-│           └── minimal_world.sdf # シミュレーションワールド
+├── comms_sim_pkg/                 # ROS 2パッケージ
+│   ├── CMakeLists.txt
+│   ├── package.xml
+│   ├── setup.py
+│   │
+│   ├── comms_sim_pkg/             # Pythonモジュール
+│   │   ├── __init__.py
+│   │   ├── comms_node.py          # 通信シミュレータノード
+│   │   ├── comms_calculator.py    # 通信品質計算エンジン
+│   │   ├── antenna_parser.py      # アンテナパターン処理
+│   │   └── ugv_controller_node.py # UGV制御ノード
+│   │
+│   ├── launch/                    # 起動ファイル
+│   │   └── sim_launch.py          # メインランチファイル
+│   │
+│   └── resource/                  # リソースファイル
+│       └── minimal_world.sdf      # シミュレーションワールド
 │
-├── comms_sim_msgs/           # メッセージ定義パッケージ
-│       ├── CMakeLists.txt
-│       ├── package.xml
-│       └── msg/
-│           └── CommsQuality.msg # 通信品質メッセージ
+├── comms_sim_msgs/                # メッセージ定義パッケージ
+│   ├── CMakeLists.txt
+│   ├── package.xml
+│   └── msg/
+│       └── CommsQuality.msg       # 通信品質メッセージ
 │
-├── log/
-│   └── sim_result/               # CSVログ出力ディレクトリ
+├── log/                           # colcon/実行ログ
+├── sim_results/                   # CSVログ出力ディレクトリ（実装の出力先）
 │
 ├── docker-compose.yml             # Docker Compose設定
 ├── Dockerfile                     # Dockerイメージ定義
@@ -107,9 +108,11 @@ ros2-gazebo-comms-sim/
 | エンティティ | センサ/プラグイン | ROS 2 トピック | 用途 |
 | :--- | :--- | :--- | :--- |
 | **車両** | Diff Drive (プラグイン) | `/cmd_vel` (Subscribe) | 運動制御。 |
-| **車両** | NavSat (GNSS) | `/gps/fix` (Publish) | $x, y, z$ 位置情報の提供。 |
 | **車両** | IMU | `/imu/data` (Publish) | 姿勢情報 (Roll, Pitch, Yaw) の提供。**アンテナゲイン計算**に利用。 |
-| **基地局** | N/A | パラメータから座標を取得 | 静的なためセンサ不要。 |
+| **車両** | Odometry | `/odom` (Publish) | 位置（ワールド座標系に補正して利用）・速度の提供。 |
+| **基地局** | N/A | パラメータ/スポーン設定から座標を取得 | 静的なためセンサ不要。 |
+
+> 注: `NavSat (GNSS)` / `/gps/fix` は仕様として想定しているが、現状の `sim_params.yaml`（`ros_gz_bridge.bridge_topics`）ではブリッジ設定が未定義のため、実装は `/odom` を位置入力として用いる。
 
 ---
 
@@ -121,25 +124,26 @@ ros2-gazebo-comms-sim/
 | :--- | :--- |
 | **ノード名** | `comms_simulator_node` |
 | **実装言語** | Python 3 |
-| **役割** | Gazeboから取得した位置情報と姿勢情報に基づき、カスタムの伝搬路モデルで通信品質を計算し、ロギング及びPublishを行う。 |
+| **役割** | Gazeboから取得した位置情報（/odom）と姿勢情報（/imu/data）に基づき、カスタムの伝搬路モデルで通信品質を計算し、ロギング及びPublishを行う。 |
 
 ### 6.2. 通信インターフェース
 
 | 項目 | トピック名/パラメータ | メッセージ型 | 送受信 | 備考 |
 | :--- | :--- | :--- | :--- | :--- |
-| **車両位置** | `/gps/fix` | `sensor_msgs/NavSatFix` | Subscribe | Gazeboから車両の位置を取得。 |
+| **車両位置** | `/odom` | `nav_msgs/Odometry` | Subscribe | Gazeboから車両の位置を取得（`spawn_pose` によりワールド座標へ補正）。 |
 | **車両姿勢** | `/imu/data` | `sensor_msgs/Imu` | Subscribe | Gazeboから車両の姿勢を取得。 |
 | **通信結果** | `/comms/quality` | カスタム (`CommsQuality.msg`) | Publish | 計算されたRSSI値とスループットを出力。 |
+| **ミッション完了** | `/mission_complete` | `std_msgs/Bool` | Subscribe | UGV完走通知。受信時にCSV保存をトリガする。 |
 
 ### 6.3. 伝搬路モデル計算ロジック
 
 | 項目 | 詳細 |
 | :--- | :--- |
-| **計算頻度** | **可変サンプリングレート** (`sampling_rate` パラメータで調整可能)。デフォルト 1.0 Hz。 |
-| **パスロス** | **対数距離減衰モデル** ($PL(d) = PL(d_0) + 10 \times n \times \log_{10}(d/d_0)$) をベースとする。 |
-| **RSSI計算** | $RSSI = P_t - PL(d) + G_a + N$ <br> - $P_t$: 送信電力 [dBm] <br> - $PL(d)$: パスロス [dB] <br> - $G_a$: アンテナゲイン [dBi] <br> - $N$: AWGN雑音 [dB] |
+| **計算頻度** | **可変サンプリングレート** (`sampling_rate` パラメータで調整可能)。デフォルトはYAMLに従う。 |
+| **パスロス** | **対数距離減衰モデル** ($PL(d) = 10 \times n \times \log_{10}(4 \pi d/\lambda)$) をベースとする。 |
+| **RSSI計算** | $RSSI = P_t - PL(d) + G_a + N$ <br> - $P_t$: 送信電力 [dBm] <br> - $PL(d)$: パスロス [dB] <br> - $G_a$: アンテナゲイン [dBi]（Tx/Rx合成） <br> - $N$: AWGN雑音 [dB] |
 | **雑音 (AWGN)** | **正規分布に従うAWGN** ($\mathcal{N}(0, \sigma^2)$) を逐一加算。分散 $\sigma^2$ はYAMLで設定可能。 |
-| **アンテナゲイン** | **CSVファイル**（E面/H面ゲイン）を参照。車両の姿勢（IMU）に基づく相対角度からゲインを線形補間 (`numpy.interp`) で取得する。 |
+| **アンテナゲイン** | **CSVファイル**（E面/H面ゲイン）を参照。アンテナ座標系に変換した方向ベクトルから、E面（仰角）/H面（方位角）ゲインを線形補間して取得する。 |
 | **スループット** | **MCSテーブル（CSV）を参照し、線形補間により決定**。（6.4.項を参照） |
 | **拡張性** | 伝搬路モデルの計算ロジックは、**Strategyパターン**を適用し、将来のNLOS/反射波モデルへの差し替えを容易にする。 |
 
@@ -232,24 +236,27 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 
 | パラメータ | 型 | デフォルト値 | 説明 |
 | :--- | :--- | :--- | :--- |
-| `sampling_rate` | float | 1.0 | 通信計算の更新頻度 [Hz]。 |
+| `sampling_rate` | float | 100.0 | 通信計算の更新頻度 [Hz]。 |
 | `tx_power` | float | -7.0 | 送信電力 [dBm]。 |
 | `noise_variance` | float | 2.0 | AWGNの分散値 [dB]。 |
 | `mcs_table_path` | string | `/workspace/config/MCStable.csv` | MCSテーブルCSVファイルへのパス。 |
 | `link_establishment_time_ms` | float | 2.0 | リンク確立時間 [ms]。 |
 | `e_plane_path` | string | `/workspace/config/e_plane.csv` | E面ゲインCSVファイルへのパス。 |
 | `h_plane_path` | string | `/workspace/config/h_plane.csv` | H面ゲインCSVファイルへのパス。 |
-| `comm_data_limit_mb` | float | 100.0 | 通信データ量の上限 [Mb]。`-1.0`で無制限。 |
-| `base_station_position` | list [x, y, z] | [0.0, 6.0, 0.0] | 基地局の静的なワールド座標。 |
+| `comm_data_limit_mb` | float | 800.0 | 通信データ量の上限 [Mb]。`-1.0`で無制限。 |
+| `base_station_position` | list [x, y, z] | `spawn_entities.antenna.pose[0:3]` | 基地局のワールド座標（スポーン設定から取得して起動時に反映）。 |
 | `base_station_antenna_offset` | float | 3.0 | 基地局アンテナの高さオフセット [m]。 |
+| `ugv_spawn_pose` | list [x, y, z] | `spawn_entities.suv.pose[0:3]` | UGVスポーンワールド座標（/odom → ワールド補正に使用）。 |
 | `ugv_antenna_offset` | float | 1.9 | UGVアンテナの高さオフセット [m]。 |
+| `ugv_antenna_relative_rpy` | list [r, p, y] | `spawn_entities.suv.antenna_relative_rpy` | UGVアンテナの相対姿勢 [rad]。 |
+| `base_station_antenna_relative_rpy` | list [r, p, y] | `spawn_entities.antenna.antenna_relative_rpy` | 基地局アンテナの相対姿勢 [rad]。 |
 
 #### パスロスモデルパラメータ
 
 | パラメータ | 型 | デフォルト値 | 説明 |
 | :--- | :--- | :--- | :--- |
-| `path_loss.d0` | float | 1.0 | 基準距離 [m]。 |
-| `path_loss.pl0` | float | 40.0 | 基準距離でのパスロス [dB]。 |
+| `path_loss.c` | float | 299792458 | 光速 [m/s]。 |
+| `path_loss.frequency` | float | 6.0e10 | 使用周波数 [Hz]。 |
 | `path_loss.exponent` | float | 2.0 | パスロス指数 $n$。自由空間: 2.0、都市部: 2.7-3.5。 |
 
 ---
@@ -292,9 +299,9 @@ ugv_controller_node:
 | 項目 | 詳細 |
 | :--- | :--- |
 | **出力タイミング** | ノードが終了するとき（`atexit`フックを使用）。 |
-| **出力ディレクトリ** | `/workspace/log/sim_result/` |
+| **出力ディレクトリ** | `/workspace/sim_results/` |
 | **ファイル命名規則** | `YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv` <br> (`-1.0`の場合は `LIMIT-UNLIMITED.csv`)。 |
-| **CSVヘッダー** | コメント行 (`# ...`) で以下の情報を記載: <br> - データ量制限 <br> - リンク確立時間 <br> - RSSI閾値 <br> - 伝搬路モデル名 <br> - 送信電力 <br> - 雑音分散 |
+| **CSVヘッダー** | コメント行 (`# ...`) で以下の情報を記載: <br> - データ量制限 <br> - 伝搬路モデル名 <br> - 送信電力 <br> - 雑音分散 |
 
 ### CSV出力項目
 
@@ -317,8 +324,6 @@ ugv_controller_node:
 ```csv
 # Communication Simulation Results
 # Data Limit: 100.0 Mb
-# Link Establishment Time: 2.0 ms
-# RSSI Threshold: -61.0 dBm
 # Model: Log-Distance Path Loss Model
 # TX Power: -7.0 dBm
 # Noise Variance: 2.0 dB
@@ -357,7 +362,7 @@ class PropagationModel(ABC):
 
 class LogDistancePathLossModel(PropagationModel):
     def calculate_path_loss(self, distance: float) -> float:
-        return self.pl0 + 10 * self.exponent * np.log10(distance / self.d0)
+        return 10 * self.exponent * np.log10(4 * pi * distance / lambda)
 
 class TwoRayGroundModel(PropagationModel):
     def calculate_path_loss(self, distance: float) -> float:
@@ -419,6 +424,6 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 
 ---
 
-**Document Version**: 3.0  
-**Last Updated**: 2025年12月22日  
+**Document Version**: 3.1  
+**Last Updated**: 2026年1月4日  
 **Status**: Active Development

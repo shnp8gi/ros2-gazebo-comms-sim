@@ -186,23 +186,107 @@ class AntennaPatternParser:
         combined = e_gain + h_gain
         
         return e_gain, h_gain, combined
-    
+
+    @staticmethod
+    def _rpy_to_rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
+        """Return rotation matrix R = Rz(yaw) * Ry(pitch) * Rx(roll).
+
+        This maps vectors from antenna/body frame -> world frame.
+        """
+        cr, sr = float(np.cos(roll)), float(np.sin(roll))
+        cp, sp = float(np.cos(pitch)), float(np.sin(pitch))
+        cy, sy = float(np.cos(yaw)), float(np.sin(yaw))
+
+        rx = np.array(
+            [[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]],
+            dtype=float,
+        )
+        ry = np.array(
+            [[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]],
+            dtype=float,
+        )
+        rz = np.array(
+            [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]],
+            dtype=float,
+        )
+        return rz @ ry @ rx
+
+    @staticmethod
+    def _wrap_pi(angle_rad: float) -> float:
+        return float((angle_rad + np.pi) % (2.0 * np.pi) - np.pi)
+
+    def calculate_antenna_frame_angles(
+        self,
+        antenna_pos_world: np.ndarray,
+        target_pos_world: np.ndarray,
+        antenna_rpy_world: np.ndarray,
+    ) -> Tuple[float, float]:
+        """Compute (elevation_rad, azimuth_rad) of target direction in antenna frame.
+
+        - elevation: +up (asin(z))
+        - azimuth: atan2(y, x)
+
+        `antenna_rpy_world` is the antenna frame orientation w.r.t world.
+        """
+        v_world = np.asarray(target_pos_world, dtype=float) - np.asarray(antenna_pos_world, dtype=float)
+        norm = float(np.linalg.norm(v_world))
+        if norm <= 1e-12:
+            return 0.0, 0.0
+
+        v_world /= norm
+
+        r = self._rpy_to_rotmat(
+            float(antenna_rpy_world[0]),
+            float(antenna_rpy_world[1]),
+            float(antenna_rpy_world[2]),
+        )
+
+        # world -> antenna is inverse rotation (transpose).
+        v_ant = r.T @ v_world
+
+        az = float(np.arctan2(v_ant[1], v_ant[0]))
+        el = float(np.arcsin(np.clip(v_ant[2], -1.0, 1.0)))
+        return el, self._wrap_pi(az)
+
+    def get_gain_from_angles(self, elevation_rad: float, azimuth_rad: float) -> Tuple[float, float, float]:
+        """Lookup (E/H/total) gains using antenna-frame angles (radians)."""
+        elevation_deg = float(np.degrees(elevation_rad))
+        azimuth_deg = float(np.degrees(azimuth_rad))
+
+        e_gain = float(self.get_e_plane_gain(elevation_deg))
+        h_gain = float(self.get_h_plane_gain(azimuth_deg))
+        return e_gain, h_gain, e_gain + h_gain
+
+    def get_tx_rx_gains(
+        self,
+        tx_pos_world: np.ndarray,
+        tx_rpy_world: np.ndarray,
+        rx_pos_world: np.ndarray,
+        rx_rpy_world: np.ndarray,
+    ) -> Tuple[float, float, float, float, float, float]:
+        """Compute separate antenna gains for TX and RX.
+
+        Returns:
+          (tx_e, tx_h, tx_total, rx_e, rx_h, rx_total) [dB]
+        """
+        tx_el, tx_az = self.calculate_antenna_frame_angles(tx_pos_world, rx_pos_world, tx_rpy_world)
+        rx_el, rx_az = self.calculate_antenna_frame_angles(rx_pos_world, tx_pos_world, rx_rpy_world)
+
+        tx_e, tx_h, tx_total = self.get_gain_from_angles(tx_el, tx_az)
+        rx_e, rx_h, rx_total = self.get_gain_from_angles(rx_el, rx_az)
+
+        return tx_e, tx_h, tx_total, rx_e, rx_h, rx_total
+
     def calculate_angles_from_orientation(
         self,
         ugv_position: np.ndarray,
         base_station_position: np.ndarray,
         ugv_orientation_euler: np.ndarray
     ) -> Tuple[float, float]:
-        """
-        Calculate relative angles for antenna gain lookup based on UGV orientation.
-        
-        Args:
-            ugv_position: UGV position [x, y, z]
-            base_station_position: Base station position [x, y, z]
-            ugv_orientation_euler: UGV orientation [roll, pitch, yaw] in radians
-            
-        Returns:
-            Tuple of (elevation_angle, azimuth_angle) in degrees
+        """Backward-compatible API.
+
+        NOTE: This older helper only uses yaw for azimuth correction and does not
+        fully reflect roll/pitch. Prefer `calculate_antenna_frame_angles()`.
         """
         # Vector from UGV to base station
         direction = base_station_position - ugv_position

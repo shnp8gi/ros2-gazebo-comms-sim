@@ -32,6 +32,7 @@ from rcl_interfaces.msg import ParameterDescriptor
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
+from std_msgs.msg import Bool
 
 
 def quaternion_to_yaw(x: float, y: float, z: float, w: float) -> float:
@@ -190,6 +191,13 @@ class UGVControllerNode(Node):
             '/cmd_vel',
             10
         )
+
+        # Mission completion notification (for other nodes like comms_node)
+        self.mission_complete_pub = self.create_publisher(
+            Bool,
+            '/mission_complete',
+            10
+        )
         
         # =====================================================================
         # Control timer
@@ -335,6 +343,11 @@ class UGVControllerNode(Node):
         
         self.get_logger().info('=== MISSION COMPLETE ===')
         self.get_logger().info('All waypoints reached. Stopping vehicle.')
+        
+        # Notify mission completion
+        msg = Bool()
+        msg.data = True
+        self.mission_complete_pub.publish(msg)
         
         # Call completion callback
         if self.on_mission_complete:

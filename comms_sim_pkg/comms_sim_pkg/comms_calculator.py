@@ -58,16 +58,15 @@ class PropagationModel(ABC):
 class LogDistancePathLossModel(PropagationModel):
     """
     Log-distance path loss model.
-    
-    PL(d) = PL(d0) + 10 * n * log10(d / d0)
-    
+
+    PL(d) = 10 * n * log10(4 * pi * d / lambda)
+
     Where:
         PL(d): Path loss at distance d [dB]
-        PL(d0): Path loss at reference distance d0 [dB]
         n: Path loss exponent
+        lambda: Wavelength [m]
         d: Distance [m]
-        d0: Reference distance [m]
-    
+
     Typical values for n:
         - Free space: 2.0
         - Urban area: 2.7 - 3.5
@@ -77,45 +76,52 @@ class LogDistancePathLossModel(PropagationModel):
     
     def __init__(
         self,
-        d0: float = 1.0,
-        pl0: float = 40.0,
-        exponent: float = 2.0
+        frequency: float = 6.0e10,
+        c: float = 299792458,
+        exponent: float = 2.0,
     ) -> None:
         """
         Initialize log-distance path loss model.
         
         Args:
-            d0: Reference distance [m]
-            pl0: Path loss at reference distance [dB]
+            frequency: Operating frequency [Hz]
+            c: Speed of light [m/s]
             exponent: Path loss exponent (n)
         """
-        self.d0 = d0
-        self.pl0 = pl0
         self.exponent = exponent
-    
+        self.frequency = frequency
+        self.c = c
+
     def calculate_path_loss(
         self,
         distance: float,
-        frequency_ghz: float = 60.0
+        frequency_ghz: float = 60.0,
     ) -> float:
         """
         Calculate path loss using log-distance model.
         
         Args:
             distance: Distance [m]
-            frequency_ghz: Operating frequency [GHz] (not used in basic model)
+            frequency_ghz: Operating frequency [GHz]
             
         Returns:
             Path loss [dB]
         """
+        # Guard/clip
         if distance <= 0:
-            return 0.0
-        
-        if distance < self.d0:
-            distance = self.d0
-        
-        path_loss = self.pl0 + 10 * self.exponent * np.log10(distance / self.d0)
-        return path_loss
+            distance = 0
+
+        # Keep Strategy interface: allow caller override frequency
+        if frequency_ghz is not None:
+            try:
+                self.frequency = float(frequency_ghz) * 1e9
+            except Exception:
+                # If invalid, keep existing self.frequency
+                pass
+
+        wavelength = self.c / self.frequency
+        path_loss = 10.0 * float(self.exponent) * np.log10(4.0 * np.pi * float(distance) / wavelength)
+        return float(path_loss)
     
     @property
     def model_name(self) -> str:
@@ -163,38 +169,38 @@ class TwoRayGroundModel(PropagationModel):
     def calculate_path_loss(
         self,
         distance: float,
-        frequency_ghz: float = 60.0
+        frequency: float = 6.0e10,
+        c: float = 299792458,
     ) -> float:
         """
         Calculate path loss using two-ray model.
         
         Args:
             distance: Distance [m]
-            frequency_ghz: Operating frequency [GHz]
-            
+            frequency: Operating frequency [Hz]
+            c: Speed of light [m/s]
+
         Returns:
             Path loss [dB]
         """
         if distance <= 0:
             return 0.0
-        
-        # Crossover distance (where two-ray model becomes valid)
-        wavelength = 0.3 / frequency_ghz  # c / f in meters
+
+        wavelength = c / frequency
+
         crossover = (4 * np.pi * self.tx_height * self.rx_height) / wavelength
-        
+
         if distance < crossover:
-            # Use free-space model for short distances
-            fspl = 20 * np.log10(distance) + 20 * np.log10(frequency_ghz) + 92.45
-            return fspl
-        
-        # Two-ray model
-        gain_term = 10 * np.log10(
+            # Free-space path loss (FSPL)
+            fspl = 20.0 * np.log10(4.0 * np.pi * float(distance) / wavelength)
+            return float(fspl)
+
+        gain_term = 10.0 * np.log10(
             self.tx_gain_linear * self.rx_gain_linear *
             (self.tx_height ** 2) * (self.rx_height ** 2)
         )
-        path_loss = 40 * np.log10(distance) - gain_term
-        
-        return max(path_loss, 0.0)
+        path_loss = 40.0 * np.log10(float(distance)) - gain_term
+        return float(max(path_loss, 0.0))
     
     @property
     def model_name(self) -> str:
