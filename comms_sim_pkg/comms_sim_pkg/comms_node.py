@@ -8,7 +8,8 @@
 ROS 2 node that simulates communication quality between UGV and base station.
 
 Subscribes to:
-    - /gps/fix (sensor_msgs/NavSatFix): UGV GPS position
+    - /odom (nav_msgs/Odometry): UGV odometry (used to derive world position)
+    - /gps/fix (sensor_msgs/NavSatFix): UGV GPS position (fallback)
     - /imu/data (sensor_msgs/Imu): UGV orientation
 
 Publishes:
@@ -22,6 +23,7 @@ Parameters:
     - comm_data_limit_mb: Data transmission limit [Mb]
     - path_loss.*: Path loss model parameters
     - tx_power: Transmit power [dBm]
+    - spawn_pose: UGV spawn pose [x, y, z] in world coordinates
 """
 
 import atexit
@@ -36,6 +38,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import NavSatFix, Imu
+from nav_msgs.msg import Odometry
 from std_msgs.msg import Header
 
 # Prefer absolute imports so this file can be executed as a script via ros2 launch
@@ -131,6 +134,7 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('ugv_antenna_offset', 1.3)
         self.declare_parameter('mcs_table_path', '')
         self.declare_parameter('link_establishment_time_ms', 2.0)
+        self.declare_parameter('spawn_pose', [0.0, 0.0, 0.0])
         
         # Get parameters
         self.sampling_rate = self.get_parameter('sampling_rate').value
@@ -194,6 +198,9 @@ class CommsSimulatorNode(Node):
         self.ugv_gps_position: Optional[np.ndarray] = None
         self.ugv_orientation: Optional[np.ndarray] = None  # [roll, pitch, yaw]
         self.ugv_local_position: Optional[np.ndarray] = None
+        self.odom_offset_set: bool = False
+        self.odom_offset: np.ndarray = np.array([0.0, 0.0, 0.0])
+        self.spawn_pose: np.ndarray = np.array(self.get_parameter('spawn_pose').value[:3])
         
         self.total_data_transmitted: float = 0.0  # [Mb]
         self.comm_active: bool = True
@@ -218,6 +225,13 @@ class CommsSimulatorNode(Node):
         # =====================================================================
         # Subscribers
         # =====================================================================
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            '/odom',
+            self.odom_callback,
+            sensor_qos
+        )
+
         self.gps_sub = self.create_subscription(
             NavSatFix,
             '/gps/fix',
@@ -267,7 +281,8 @@ class CommsSimulatorNode(Node):
             f'  RSSI max: {self.comms_calculator.rssi_max:.1f} dBm\n'
             f'  Data limit: {self.comm_data_limit_mb} Mb\n'
             f'  Model: {self.propagation_model.model_name}\n'
-            f'  MCS table: {self.mcs_table_path}'
+            f'  MCS table: {self.mcs_table_path}\n'
+            f'  Spawn pose: {self.spawn_pose.tolist()}'
         )
     
     def set_base_station_position(
@@ -312,6 +327,27 @@ class CommsSimulatorNode(Node):
             msg.altitude
         ])
         
+        if self.simulation_start_time is None:
+            self.simulation_start_time = self.get_clock().now().nanoseconds / 1e9
+
+    def odom_callback(self, msg: Odometry) -> None:
+        """Handle odometry updates and convert to world coordinates."""
+        odom_pos = np.array([
+            msg.pose.pose.position.x,
+            msg.pose.pose.position.y,
+            msg.pose.pose.position.z
+        ])
+
+        if not self.odom_offset_set:
+            self.odom_offset = self.spawn_pose - odom_pos
+            self.odom_offset_set = True
+            self.get_logger().info(
+                f'Computed odom offset: '
+                f'({self.odom_offset[0]:.3f}, {self.odom_offset[1]:.3f}, {self.odom_offset[2]:.3f})'
+            )
+
+        self.ugv_local_position = odom_pos + self.odom_offset
+
         if self.simulation_start_time is None:
             self.simulation_start_time = self.get_clock().now().nanoseconds / 1e9
     

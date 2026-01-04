@@ -248,6 +248,16 @@ def launch_setup(context, *args, **kwargs):
     # Communication Simulator Node
     # =========================================================================
     comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
+
+    suv_pose = None
+    if isinstance(spawn_entities, dict):
+        suv_cfg = spawn_entities.get('suv') or spawn_entities.get('SUV')
+        if isinstance(suv_cfg, dict):
+            pose = suv_cfg.get('pose')
+            if isinstance(pose, list) and len(pose) >= 3:
+                suv_pose = [pose[0], pose[1], pose[2]]
+    if suv_pose is None:
+        suv_pose = [-20.0, 0.0, 0.0]
     comms_node = TimerAction(
         period=comms_node_delay,
         actions=[
@@ -270,6 +280,7 @@ def launch_setup(context, *args, **kwargs):
                         'path_loss.pl0': float(comms_params.get('path_loss', {}).get('pl0', 40.0)),
                         'path_loss.exponent': float(comms_params.get('path_loss', {}).get('exponent', 2.0)),
                         'tx_power': float(comms_params.get('tx_power', -7.0)),
+                        'spawn_pose': suv_pose,
                         'use_sim_time': use_sim_time == 'true'
                     },
                 ],
