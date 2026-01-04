@@ -276,11 +276,11 @@ def launch_setup(context, *args, **kwargs):
                         # Align keys with comms_node.py
                         'link_establishment_time_ms': float(comms_params.get('link_establishment_time_ms', comms_params.get('link_establishment_time', 2.0))),
                         'comm_data_limit_mb': float(comms_params.get('comm_data_limit_mb', comms_params.get('comm_data_limit', 100.0))),
-                        'path_loss.d0': float(comms_params.get('path_loss', {}).get('d0', 1.0)),
-                        'path_loss.pl0': float(comms_params.get('path_loss', {}).get('pl0', 40.0)),
+                        'path_loss.c': float(comms_params.get('path_loss', {}).get('c', 299792458)),
+                        'path_loss.frequency': float(comms_params.get('path_loss', {}).get('frequency', 6.0e10)),
                         'path_loss.exponent': float(comms_params.get('path_loss', {}).get('exponent', 2.0)),
                         'tx_power': float(comms_params.get('tx_power', -7.0)),
-                        'spawn_pose': suv_pose,
+                        'ugv_spawn_pose': suv_pose,
                         'use_sim_time': use_sim_time == 'true'
                     },
                 ],

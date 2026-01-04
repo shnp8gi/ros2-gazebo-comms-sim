@@ -8,9 +8,9 @@
 ROS 2 node that simulates communication quality between UGV and base station.
 
 Subscribes to:
-    - /odom (nav_msgs/Odometry): UGV odometry (used to derive world position)
-    - /gps/fix (sensor_msgs/NavSatFix): UGV GPS position (fallback)
     - /imu/data (sensor_msgs/Imu): UGV orientation
+    - /odom (nav_msgs/Odometry): UGV local position
+    - /base_station/pose (geometry_msgs/PoseStamped): Base station pose (optional)
 
 Publishes:
     - /comms/quality (comms_sim_msgs/CommsQuality): Communication metrics
@@ -23,7 +23,9 @@ Parameters:
     - comm_data_limit_mb: Data transmission limit [Mb]
     - path_loss.*: Path loss model parameters
     - tx_power: Transmit power [dBm]
-    - spawn_pose: UGV spawn pose [x, y, z] in world coordinates
+    - odom_topic: Odometry topic name
+    - mission_complete_topic: Mission completion topic name
+    - base_station_pose_topic: Base station pose topic name
 """
 
 import atexit
@@ -37,9 +39,11 @@ import numpy as np
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
-from sensor_msgs.msg import NavSatFix, Imu
+from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry
+from geometry_msgs.msg import PoseStamped
 from std_msgs.msg import Header
+from std_msgs.msg import Bool
 
 # Prefer absolute imports so this file can be executed as a script via ros2 launch
 try:
@@ -125,8 +129,8 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('e_plane_path', '')
         self.declare_parameter('h_plane_path', '')
         self.declare_parameter('comm_data_limit_mb', -1.0)
-        self.declare_parameter('path_loss.d0', 1.0)
-        self.declare_parameter('path_loss.pl0', 40.0)
+        self.declare_parameter('path_loss.c', 299792458)
+        self.declare_parameter('path_loss.frequency', 6.0e10)
         self.declare_parameter('path_loss.exponent', 2.0)
         self.declare_parameter('tx_power', -7.0)
         self.declare_parameter('base_station_position', [0.0, 0.0, 0.0])
@@ -134,7 +138,12 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('ugv_antenna_offset', 1.3)
         self.declare_parameter('mcs_table_path', '')
         self.declare_parameter('link_establishment_time_ms', 2.0)
-        self.declare_parameter('spawn_pose', [0.0, 0.0, 0.0])
+        self.declare_parameter('mission_complete_topic', '/mission_complete')
+        self.declare_parameter('odom_topic', '/odom')
+        self.declare_parameter('ugv_spawn_pose', [-20.0, 0.0, 0.0])
+        self.declare_parameter('ugv_antenna_relative_rpy', [0.0, 0.0, 0.0])
+        self.declare_parameter('base_station_antenna_relative_rpy', [0.0, 0.0, 0.0])
+        self.declare_parameter('base_station_pose_topic', '/base_station/pose')
         
         # Get parameters
         self.sampling_rate = self.get_parameter('sampling_rate').value
@@ -145,18 +154,28 @@ class CommsSimulatorNode(Node):
         self.tx_power = self.get_parameter('tx_power').value
         self.mcs_table_path = self.get_parameter('mcs_table_path').value
         self.link_establishment_time = self.get_parameter('link_establishment_time_ms').value / 1000.0  # ms to s
+        self._mission_complete_topic: str = str(self.get_parameter('mission_complete_topic').value)
+        self.odom_topic: str = str(self.get_parameter('odom_topic').value)
+        self.ugv_spawn_pose: List[float] = list(self.get_parameter('ugv_spawn_pose').value)
+        self.ugv_antenna_relative_rpy: List[float] = list(self.get_parameter('ugv_antenna_relative_rpy').value)
+        self.base_station_antenna_relative_rpy: List[float] = list(self.get_parameter('base_station_antenna_relative_rpy').value)
+        self.base_station_pose_topic: str = str(self.get_parameter('base_station_pose_topic').value)
+        self._saved_on_mission_complete: bool = False
         
         # Path loss parameters
-        d0 = self.get_parameter('path_loss.d0').value
-        pl0 = self.get_parameter('path_loss.pl0').value
+        c = self.get_parameter('path_loss.c').value
+        frequency = self.get_parameter('path_loss.frequency').value
         exponent = self.get_parameter('path_loss.exponent').value
+        
+        # Base station entity orientation (roll, pitch, yaw) [rad]
+        self.base_station_entity_rpy: np.ndarray = np.array([0.0, 0.0, 0.0], dtype=float)
         
         # =====================================================================
         # Initialize components
         # =====================================================================
         # Propagation model (Strategy pattern)
         self.propagation_model = LogDistancePathLossModel(
-            d0=d0, pl0=pl0, exponent=exponent
+            c=c, frequency=frequency, exponent=exponent
         )
         
         # Communication calculator
@@ -195,12 +214,10 @@ class CommsSimulatorNode(Node):
         self.base_station_antenna_offset: float = self.get_parameter('base_station_antenna_offset').value
         self.ugv_antenna_offset: float = self.get_parameter('ugv_antenna_offset').value
         
-        self.ugv_gps_position: Optional[np.ndarray] = None
         self.ugv_orientation: Optional[np.ndarray] = None  # [roll, pitch, yaw]
         self.ugv_local_position: Optional[np.ndarray] = None
-        self.odom_offset_set: bool = False
-        self.odom_offset: np.ndarray = np.array([0.0, 0.0, 0.0])
-        self.spawn_pose: np.ndarray = np.array(self.get_parameter('spawn_pose').value[:3])
+        self._odom_offset_set: bool = False
+        self._odom_offset: np.ndarray = np.zeros(3, dtype=float)
         
         self.total_data_transmitted: float = 0.0  # [Mb]
         self.comm_active: bool = True
@@ -225,25 +242,35 @@ class CommsSimulatorNode(Node):
         # =====================================================================
         # Subscribers
         # =====================================================================
-        self.odom_sub = self.create_subscription(
-            Odometry,
-            '/odom',
-            self.odom_callback,
-            sensor_qos
-        )
-
-        self.gps_sub = self.create_subscription(
-            NavSatFix,
-            '/gps/fix',
-            self.gps_callback,
-            sensor_qos
-        )
-        
         self.imu_sub = self.create_subscription(
             Imu,
             '/imu/data',
             self.imu_callback,
             sensor_qos
+        )
+
+        # Prefer /odom for local (Gazebo) coordinates to avoid mixing frames
+        self.odom_sub = self.create_subscription(
+            Odometry,
+            self.odom_topic,
+            self.odom_callback,
+            sensor_qos
+        )
+
+        # Mission completion notification from UGV controller
+        self.mission_complete_sub = self.create_subscription(
+            Bool,
+            self._mission_complete_topic,
+            self._on_mission_complete,
+            10
+        )
+
+        # Optional base station pose subscriber (lets BS rotate later)
+        self._bs_pose_sub = self.create_subscription(
+            PoseStamped,
+            self.base_station_pose_topic,
+            self._on_base_station_pose,
+            10,
         )
         
         # =====================================================================
@@ -281,8 +308,7 @@ class CommsSimulatorNode(Node):
             f'  RSSI max: {self.comms_calculator.rssi_max:.1f} dBm\n'
             f'  Data limit: {self.comm_data_limit_mb} Mb\n'
             f'  Model: {self.propagation_model.model_name}\n'
-            f'  MCS table: {self.mcs_table_path}\n'
-            f'  Spawn pose: {self.spawn_pose.tolist()}'
+            f'  MCS table: {self.mcs_table_path}'
         )
     
     def set_base_station_position(
@@ -312,45 +338,36 @@ class CommsSimulatorNode(Node):
         """
         self.ugv_antenna_offset = offset
     
-    def gps_callback(self, msg: NavSatFix) -> None:
-        """
-        Handle GPS position updates.
-        
-        Note: NavSat provides lat/lon/alt. For local simulation,
-        we use a simplified conversion or rely on the bridge providing
-        local coordinates via odometry.
-        """
-        # Store GPS coordinates (lat, lon, alt)
-        self.ugv_gps_position = np.array([
-            msg.latitude,
-            msg.longitude,
-            msg.altitude
-        ])
-        
-        if self.simulation_start_time is None:
-            self.simulation_start_time = self.get_clock().now().nanoseconds / 1e9
-
     def odom_callback(self, msg: Odometry) -> None:
-        """Handle odometry updates and convert to world coordinates."""
-        odom_pos = np.array([
-            msg.pose.pose.position.x,
-            msg.pose.pose.position.y,
-            msg.pose.pose.position.z
-        ])
+        """Handle odometry updates as local position in meters."""
+        p = msg.pose.pose.position
+        odom_pos = np.array([p.x, p.y, p.z], dtype=float)
 
-        if not self.odom_offset_set:
-            self.odom_offset = self.spawn_pose - odom_pos
-            self.odom_offset_set = True
-            self.get_logger().info(
-                f'Computed odom offset: '
-                f'({self.odom_offset[0]:.3f}, {self.odom_offset[1]:.3f}, {self.odom_offset[2]:.3f})'
-            )
+        # Compute offset once so that the first received odom position maps to ugv_spawn_pose
+        if not self._odom_offset_set:
+            if isinstance(self.ugv_spawn_pose, (list, tuple)) and len(self.ugv_spawn_pose) >= 3:
+                spawn = np.array([
+                    float(self.ugv_spawn_pose[0]),
+                    float(self.ugv_spawn_pose[1]),
+                    float(self.ugv_spawn_pose[2]),
+                ], dtype=float)
+                self._odom_offset = spawn - odom_pos
+                self._odom_offset_set = True
+                self.get_logger().info(
+                    f'Computed comms odom offset: '
+                    f'({self._odom_offset[0]:.3f}, {self._odom_offset[1]:.3f}, {self._odom_offset[2]:.3f})'
+                )
+            else:
+                # No valid spawn pose; fall back to raw odom
+                self._odom_offset = np.zeros(3, dtype=float)
+                self._odom_offset_set = True
 
-        self.ugv_local_position = odom_pos + self.odom_offset
+        # Store aligned position (world coordinates)
+        self.ugv_local_position = odom_pos + self._odom_offset
 
         if self.simulation_start_time is None:
             self.simulation_start_time = self.get_clock().now().nanoseconds / 1e9
-    
+
     def imu_callback(self, msg: Imu) -> None:
         """Handle IMU orientation updates."""
         # Convert quaternion to Euler angles
@@ -370,6 +387,31 @@ class CommsSimulatorNode(Node):
             position: [x, y, z] in world coordinates
         """
         self.ugv_local_position = position
+
+    @staticmethod
+    def _quat_to_rpy(x: float, y: float, z: float, w: float) -> np.ndarray:
+        # roll
+        sinr_cosp = 2.0 * (w * x + y * z)
+        cosr_cosp = 1.0 - 2.0 * (x * x + y * y)
+        roll = float(np.arctan2(sinr_cosp, cosr_cosp))
+
+        # pitch
+        sinp = 2.0 * (w * y - z * x)
+        if abs(sinp) >= 1.0:
+            pitch = float(np.sign(sinp) * (np.pi / 2.0))
+        else:
+            pitch = float(np.arcsin(sinp))
+
+        # yaw
+        siny_cosp = 2.0 * (w * z + x * y)
+        cosy_cosp = 1.0 - 2.0 * (y * y + z * z)
+        yaw = float(np.arctan2(siny_cosp, cosy_cosp))
+
+        return np.array([roll, pitch, yaw], dtype=float)
+
+    def _on_base_station_pose(self, msg: PoseStamped) -> None:
+        q = msg.pose.orientation
+        self.base_station_entity_rpy = self._quat_to_rpy(float(q.x), float(q.y), float(q.z), float(q.w))
     
     def _update_link_state(self, rssi: float, current_time: float) -> bool:
         """
@@ -435,48 +477,41 @@ class CommsSimulatorNode(Node):
         if self.base_station_position is None:
             self.get_logger().warn('Base station position not set', throttle_duration_sec=5.0)
             return
-        
-        if self.ugv_local_position is None and self.ugv_gps_position is None:
-            self.get_logger().debug('Waiting for UGV position data...')
+
+        # Require local position (from /odom) to keep a consistent frame with base_station_position
+        if self.ugv_local_position is None or self.ugv_orientation is None:
+            self.get_logger().debug('Waiting for /odom or /imu data...')
             return
-        
-        # Use local position if available, otherwise estimate from GPS
-        if self.ugv_local_position is not None:
-            ugv_pos = self.ugv_local_position.copy()
-        else:
-            # Simplified: treat GPS lat/lon as local X/Y (not accurate, for demo)
-            ugv_pos = np.array([
-                self.ugv_gps_position[0] * 111000,  # Rough lat to m
-                self.ugv_gps_position[1] * 111000,  # Rough lon to m
-                self.ugv_gps_position[2]
-            ])
-        
-        # Apply antenna offsets
-        ugv_antenna_pos = ugv_pos + np.array([0, 0, self.ugv_antenna_offset])
-        bs_antenna_pos = self.base_station_position + np.array([
-            0, 0, self.base_station_antenna_offset
-        ])
-        
-        # Calculate antenna gains based on orientation
-        antenna_gain = 0.0
-        e_gain, h_gain = 0.0, 0.0
-        
-        if self.ugv_orientation is not None:
-            elevation, azimuth = self.antenna_parser.calculate_angles_from_orientation(
-                ugv_antenna_pos, bs_antenna_pos, self.ugv_orientation
-            )
-            e_gain, h_gain, antenna_gain = self.antenna_parser.get_combined_gain(
-                elevation, azimuth
-            )
-        
+
+        ugv_pos = np.asarray(self.ugv_local_position, dtype=float)
+        ugv_antenna_pos = ugv_pos + np.array([0.0, 0.0, float(getattr(self, 'ugv_antenna_offset', 0.0))], dtype=float)
+
+        bs_base = np.asarray(getattr(self, 'base_station_position', [0.0, 0.0, 0.0]), dtype=float)
+        bs_antenna_pos = bs_base + np.array([0.0, 0.0, float(getattr(self, 'base_station_antenna_offset', 0.0))], dtype=float)
+
+        ugv_ant_rpy = np.asarray(self.ugv_orientation, dtype=float) + np.asarray(self.ugv_antenna_relative_rpy, dtype=float)
+        bs_ant_rpy = np.asarray(self.base_station_entity_rpy, dtype=float) + np.asarray(
+            self.base_station_antenna_relative_rpy, dtype=float
+        )
+
+        # Tx: base station, Rx: UGV
+        tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
+            tx_pos_world=bs_antenna_pos,
+            tx_rpy_world=bs_ant_rpy,
+            rx_pos_world=ugv_antenna_pos,
+            rx_rpy_world=ugv_ant_rpy,
+        )
+
+        antenna_gain_db = float(tx_total + rx_total)
+
         # Calculate communication metrics
         metrics = self.comms_calculator.calculate_all(
             ugv_antenna_pos,
             bs_antenna_pos,
-            antenna_gain_db=antenna_gain,
-            add_noise=True
+            antenna_gain_db=antenna_gain_db,
+            add_noise=True,
         )
-        
+
         # Get current time
         current_time = self.get_clock().now().nanoseconds / 1e9
         elapsed = current_time - (self.simulation_start_time or current_time)
@@ -518,8 +553,8 @@ class CommsSimulatorNode(Node):
             'throughput': actual_throughput,
             'total_data_mb': self.total_data_transmitted,
             'path_loss': metrics['path_loss'],
-            'e_gain': e_gain,
-            'h_gain': h_gain,
+            'e_gain': float(rx_e),
+            'h_gain': float(rx_h),
             'link_state': self.link_state.name,
         }
         self.data_log.append(log_entry)
@@ -540,8 +575,8 @@ class CommsSimulatorNode(Node):
             msg.base_station_x = self.base_station_position[0]
             msg.base_station_y = self.base_station_position[1]
             msg.base_station_z = self.base_station_position[2] + self.base_station_antenna_offset
-            msg.antenna_gain_e_plane = e_gain
-            msg.antenna_gain_h_plane = h_gain
+            msg.antenna_gain_e_plane = float(rx_e)
+            msg.antenna_gain_h_plane = float(rx_h)
             msg.path_loss = metrics['path_loss']
             msg.comm_active = self.comm_active
             
@@ -571,8 +606,8 @@ class CommsSimulatorNode(Node):
             limit_str = 'LIMIT-UNLIMITED'
         
         filename = f'{timestamp}_{limit_str}.csv'
-        output_dir = '/workspace/log/sim_result'
-        
+        output_dir = '/workspace/sim_results/'
+
         # Create directory if needed
         os.makedirs(output_dir, exist_ok=True)
         filepath = os.path.join(output_dir, filename)
@@ -602,6 +637,17 @@ class CommsSimulatorNode(Node):
             self.get_logger().info(f'Data saved to: {filepath}')
         except Exception as e:
             self.get_logger().error(f'Failed to save CSV: {e}')
+
+    def _on_mission_complete(self, msg: Bool) -> None:
+        """Save CSV once when mission completion is received."""
+        if not msg.data:
+            return
+        if self._saved_on_mission_complete:
+            return
+
+        self._saved_on_mission_complete = True
+        self.get_logger().info('Mission complete received. Saving CSV...')
+        self.save_log_to_csv()
 
 
 def main(args=None):
