@@ -403,11 +403,15 @@ class CommsCalculator:
     
     def calculate_throughput(self, rssi: float) -> float:
         """
-        Calculate throughput from RSSI using linear interpolation on MCS table.
+        Calculate throughput from RSSI using step function on MCS table.
+        
+        Uses the highest MCS level whose RSSI threshold is satisfied.
+        No interpolation between MCS levels — each RSSI range maps to
+        a fixed throughput value defined in the MCS table.
         
         Rules:
         - RSSI <= rssi_min: 0 Gbps (no communication)
-        - rssi_min < RSSI < rssi_max: Linear interpolation
+        - rssi_min < RSSI < rssi_max: Step function (MCS table lookup)
         - RSSI >= rssi_max: Maximum throughput (saturated)
         
         Args:
@@ -424,10 +428,11 @@ class CommsCalculator:
         if rssi >= self.rssi_max:
             return self.mcs_throughput[-1]
         
-        # Linear interpolation between MCS table points
-        throughput = np.interp(rssi, self.mcs_rssi, self.mcs_throughput)
-        
-        return float(throughput)
+        # Step function: find the highest MCS level whose RSSI threshold is met
+        # mcs_rssi is sorted ascending; searchsorted(side='right') - 1 gives
+        # the index of the largest mcs_rssi value <= rssi
+        idx = int(np.searchsorted(self.mcs_rssi, rssi, side='right')) - 1
+        return float(self.mcs_throughput[idx])
     
     def calculate_all(
         self,

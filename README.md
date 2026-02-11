@@ -30,24 +30,24 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 
 ```
 ros2-gazebo-comms-sim/
-├── config/                        # 設定ファイル
-│   ├── sim_params.yaml            # メインパラメータファイル
-│   ├── e_plane.csv                # Eプレーン（垂直面）アンテナパターン
-│   ├── h_plane.csv                # Hプレーン（水平面）アンテナパターン
-│   └── MCStable.csv               # MCS（変調・符号化方式）テーブル
+├── config/                          # 設定ファイル
+│   ├── sim_params.yaml             # メインパラメータファイル
+│   ├── e_plane.csv                 # Eプレーン（垂直面）アンテナパターン
+│   ├── h_plane.csv                 # Hプレーン（水平面）アンテナパターン
+│   └── MCStable.csv                # MCS（変調・符号化方式）テーブル
 │
-├── models/                        # Gazeboモデル
-│   ├── antenna/                  # 基地局アンテナモデル
+├── models/                          # Gazeboモデル
+│   ├── antenna/                    # 基地局アンテナモデル
 │   │   ├── model.config
 │   │   ├── model.sdf
 │   │   └── meshes/
-│   └── SUV/                      # 移動車両モデル
+│   └── SUV/                        # 移動車両モデル
 │       ├── model.config
 │       ├── model.sdf
 │       └── meshes/
 │
-├── comms_sim_pkg/                 # ROS 2パッケージ（ノード/launch）
-│   ├── comms_sim_pkg/             # Pythonモジュール
+├── comms_sim_pkg/                   # ROS 2パッケージ（ノード/launch）
+│   ├── comms_sim_pkg/              # Pythonモジュール
 │   │   ├── comms_node.py          # 通信シミュレータノード（/comms/quality publish, CSV保存）
 │   │   ├── comms_calculator.py    # 通信品質計算（RSSI/Throughput）
 │   │   ├── antenna_parser.py      # アンテナパターン処理（E/H面CSV補間）
@@ -60,12 +60,12 @@ ros2-gazebo-comms-sim/
 │   ├── package.xml
 │   └── setup.py
 │
-├── comms_sim_msgs/                # メッセージ定義パッケージ
+├── comms_sim_msgs/                   # メッセージ定義パッケージ
 │   └── msg/
 │       └── CommsQuality.msg
 │
-├── log/                           # colcon/実行ログ
-├── sim_results/                   # CSVログ出力ディレクトリ（comms_node.pyの出力先）
+├── log/                              # colcon/実行ログ
+├── sim_results/                      # CSVログ出力ディレクトリ（comms_node.pyの出力先）
 │
 ├── docker-compose.yml
 ├── Dockerfile
@@ -181,7 +181,7 @@ comms_simulator_node:
     h_plane_path: value                # H面アンテナCSV (default: "/workspace/config/h_plane.csv")
     mcs_table_path: value              # MCSテーブル (default: "/workspace/config/MCStable.csv")
     link_establishment_time_ms: value  # リンク確立時間 [ms] (default: 2.0)
-    comm_data_limit_mb: value     # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
+    comm_data_limit_mb: value          # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
     
     path_loss:
       frequency: value                 # 使用周波数 [Hz] (default: 6.0e10)

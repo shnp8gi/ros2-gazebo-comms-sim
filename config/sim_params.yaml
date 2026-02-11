@@ -2,7 +2,6 @@
 # ROS 2 Gazebo Communication Simulator - Configuration Parameters
 # =============================================================================
 
-
 # -----------------------------------------------------------------------------
 # ROS-Gazebo Bridge Configuration
 # -----------------------------------------------------------------------------
@@ -12,21 +11,20 @@ ros_gz_bridge:
     # Format: "gz_topic@ros_msg_type[gz_msg_type" or "gz_topic@ros_msg_type]gz_msg_type"
     # [: gz->ros (subscribe from Gazebo, publish to ROS)
     # ]: ros->gz (subscribe from ROS, publish to Gazebo)
-    
+
     # Note: World name placeholder {world_name} will be replaced at launch time
     bridge_topics:
       # IMU sensor
       - "/world/{world_name}/model/suv/link/chassis/sensor/imu_sensor/imu@sensor_msgs/msg/Imu[gz.msgs.IMU"
-      
+
       # Odometry
       - "/odom@nav_msgs/msg/Odometry[gz.msgs.Odometry"
-      
+
       # Command velocity (ROS -> Gazebo)
       - "/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist"
-      
+
       # Clock (for simulation time)
       - "/clock@rosgraph_msgs/msg/Clock[gz.msgs.Clock"
-
 
 # -----------------------------------------------------------------------------
 # Simulation Settings
@@ -34,30 +32,29 @@ ros_gz_bridge:
 simulation:
   # World file path
   world_file: "/workspace/comms_sim_pkg/resource/minimal_world.sdf"
-  
+
   # World name (must match the name in world SDF file)
   world_name: "comms_sim_world"
-  
+
   # Gazebo verbosity level (0-4)
   verbosity: 3
-  
+
   # Real-time factor (1.0 = real-time, >1.0 = faster)
   real_time_factor: 1.0
-  
+
   # Headless mode (true: no GUI, false: with GUI)
   headless: false
-  
+
   # Model path prefix for spawning entities
   model_path_prefix: "/workspace/models"
-  
+
   # Timing configuration for node startup delays
   timing:
-    gazebo_startup_delay: 3.0      # Gazebo startup wait time [s]
-    entity_spawn_interval: 1.0     # Spawn interval between entities [s]
-    bridge_startup_delay: 2.0      # Bridge startup wait time [s]
-    comms_node_delay: 5.0          # Communication node startup wait time [s]
-    ugv_controller_delay: 6.0      # UGV controller startup wait time [s]
-
+    gazebo_startup_delay: 3.0 # Gazebo startup wait time [s]
+    entity_spawn_interval: 1.0 # Spawn interval between entities [s]
+    bridge_startup_delay: 2.0 # Bridge startup wait time [s]
+    comms_node_delay: 5.0 # Communication node startup wait time [s]
+    ugv_controller_delay: 6.0 # UGV controller startup wait time [s]
 
 # -----------------------------------------------------------------------------
 # Communication Simulator Node Parameters
@@ -65,25 +62,25 @@ simulation:
 comms_simulator_node:
   ros__parameters:
     # Sampling rate for communication quality calculation [Hz]
-    sampling_rate: 100.0
-    
+    sampling_rate: 500.0
+
     # AWGN noise variance (initial value) [dB]
     noise_variance: 2.0
-    
+
     # Antenna gain CSV file paths
     e_plane_path: "/workspace/config/e_plane.csv"
     h_plane_path: "/workspace/config/h_plane.csv"
-    
+
     # MCS (Modulation and Coding Scheme) table path
     mcs_table_path: "/workspace/config/MCStable.csv"
-    
+
     # Link establishment (association) time [ms]
     # Time required to establish communication link after RSSI exceeds threshold
     link_establishment_time_ms: 2.0
-    
+
     # Communication data limit [Mb] (-1.0 for unlimited)
     comm_data_limit_mb: 800.0
-    
+
     # Path loss model parameters
     path_loss:
       # Speed of light [m/s]
@@ -93,10 +90,9 @@ comms_simulator_node:
       # Path loss exponent (n)
       # Free space: 2.0, Urban: 2.7-3.5, Indoor LOS: 1.6-1.8
       exponent: 2.0
-    
+
     # Transmit power [dBm]
     tx_power: -7.0
-    
 
 # -----------------------------------------------------------------------------
 # Spawn Entities Configuration
@@ -108,29 +104,28 @@ spawn_entities:
     model_uri: "models://antenna"
     name: "antenna"
     # Pose: [x, y, z, roll, pitch, yaw]
-    pose: [0.0, 6.0, 0.0, 0.0, 0.0, 0.0]
+    pose: [0.0, 2.5, 0.0, 0.0, 0.0, 0.0]
     static: true
     # Antenna height offset from model base [m]
     # (Used for communication calculation: antenna_position = pose + [0, 0, antenna_height_offset])
     # Based on antenna.dae mesh: collision cylinder height is 3.0m, center at 0.95m
-    antenna_height_offset: 3.0
+    antenna_height_offset: 1.9
     # Antenna orientation relative to the entity orientation [rad]
     # Format: [roll, pitch, yaw]
-    antenna_relative_rpy: [0.0, 0.0, -1.5708]
+    antenna_relative_rpy: [0.0, 0.0, 3.14159265]
 
   # SUV (Mobile Vehicle) - UGV with sensors
   suv:
     model_uri: "models://SUV"
     name: "suv"
     # Pose: [x, y, z, roll, pitch, yaw]
-    pose: [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    pose: [-20.0, 0.0, 0.5, 0.0, 0.0, 0.0]
     static: false
     # Antenna height offset from vehicle base [m]
     antenna_height_offset: 1.9
     # Antenna orientation relative to the entity orientation [rad]
     # Format: [roll, pitch, yaw]
     antenna_relative_rpy: [0.0, 0.0, 0.0]
-
 
 # -----------------------------------------------------------------------------
 # UGV Controller Node Parameters
@@ -140,18 +135,18 @@ ugv_controller_node:
     # Waypoint list: [X, Y, Z, V] where V is target velocity [m/s]
     # Format: [[x1, y1, z1, v1], [x2, y2, z2, v2], ...]
     waypoints:
-      - [-20.0, 0.0, 0.0, 2.78]  # 10 km/h
-      - [20.0, 0.0, 0.0, 2.78]  # 10 km/h
-      - [20.0, 0.0, 0.0, 0.0]  # Stop
-    
+      - [-20.0, 0.0, 0.0, 2.78] # 10 km/h
+      - [20.0, 0.0, 0.0, 2.78] # 10 km/h
+      - [20.0, 0.0, 0.0, 0.0] # Stop
+
     # Waypoint tolerance [m] - distance threshold to consider waypoint reached
     waypoint_tolerance: 2.0
-    
+
     # Control loop rate [Hz]
     control_rate: 10.0
-    
+
     # Maximum angular velocity [rad/s]
     max_angular_velocity: 1.0
-    
+
     # Heading control gain (proportional)
     heading_gain: 1.5

@@ -249,13 +249,37 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
 
+    # Extract entity parameters from spawn_entities for comms_node
     suv_pose = None
+    suv_antenna_height_offset = 1.9
+    suv_antenna_relative_rpy = [0.0, 0.0, 0.0]
+    antenna_base_position = [0.0, 0.0, 0.0]
+    antenna_height_offset = 3.0
+    antenna_relative_rpy = [0.0, 0.0, 0.0]
+
     if isinstance(spawn_entities, dict):
+        # SUV (UGV) parameters
         suv_cfg = spawn_entities.get('suv') or spawn_entities.get('SUV')
         if isinstance(suv_cfg, dict):
             pose = suv_cfg.get('pose')
             if isinstance(pose, list) and len(pose) >= 3:
                 suv_pose = [pose[0], pose[1], pose[2]]
+            suv_antenna_height_offset = float(suv_cfg.get('antenna_height_offset', 1.9))
+            rpy = suv_cfg.get('antenna_relative_rpy')
+            if isinstance(rpy, list) and len(rpy) >= 3:
+                suv_antenna_relative_rpy = [float(r) for r in rpy[:3]]
+
+        # Antenna (Base Station) parameters
+        antenna_cfg = spawn_entities.get('antenna') or spawn_entities.get('Antenna')
+        if isinstance(antenna_cfg, dict):
+            pose = antenna_cfg.get('pose')
+            if isinstance(pose, list) and len(pose) >= 3:
+                antenna_base_position = [float(pose[0]), float(pose[1]), float(pose[2])]
+            antenna_height_offset = float(antenna_cfg.get('antenna_height_offset', 3.0))
+            rpy = antenna_cfg.get('antenna_relative_rpy')
+            if isinstance(rpy, list) and len(rpy) >= 3:
+                antenna_relative_rpy = [float(r) for r in rpy[:3]]
+
     if suv_pose is None:
         suv_pose = [-20.0, 0.0, 0.0]
     comms_node = TimerAction(
@@ -281,6 +305,12 @@ def launch_setup(context, *args, **kwargs):
                         'path_loss.exponent': float(comms_params.get('path_loss', {}).get('exponent', 2.0)),
                         'tx_power': float(comms_params.get('tx_power', -7.0)),
                         'ugv_spawn_pose': suv_pose,
+                        # Entity-derived antenna parameters
+                        'base_station_position': antenna_base_position,
+                        'base_station_antenna_offset': antenna_height_offset,
+                        'ugv_antenna_offset': suv_antenna_height_offset,
+                        'base_station_antenna_relative_rpy': antenna_relative_rpy,
+                        'ugv_antenna_relative_rpy': suv_antenna_relative_rpy,
                         'use_sim_time': use_sim_time == 'true'
                     },
                 ],

@@ -129,7 +129,7 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('e_plane_path', '')
         self.declare_parameter('h_plane_path', '')
         self.declare_parameter('comm_data_limit_mb', -1.0)
-        self.declare_parameter('path_loss.c', 299792458)
+        self.declare_parameter('path_loss.c', 299792458.0)
         self.declare_parameter('path_loss.frequency', 6.0e10)
         self.declare_parameter('path_loss.exponent', 2.0)
         self.declare_parameter('tx_power', -7.0)

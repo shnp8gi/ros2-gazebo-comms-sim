@@ -41,13 +41,15 @@ class AntennaPatternParser:
         """
         self.e_plane_interp: Optional[interp1d] = None
         self.h_plane_interp: Optional[interp1d] = None
+        self.e_plane_peak: float = 0.0
+        self.h_plane_peak: float = 0.0
         
         if e_plane_path:
             self.load_e_plane(e_plane_path)
         if h_plane_path:
             self.load_h_plane(h_plane_path)
     
-    def _load_pattern(self, filepath: str) -> interp1d:
+    def _load_pattern(self, filepath: str) -> Tuple[interp1d, float]:
         """
         Load antenna pattern from CSV file.
         
@@ -61,7 +63,7 @@ class AntennaPatternParser:
             filepath: Path to CSV file
             
         Returns:
-            Interpolation function for the pattern
+            Tuple of (interpolation function, peak gain in dBi)
             
         Raises:
             FileNotFoundError: If file does not exist
@@ -109,13 +111,19 @@ class AntennaPatternParser:
         angles = angles[sort_idx]
         gains = gains[sort_idx]
         
-        # Create interpolation function with extrapolation
-        return interp1d(
+        peak_gain = float(np.max(gains))
+        
+        # Create interpolation function
+        # Out-of-range angles get a very large negative gain (-1000 dBi)
+        # which effectively means communication is impossible outside the
+        # antenna pattern's angular coverage.
+        interp_func = interp1d(
             angles, gains,
             kind='linear',
             bounds_error=False,
-            fill_value=(gains[0], gains[-1])
+            fill_value=-1000.0
         )
+        return interp_func, peak_gain
     
     def load_e_plane(self, filepath: str) -> None:
         """
@@ -124,7 +132,9 @@ class AntennaPatternParser:
         Args:
             filepath: Path to E-plane CSV file
         """
-        self.e_plane_interp = self._load_pattern(filepath)
+        interp, peak = self._load_pattern(filepath)
+        self.e_plane_interp = interp
+        self.e_plane_peak = peak
     
     def load_h_plane(self, filepath: str) -> None:
         """
@@ -133,7 +143,9 @@ class AntennaPatternParser:
         Args:
             filepath: Path to H-plane CSV file
         """
-        self.h_plane_interp = self._load_pattern(filepath)
+        interp, peak = self._load_pattern(filepath)
+        self.h_plane_interp = interp
+        self.h_plane_peak = peak
     
     def get_e_plane_gain(self, angle_deg: float) -> float:
         """
@@ -249,13 +261,21 @@ class AntennaPatternParser:
         return el, self._wrap_pi(az)
 
     def get_gain_from_angles(self, elevation_rad: float, azimuth_rad: float) -> Tuple[float, float, float]:
-        """Lookup (E/H/total) gains using antenna-frame angles (radians)."""
+        """Lookup (E/H/total) gains using antenna-frame angles (radians).
+
+        Total gain is estimated via the 3-D pattern approximation:
+            G(el, az) = G_E(el) + G_H(az) - G_peak
+        where G_peak = max(peak_E, peak_H).  At boresight this equals
+        the peak gain; off-axis both planes contribute their roll-off.
+        """
         elevation_deg = float(np.degrees(elevation_rad))
         azimuth_deg = float(np.degrees(azimuth_rad))
 
         e_gain = float(self.get_e_plane_gain(elevation_deg))
         h_gain = float(self.get_h_plane_gain(azimuth_deg))
-        return e_gain, h_gain, e_gain + h_gain
+        g_peak = max(self.e_plane_peak, self.h_plane_peak)
+        total = e_gain + h_gain - g_peak
+        return e_gain, h_gain, total
 
     def get_tx_rx_gains(
         self,
