@@ -4,12 +4,13 @@
 
 ## 変更履歴
 
-| 変更日     | バージョン | 改定内容                                                                                                                                    |
-| :--------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------ |
-| 2025/12/14 | ver 1.0    | 初版                                                                                                                                        |
-| 2025/12/14 | ver 2.0    | UGVのマルチウェイポイント追従と区間速度制御、アンテナゲインの動的参照、通信容量上限による通信停止機能の追加、およびCSVロギング仕様の確定    |
-| 2025/12/22 | ver 3.0    | MCSテーブルベースのスループット計算への変更、リンク確立時間（Association time）の実装、RSSI閾値の自動取得機能、YAMLベースの完全パラメータ化 |
-| 2026/01/04 | ver 3.1    | 実装（`sim_params.yaml`/`sim_launch.py`/`comms_node.py`）に合わせて、CSV出力先・ROSインターフェース・パラメータ定義の齟齬を修正             |
+| 変更日     | バージョン | 改定内容                                                                                                                                                                                                                                                            |
+| :--------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| 2025/12/14 | ver 1.0    | 初版                                                                                                                                                                                                                                                                |
+| 2025/12/14 | ver 2.0    | UGVのマルチウェイポイント追従と区間速度制御、アンテナゲインの動的参照、通信容量上限による通信停止機能の追加、およびCSVロギング仕様の確定                                                                                                                            |
+| 2025/12/22 | ver 3.0    | MCSテーブルベースのスループット計算への変更、リンク確立時間（Association time）の実装、RSSI閾値の自動取得機能、YAMLベースの完全パラメータ化                                                                                                                         |
+| 2026/01/04 | ver 3.1    | 実装（`sim_params.yaml`/`sim_launch.py`/`comms_node.py`）に合わせて、CSV出力先・ROSインターフェース・パラメータ定義の齟齬を修正                                                                                                                                     |
+| 2026/02/16 | ver 4.0    | MCSテーブル値を現行に更新、アンテナオフセットを3D相対座標`[x,y,z]`に変更、CSV出力列名にbody/antenna/origin区分を追加、座標系説明の追加、`sampling_rate`デフォルト値修正、`base_station_pose_topic`インターフェース追加、CSV出力タイミングにmission_complete時を追記 |
 
 ---
 
@@ -36,11 +37,42 @@ Gazebo Simで駆動する移動車両と固定基地局間の通信品質（RSSI
 | 項目               | 詳細                                                                            | Fuel URI / 構成                                                        |
 | :----------------- | :------------------------------------------------------------------------------ | :--------------------------------------------------------------------- |
 | **ワールド**       | シンプルな無限平面 (Empty World + Ground Plane)。将来的な物体設置は可能とする。 | `minimal_world.sdf`                                                    |
-| **移動車両 (UGV)** | 実在感のあるSUVモデルに駆動系とセンサをアタッチ。                               | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/SUV`**     |
+| **移動車両 (UGV)** | SUVモデルに駆動系とセンサをアタッチ。                                           | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/SUV`**     |
 | **基地局**         | 高さのあるアンテナ塔モデル。固定設置。                                          | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/antenna`** |
 | **モデル参照**     | Gazebo Fuelからローカルにダウンロードし、Dockerでマウントして参照する。         | `GZ_SIM_RESOURCE_PATH` を設定。                                        |
 
----
+### 3.1. 座標系とモデル原点
+
+**ワールド座標系**: ENU（East-North-Up）に準拠。
+
+| 軸  | 方向      |
+| :-- | :-------- |
+| X   | 前方 (正) |
+| Y   | 左方 (正) |
+| Z   | 上方 (正) |
+
+**SUVモデル原点**: ホイールベース中央・トレッド中央・地面レベル (z=0)
+
+```
+    前方 (+X)
+      ↑
+FL ●─────● FR      (x=+1.5)
+   │     │
+   │  ★  │  ← ★ = モデル原点 (0,0,0) = 地面レベル
+   │     │
+RL ●─────● RR      (x=-1.5)
+      ↓
+    後方 (-X)
+```
+
+- chassis リンクは z=+0.5m にオフセット、車体上面は約 z≈2.0m
+
+**`antenna_offset`**: エンティティ原点からの3D相対座標 `[x, y, z]` [m]
+
+| 設置例                | offset値           |
+| :-------------------- | :----------------- |
+| SUV屋根中央にアンテナ | `[0.0, 0.0, 2.23]` |
+| SUV屋根前方にアンテナ | `[1.0, 0.0, 2.23]` |
 
 ## 4. ディレクトリ構成
 
@@ -106,12 +138,13 @@ ros2-gazebo-comms-sim/
 
 ## 5. ロボットとセンサ構成
 
-| エンティティ | センサ/プラグイン       | ROS 2 トピック                        | 用途                                                               |
-| :----------- | :---------------------- | :------------------------------------ | :----------------------------------------------------------------- |
-| **車両**     | Diff Drive (プラグイン) | `/cmd_vel` (Subscribe)                | 運動制御。                                                         |
-| **車両**     | IMU                     | `/imu/data` (Publish)                 | 姿勢情報 (Roll, Pitch, Yaw) の提供。**アンテナゲイン計算**に利用。 |
-| **車両**     | Odometry                | `/odom` (Publish)                     | 位置（ワールド座標系に補正して利用）・速度の提供。                 |
-| **基地局**   | N/A                     | パラメータ/スポーン設定から座標を取得 | 静的なためセンサ不要。                                             |
+| エンティティ | センサ/プラグイン       | ROS 2 トピック                               | 用途                                                                                      |
+| :----------- | :---------------------- | :------------------------------------------- | :---------------------------------------------------------------------------------------- |
+| **車両**     | Diff Drive (プラグイン) | `/cmd_vel` (Subscribe)                       | 運動制御。                                                                                |
+| **車両**     | IMU                     | `/imu/data` (Publish)                        | 姿勢情報 (Roll, Pitch, Yaw) の提供。**アンテナゲイン計算**に利用。                        |
+| **車両**     | Odometry                | `/odom` (Publish)                            | 位置（ワールド座標系に補正して利用）・速度の提供。                                        |
+| **基地局**   | N/A                     | パラメータ/スポーン設定から座標を取得        | 静的なためセンサ不要。                                                                    |
+| **基地局**   | N/A                     | `/base_station/pose` (Subscribe、オプション) | 基地局の姿勢をアンテナ方向計算に利用（パラメータ `base_station_pose_topic` で変更可能）。 |
 
 > 注: `NavSat (GNSS)` / `/gps/fix` は仕様として想定しているが、現状の `sim_params.yaml`（`ros_gz_bridge.bridge_topics`）ではブリッジ設定が未定義のため、実装は `/odom` を位置入力として用いる。
 
@@ -135,6 +168,7 @@ ros2-gazebo-comms-sim/
 | **車両姿勢**       | `/imu/data`           | `sensor_msgs/Imu`             | Subscribe | Gazeboから車両の姿勢を取得。                                          |
 | **通信結果**       | `/comms/quality`      | カスタム (`CommsQuality.msg`) | Publish   | 計算されたRSSI値とスループットを出力。                                |
 | **ミッション完了** | `/mission_complete`   | `std_msgs/Bool`               | Subscribe | UGV完走通知。受信時にCSV保存をトリガする。                            |
+| **基地局姿勢**     | `/base_station/pose`  | `geometry_msgs/PoseStamped`   | Subscribe | 基地局の姿勢（オプション）。アンテナ方向計算に利用。                  |
 
 ### 6.3. 伝搬路モデル計算ロジック
 
@@ -156,17 +190,17 @@ CSVファイル（`MCStable.csv`）を参照する方式
 
 ```csv
 # RSSI [dBm], Throughput [Gbps]
--39, 13.1413
--45, 9.856
--51, 6.5707
--55, 5.1627
--58, 3.2853
--61, 2.5813
+-50.5, 6.000
+-54, 4.600
+-58.5, 2.700
+-62.5, 2.150
+-65.5, 1.100
+-68.5, 0.500
 ```
 
 #### スループット計算ルール
 
-RSSIが各MCSレベルの閾値を満たす最大のMCSレベルのスループットをそのまま適用する（**ステップ関数方式、補間なし**）。
+RSSIが各MCSレベルの閾値を満たす最大のMCSレベルのスループットをそのまま適用する。
 
 | RSSI範囲                         | スループット              | 計算方法                                    |
 | :------------------------------- | :------------------------ | :------------------------------------------ |
@@ -177,18 +211,18 @@ RSSIが各MCSレベルの閾値を満たす最大のMCSレベルのスループ�
 **例**: MCSテーブルが上記の場合
 | RSSI範囲 | 適用スループット |
 | :--- | :--- |
-| $RSSI \le -61$ | 0.0 Gbps |
-| $-61 < RSSI < -58$ | 2.5813 Gbps |
-| $-58 \le RSSI < -55$ | 3.2853 Gbps |
-| $-55 \le RSSI < -51$ | 5.1627 Gbps |
-| $-51 \le RSSI < -45$ | 6.5707 Gbps |
-| $-45 \le RSSI < -39$ | 9.856 Gbps |
-| $RSSI \ge -39$ | 13.1413 Gbps |
+| $RSSI \le -68.5$ | 0.0 Gbps |
+| $-68.5 < RSSI < -65.5$ | 0.500 Gbps |
+| $-65.5 \le RSSI < -62.5$ | 1.100 Gbps |
+| $-62.5 \le RSSI < -58.5$ | 2.150 Gbps |
+| $-58.5 \le RSSI < -54$ | 2.700 Gbps |
+| $-54 \le RSSI < -50.5$ | 4.600 Gbps |
+| $RSSI \ge -50.5$ | 6.000 Gbps |
 
 **重要**:
 
 - $RSSI_{min}$ と $RSSI_{max}$ は**CSVファイルから自動取得**される
-- 上記の例では、$RSSI_{min} = -61$ dBm、$RSSI_{max} = -39$ dBm。
+- 上記の例では、$RSSI_{min} = -68.5$ dBm、$RSSI_{max} = -50.5$ dBm。
 
 ### 6.5. リンク確立時間（Association Time）の実装
 
@@ -251,7 +285,7 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 
 | パラメータ                          | 型             | デフォルト値                                  | 説明                                                           |
 | :---------------------------------- | :------------- | :-------------------------------------------- | :------------------------------------------------------------- |
-| `sampling_rate`                     | float          | 100.0                                         | 通信計算の更新頻度 [Hz]。                                      |
+| `sampling_rate`                     | float          | 500.0                                         | 通信計算の更新頻度 [Hz]。                                      |
 | `tx_power`                          | float          | -7.0                                          | 送信電力 [dBm]。                                               |
 | `noise_variance`                    | float          | 2.0                                           | AWGNの分散値 [dB]。                                            |
 | `mcs_table_path`                    | string         | `/workspace/config/MCStable.csv`              | MCSテーブルCSVファイルへのパス。                               |
@@ -260,11 +294,12 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 | `h_plane_path`                      | string         | `/workspace/config/h_plane.csv`               | H面ゲインCSVファイルへのパス。                                 |
 | `comm_data_limit_mb`                | float          | 800.0                                         | 通信データ量の上限 [Mb]。`-1.0`で無制限。                      |
 | `base_station_position`             | list [x, y, z] | `spawn_entities.antenna.pose[0:3]`            | 基地局のワールド座標（スポーン設定から取得して起動時に反映）。 |
-| `base_station_antenna_offset`       | float          | 3.0                                           | 基地局アンテナの高さオフセット [m]。                           |
+| `base_station_antenna_offset`       | list [x, y, z] | `[0.0, 0.0, 3.0]`                             | 基地局モデル原点からのアンテナ位置オフセット [m]。             |
 | `ugv_spawn_pose`                    | list [x, y, z] | `spawn_entities.suv.pose[0:3]`                | UGVスポーンワールド座標（/odom → ワールド補正に使用）。        |
-| `ugv_antenna_offset`                | float          | 1.9                                           | UGVアンテナの高さオフセット [m]。                              |
+| `ugv_antenna_offset`                | list [x, y, z] | `[0.0, 0.0, 1.9]`                             | UGVモデル原点からのアンテナ位置オフセット [m]。                |
 | `ugv_antenna_relative_rpy`          | list [r, p, y] | `spawn_entities.suv.antenna_relative_rpy`     | UGVアンテナの相対姿勢 [rad]。                                  |
 | `base_station_antenna_relative_rpy` | list [r, p, y] | `spawn_entities.antenna.antenna_relative_rpy` | 基地局アンテナの相対姿勢 [rad]。                               |
+| `base_station_pose_topic`           | string         | `/base_station/pose`                          | 基地局姿勢トピック名（オプション）。                           |
 
 #### パスロスモデルパラメータ
 
@@ -309,46 +344,59 @@ ugv_controller_node:
 
 ## 8. ログ出力仕様
 
-シミュレーション終了時、`comms_simulator_node` は収集したデータをCSV形式で出力する。
+`comms_simulator_node` は収集したデータをCSV形式で出力する。
 
-| 項目                 | 詳細                                                                                                               |
-| :------------------- | :----------------------------------------------------------------------------------------------------------------- |
-| **出力タイミング**   | ノードが終了するとき（`atexit`フックを使用）。                                                                     |
-| **出力ディレクトリ** | `/workspace/sim_results/`                                                                                          |
-| **ファイル命名規則** | `YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv` <br> (`-1.0`の場合は `LIMIT-UNLIMITED.csv`)。                               |
-| **CSVヘッダー**      | コメント行 (`# ...`) で以下の情報を記載: <br> - データ量制限 <br> - 伝搬路モデル名 <br> - 送信電力 <br> - 雑音分散 |
+| 項目                 | 詳細                                                                                                                                                                       |
+| :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **出力タイミング**   | (1) ミッション完了通知（`/mission_complete`）受信時、(2) ノード終了時（`atexit`フック）。                                                                                  |
+| **出力ディレクトリ** | `/workspace/sim_results/`                                                                                                                                                  |
+| **ファイル命名規則** | `YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv` <br> (`-1.0`の場合は `LIMIT-UNLIMITED.csv`)。                                                                                       |
+| **CSVヘッダー**      | コメント行 (`# ...`) で以下の情報を記載: <br> - データ量制限 <br> - 伝搬路モデル名 <br> - 送信電力 <br> - 雑音分散 <br> - 各座標カラムの定義（body/antenna/origin の意味） |
 
 ### CSV出力項目
 
-| 項目名                    | 単位   | 説明                                                     |
-| :------------------------ | :----- | :------------------------------------------------------- |
-| `time_s`                  | [s]    | シミュレーション時刻                                     |
-| `ugv_x`, `ugv_y`, `ugv_z` | [m]    | UGV座標                                                  |
-| `bs_x`, `bs_y`, `bs_z`    | [m]    | 基地局座標                                               |
-| `distance`                | [m]    | UGV-基地局間距離                                         |
-| `rssi`                    | [dBm]  | 受信信号強度                                             |
-| `throughput`              | [Gbps] | 瞬時スループット                                         |
-| `total_data_mb`           | [Mb]   | 累積送信データ量                                         |
-| `path_loss`               | [dB]   | パスロス                                                 |
-| `e_gain`                  | [dBi]  | E面アンテナゲイン                                        |
-| `h_gain`                  | [dBi]  | H面アンテナゲイン                                        |
-| `link_state`              | -      | リンク状態 (`DISCONNECTED`, `ESTABLISHING`, `CONNECTED`) |
+各座標カラムの意味:
+
+- **`ugv_body`**: UGV車両モデル原点（ホイールベース中央・地面レベル）
+- **`ugv_antenna`**: UGVアンテナ位置 = `ugv_body` + `antenna_offset`
+- **`bs_origin`**: 基地局モデル原点
+- **`bs_antenna`**: 基地局アンテナ位置 = `bs_origin` + `antenna_offset`
+- **`distance`**: `ugv_antenna` と `bs_antenna` 間の3D距離
+
+| 項目名                                            | 単位   | 説明                                                     |
+| :------------------------------------------------ | :----- | :------------------------------------------------------- |
+| `time_s`                                          | [s]    | シミュレーション時刻                                     |
+| `ugv_body_x`, `ugv_body_y`, `ugv_body_z`          | [m]    | UGV車体原点座標                                          |
+| `ugv_antenna_x`, `ugv_antenna_y`, `ugv_antenna_z` | [m]    | UGVアンテナ位置座標                                      |
+| `bs_origin_x`, `bs_origin_y`, `bs_origin_z`       | [m]    | 基地局モデル原点座標                                     |
+| `bs_antenna_x`, `bs_antenna_y`, `bs_antenna_z`    | [m]    | 基地局アンテナ位置座標                                   |
+| `distance`                                        | [m]    | UGVアンテナ-基地局アンテナ間3D距離                       |
+| `rssi`                                            | [dBm]  | 受信信号強度                                             |
+| `throughput`                                      | [Gbps] | 瞬時スループット                                         |
+| `total_data_mb`                                   | [Mb]   | 累積送信データ量                                         |
+| `path_loss`                                       | [dB]   | パスロス                                                 |
+| `e_gain`                                          | [dBi]  | E面アンテナゲイン                                        |
+| `h_gain`                                          | [dBi]  | H面アンテナゲイン                                        |
+| `link_state`                                      | -      | リンク状態 (`DISCONNECTED`, `ESTABLISHING`, `CONNECTED`) |
 
 ### CSV出力例
 
 ```csv
-# Communication Simulation Results
-# Data Limit: 100.0 Mb
-# Model: Log-Distance Path Loss Model
-# TX Power: -7.0 dBm
-# Noise Variance: 2.0 dB
+# 通信シミュレーション結果
+# データ上限: 800.0 Mb
+# 伝搬路モデル: Log-Distance Path Loss Model
+# 送信電力: -7.0 dBm
+# 雑音分散: 2.0 dB
 #
-time_s,ugv_x,ugv_y,ugv_z,bs_x,bs_y,bs_z,distance,rssi,throughput,total_data_mb,path_loss,e_gain,h_gain,link_state
-0.0,-20.0,0.0,0.0,0.0,6.0,3.0,20.88,-45.2,0.0,0.0,65.2,8.5,6.2,DISCONNECTED
-1.0,-17.22,0.0,0.0,0.0,6.0,3.0,18.25,-42.8,0.0,0.0,60.8,9.2,6.8,ESTABLISHING
-1.002,-17.22,0.0,0.0,0.0,6.0,3.0,18.25,-42.8,9.856,0.009856,60.8,9.2,6.8,CONNECTED
-2.0,-14.44,0.0,0.0,0.0,6.0,3.0,15.92,-40.1,10.5,10.509856,58.1,9.8,7.1,CONNECTED
-3.0,-11.66,0.0,0.0,0.0,6.0,3.0,13.75,-37.8,11.8,22.309856,55.8,10.2,7.5,CONNECTED
+# 列の座標定義:
+#   ugv_body    = UGV車体モデル原点（ホイールベース中心・地面レベル）
+#   ugv_antenna = UGVアンテナ位置（ugv_body + antenna_offset）
+#   bs_origin   = 基地局モデル原点
+#   bs_antenna  = 基地局アンテナ位置（bs_origin + antenna_offset）
+#   distance    = ugv_antenna と bs_antenna 間の3D距離
+#
+time_s,ugv_body_x,ugv_body_y,ugv_body_z,ugv_antenna_x,ugv_antenna_y,ugv_antenna_z,bs_origin_x,bs_origin_y,bs_origin_z,bs_antenna_x,bs_antenna_y,bs_antenna_z,distance,rssi,throughput,total_data_mb,path_loss,e_gain,h_gain,link_state
+0.0,-20.0,0.0,0.0,-20.0,0.0,2.23,0.0,3.0,0.0,0.0,3.0,2.79,20.42,-55.2,0.0,0.0,65.2,8.5,6.2,DISCONNECTED
 ```
 
 ---
@@ -412,11 +460,11 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 
 ### 11.1. 単体テスト
 
-| 対象                   | テスト項目                                                                                |
-| :--------------------- | :---------------------------------------------------------------------------------------- |
-| `CommsCalculator`      | - MCSテーブル読み込み <br> - RSSI計算の正確性 <br> - スループット線形補間 <br> - 飽和処理 |
-| `AntennaPatternParser` | - CSV読み込み <br> - 角度計算 <br> - 線形補間                                             |
-| `CommsSimulatorNode`   | - リンク状態遷移 <br> - データ量管理 <br> - CSVロギング                                   |
+| 対象                   | テスト項目                                                                                    |
+| :--------------------- | :-------------------------------------------------------------------------------------------- |
+| `CommsCalculator`      | - MCSテーブル読み込み <br> - RSSI計算の正確性 <br> - スループットステップ関数 <br> - 飽和処理 |
+| `AntennaPatternParser` | - CSV読み込み <br> - 角度計算 <br> - 線形補間                                                 |
+| `CommsSimulatorNode`   | - リンク状態遷移 <br> - データ量管理 <br> - CSVロギング                                       |
 
 ### 11.2. 統合テスト
 
@@ -441,6 +489,6 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 
 ---
 
-**Document Version**: 3.1  
-**Last Updated**: 2026年1月4日  
+**Document Version**: 4.0  
+**Last Updated**: 2026年2月16日  
 **Status**: Active Development

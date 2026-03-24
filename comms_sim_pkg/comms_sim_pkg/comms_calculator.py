@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =============================================================================
-# Communication Calculator Module
-# Implements propagation models using Strategy Pattern
+# 通信品質計算モジュール
+# Strategyパターンによる伝搬路モデルの実装
 # =============================================================================
 """
-Communication calculator for RSSI and throughput estimation.
-Uses Strategy pattern for swappable propagation models.
+通信品質（RSSI・スループット）を計算するモジュール。
+Strategyパターンにより伝搬路モデルを差し替え可能にしている。
 """
 
 from abc import ABC, abstractmethod
@@ -17,16 +17,16 @@ import os
 
 
 # =============================================================================
-# Strategy Interface: Propagation Model
+# Strategyインターフェース: 伝搬路モデル
 # =============================================================================
 class PropagationModel(ABC):
     """
-    Abstract base class for propagation models (Strategy Pattern).
-    
-    Implement this interface to create new propagation models
-    (e.g., NLOS, reflection models).
+    伝搬路モデルの抽象基底クラス（Strategyパターン）。
+
+    新しい伝搬路モデル（NLOS、反射波モデル等）を追加する場合、
+    このインターフェースを実装する。
     """
-    
+
     @abstractmethod
     def calculate_path_loss(
         self,
@@ -34,117 +34,123 @@ class PropagationModel(ABC):
         frequency_ghz: float = 60.0
     ) -> float:
         """
-        Calculate path loss for given distance.
-        
+        指定距離でのパスロスを計算する。
+
         Args:
-            distance: Distance between transmitter and receiver [m]
-            frequency_ghz: Operating frequency [GHz]
-            
+            distance: 送受信間距離 [m]
+            frequency_ghz: 使用周波数 [GHz]
+
         Returns:
-            Path loss in dB
+            パスロス [dB]
         """
         pass
-    
+
     @property
     @abstractmethod
     def model_name(self) -> str:
-        """Return the name of the propagation model."""
+        """伝搬路モデルの名称を返す。"""
         pass
 
 
 # =============================================================================
-# Concrete Strategy: Log-Distance Path Loss Model
+# 具象Strategy: 対数距離減衰モデル
 # =============================================================================
 class LogDistancePathLossModel(PropagationModel):
     """
-    Log-distance path loss model.
+    対数距離減衰モデル (Log-Distance Path Loss Model)。
 
-    PL(d) = 10 * n * log10(4 * pi * d / lambda)
+    PL(d) = PL(d₀) + 10 × n × log₁₀(d / d₀)
 
-    Where:
-        PL(d): Path loss at distance d [dB]
-        n: Path loss exponent
-        lambda: Wavelength [m]
-        d: Distance [m]
+    各変数:
+        PL(d₀): 基準距離d₀でのパスロス [dB]
+        n: パスロス指数
+        d₀: 基準距離 [m]（通常1m）
+        d: 距離 [m]
 
-    Typical values for n:
-        - Free space: 2.0
-        - Urban area: 2.7 - 3.5
-        - Indoor LOS: 1.6 - 1.8
-        - Indoor NLOS: 4 - 6
+    パスロス指数 n の典型値:
+        - 自由空間: 2.0
+        - 都市部: 2.7 - 3.5
+        - 屋内LOS: 1.6 - 1.8
+        - 屋内NLOS: 4 - 6
     """
-    
+
     def __init__(
         self,
         frequency: float = 6.0e10,
         c: float = 299792458,
         exponent: float = 2.0,
+        d0: float = 1.0,
+        pl_d0: float = -1.0,
     ) -> None:
         """
-        Initialize log-distance path loss model.
-        
+        対数距離減衰モデルを初期化する。
+
         Args:
-            frequency: Operating frequency [Hz]
-            c: Speed of light [m/s]
-            exponent: Path loss exponent (n)
+            frequency: 使用周波数 [Hz]（pl_d0自動計算用）
+            c: 光速 [m/s]
+            exponent: パスロス指数 (n)
+            d0: 基準距離 [m]
+            pl_d0: 基準距離でのパスロス [dB]
+                   -1.0の場合は自由空間理論値 20log₁₀(4πd₀/λ) を自動計算
         """
         self.exponent = exponent
         self.frequency = frequency
         self.c = c
+        self.d0 = d0
+
+        if pl_d0 < 0:
+            # 自由空間理論値を自動計算
+            wavelength = c / frequency
+            self.pl_d0 = 20.0 * np.log10(4.0 * np.pi * d0 / wavelength)
+        else:
+            self.pl_d0 = pl_d0
 
     def calculate_path_loss(
         self,
         distance: float,
-        frequency_ghz: float = 60.0,
+        frequency_ghz: float = None,
     ) -> float:
         """
-        Calculate path loss using log-distance model.
-        
+        対数距離モデルによるパスロスを計算する。
+
+        PL(d) = PL(d₀) + 10 × n × log₁₀(d / d₀)
+
         Args:
-            distance: Distance [m]
-            frequency_ghz: Operating frequency [GHz]
-            
+            distance: 距離 [m]
+            frequency_ghz: 未使用（インターフェース互換のため残す）
+
         Returns:
-            Path loss [dB]
+            パスロス [dB]
         """
-        # Guard/clip
-        if distance <= 0:
-            distance = 0
+        # 距離が基準距離以下の場合のガード
+        if distance <= self.d0:
+            return self.pl_d0
 
-        # Keep Strategy interface: allow caller override frequency
-        if frequency_ghz is not None:
-            try:
-                self.frequency = float(frequency_ghz) * 1e9
-            except Exception:
-                # If invalid, keep existing self.frequency
-                pass
-
-        wavelength = self.c / self.frequency
-        path_loss = 10.0 * float(self.exponent) * np.log10(4.0 * np.pi * float(distance) / wavelength)
+        path_loss = self.pl_d0 + 10.0 * float(self.exponent) * np.log10(float(distance) / self.d0)
         return float(path_loss)
-    
+
     @property
     def model_name(self) -> str:
         return "Log-Distance Path Loss Model"
 
 
 # =============================================================================
-# Concrete Strategy: Two-Ray Ground Reflection Model
+# 具象Strategy: 二波モデル（地面反射モデル）
 # =============================================================================
 class TwoRayGroundModel(PropagationModel):
     """
-    Two-Ray Ground Reflection Model.
-    
-    Suitable for longer distances where ground reflection becomes significant.
-    
+    二波モデル（Two-Ray Ground Reflection Model）。
+
+    地面反射が顕著になる長距離通信に適用。
+
     PL(d) = 40 * log10(d) - 10 * log10(Gt * Gr * ht^2 * hr^2)
-    
-    Where:
-        d: Distance [m]
-        Gt, Gr: Antenna gains (linear)
-        ht, hr: Antenna heights [m]
+
+    各変数:
+        d: 距離 [m]
+        Gt, Gr: アンテナゲイン（リニア値）
+        ht, hr: アンテナ高さ [m]
     """
-    
+
     def __init__(
         self,
         tx_height: float = 10.5,
@@ -153,19 +159,20 @@ class TwoRayGroundModel(PropagationModel):
         rx_gain_db: float = 0.0
     ) -> None:
         """
-        Initialize two-ray ground model.
-        
+        二波モデルを初期化する。
+
         Args:
-            tx_height: Transmitter antenna height [m]
-            rx_height: Receiver antenna height [m]
-            tx_gain_db: Transmitter antenna gain [dBi]
-            rx_gain_db: Receiver antenna gain [dBi]
+            tx_height: 送信アンテナ高さ [m]
+            rx_height: 受信アンテナ高さ [m]
+            tx_gain_db: 送信アンテナゲイン [dBi]
+            rx_gain_db: 受信アンテナゲイン [dBi]
         """
         self.tx_height = tx_height
         self.rx_height = rx_height
+        # dBからリニア値へ変換
         self.tx_gain_linear = 10 ** (tx_gain_db / 10)
         self.rx_gain_linear = 10 ** (rx_gain_db / 10)
-    
+
     def calculate_path_loss(
         self,
         distance: float,
@@ -173,53 +180,54 @@ class TwoRayGroundModel(PropagationModel):
         c: float = 299792458,
     ) -> float:
         """
-        Calculate path loss using two-ray model.
-        
+        二波モデルによるパスロスを計算する。
+
         Args:
-            distance: Distance [m]
-            frequency: Operating frequency [Hz]
-            c: Speed of light [m/s]
+            distance: 距離 [m]
+            frequency: 使用周波数 [Hz]
+            c: 光速 [m/s]
 
         Returns:
-            Path loss [dB]
+            パスロス [dB]
         """
         if distance <= 0:
             return 0.0
 
         wavelength = c / frequency
 
+        # クロスオーバー距離: 自由空間モデルと二波モデルの切り替え点
         crossover = (4 * np.pi * self.tx_height * self.rx_height) / wavelength
 
         if distance < crossover:
-            # Free-space path loss (FSPL)
+            # クロスオーバー距離未満: 自由空間パスロス (FSPL) を使用
             fspl = 20.0 * np.log10(4.0 * np.pi * float(distance) / wavelength)
             return float(fspl)
 
+        # クロスオーバー距離以上: 二波モデルを使用
         gain_term = 10.0 * np.log10(
             self.tx_gain_linear * self.rx_gain_linear *
             (self.tx_height ** 2) * (self.rx_height ** 2)
         )
         path_loss = 40.0 * np.log10(float(distance)) - gain_term
         return float(max(path_loss, 0.0))
-    
+
     @property
     def model_name(self) -> str:
         return "Two-Ray Ground Reflection Model"
 
 
 # =============================================================================
-# Communication Calculator (Context)
+# 通信品質計算クラス（Contextクラス）
 # =============================================================================
 class CommsCalculator:
     """
-    Communication quality calculator.
-    
-    Calculates RSSI and throughput based on propagation model,
-    antenna gains, and noise.
-    
-    Uses Strategy pattern to allow swapping propagation models.
+    通信品質計算クラス。
+
+    伝搬路モデル・アンテナゲイン・雑音に基づいて
+    RSSIとスループットを計算する。
+    Strategyパターンにより伝搬路モデルの差し替えが可能。
     """
-    
+
     def __init__(
         self,
         propagation_model: Optional[PropagationModel] = None,
@@ -228,81 +236,82 @@ class CommsCalculator:
         mcs_table_path: Optional[str] = None
     ) -> None:
         """
-        Initialize communication calculator.
-        
+        通信品質計算クラスを初期化する。
+
         Args:
-            propagation_model: Propagation model strategy (default: LogDistance)
-            tx_power_dbm: Transmit power [dBm]
-            noise_variance: AWGN variance [dB]
-            mcs_table_path: Path to MCS table CSV file
+            propagation_model: 伝搬路モデル（デフォルト: 対数距離減衰）
+            tx_power_dbm: 送信電力 [dBm]
+            noise_variance: AWGN分散 [dB]
+            mcs_table_path: MCSテーブルCSVファイルのパス
         """
         self.propagation_model = propagation_model or LogDistancePathLossModel()
         self.tx_power_dbm = tx_power_dbm
         self.noise_variance = noise_variance
         self._rng = np.random.default_rng()
-        
-        # Load MCS table
+
+        # MCSテーブル
         self.mcs_rssi: List[float] = []
         self.mcs_throughput: List[float] = []
-        
-        # RSSI thresholds (will be set from MCS table)
+
+        # RSSI閾値（MCSテーブルから設定される）
         self.rssi_min: float = 0.0
         self.rssi_max: float = 0.0
-        
+
         if mcs_table_path:
             self._load_mcs_table(mcs_table_path)
         else:
-            # Default MCS table if not provided
+            # MCSテーブル未指定時のデフォルト値
             self._init_default_mcs_table()
-        
-        # Set RSSI thresholds from loaded MCS table
+
+        # 読み込んだMCSテーブルからRSSI閾値を設定
         if self.mcs_rssi:
             self.rssi_min = min(self.mcs_rssi)
             self.rssi_max = max(self.mcs_rssi)
         else:
-            raise ValueError("MCS table is empty. Cannot determine RSSI thresholds.")
-    
+            raise ValueError("MCSテーブルが空です。RSSI閾値を決定できません。")
+
     def _load_mcs_table(self, csv_path: str) -> None:
         """
-        Load MCS table from CSV file.
-        
-        CSV format:
+        CSVファイルからMCSテーブルを読み込む。
+
+        CSVフォーマット:
             RSSI [dBm], Throughput [Gbps]
-            -39, 13.1413
-            -45, 9.856
+            -50.5, 6.000
+            -54, 4.600
             ...
-        
+
         Args:
-            csv_path: Path to MCS table CSV file
-            
+            csv_path: MCSテーブルCSVファイルのパス
+
         Raises:
-            FileNotFoundError: If CSV file doesn't exist
-            ValueError: If CSV format is invalid
+            FileNotFoundError: CSVファイルが存在しない場合
+            ValueError: CSVフォーマットが不正な場合
         """
         if not os.path.exists(csv_path):
             raise FileNotFoundError(
                 f"\n{'='*70}\n"
-                f"ERROR: MCS table file not found!\n"
+                f"エラー: MCSテーブルファイルが見つかりません\n"
                 f"{'='*70}\n"
-                f"Expected location: {csv_path}\n"
-                f"Please ensure MCStable.csv exists in the config directory.\n"
+                f"パス: {csv_path}\n"
+                f"configディレクトリにMCStable.csvが存在するか確認してください。\n"
                 f"{'='*70}\n"
             )
-        
+
         rssi_list = []
         throughput_list = []
-        
+
         try:
             with open(csv_path, 'r', encoding='utf-8') as f:
                 reader = csv.reader(f)
                 for row in reader:
-                    # Skip empty lines and comments
+                    # 空行とコメント行をスキップ
                     if not row or row[0].strip().startswith(('#', '//')):
                         continue
-                    
+
+                    # 列数不足の行をスキップ
                     if len(row) < 2:
                         continue
-                    
+
                     try:
                         rssi = float(row[0].strip())
                         throughput = float(row[1].strip())
@@ -310,65 +319,65 @@ class CommsCalculator:
                         throughput_list.append(throughput)
                     except ValueError:
                         continue
-            
+
             if not rssi_list:
-                raise ValueError("No valid data found in MCS table")
-            
-            # Sort by RSSI (ascending order for interpolation)
+                raise ValueError("MCSテーブルに有効なデータがありません")
+
+            # RSSI昇順でソート（searchsorted用）
             sorted_pairs = sorted(zip(rssi_list, throughput_list))
             self.mcs_rssi = [pair[0] for pair in sorted_pairs]
             self.mcs_throughput = [pair[1] for pair in sorted_pairs]
-            
+
         except Exception as e:
             raise ValueError(
                 f"\n{'='*70}\n"
-                f"ERROR: Failed to load MCS table!\n"
+                f"エラー: MCSテーブルの読み込みに失敗しました\n"
                 f"{'='*70}\n"
-                f"File: {csv_path}\n"
-                f"Error: {e}\n"
+                f"ファイル: {csv_path}\n"
+                f"エラー: {e}\n"
                 f"{'='*70}\n"
             )
-    
+
     def _init_default_mcs_table(self) -> None:
-        """Initialize default MCS table (fallback)."""
+        """デフォルトMCSテーブルを初期化する（フォールバック用）。"""
         self.mcs_rssi = [-61, -58, -55, -51, -45, -39]
         self.mcs_throughput = [2.5813, 3.2853, 5.1627, 6.5707, 9.856, 13.1413]
-    
+
     def set_propagation_model(self, model: PropagationModel) -> None:
         """
-        Set propagation model (Strategy pattern).
-        
+        伝搬路モデルを設定する（Strategyパターン）。
+
         Args:
-            model: New propagation model to use
+            model: 新しい伝搬路モデル
         """
         self.propagation_model = model
-    
+
     def set_noise_variance(self, variance: float) -> None:
         """
-        Update AWGN variance for dynamic noise.
-        
+        AWGN分散を更新する（動的雑音制御用）。
+
         Args:
-            variance: New noise variance [dB]
+            variance: 新しい雑音分散 [dB]
         """
         self.noise_variance = variance
-    
+
     def calculate_distance(
         self,
         ugv_position: np.ndarray,
         base_station_position: np.ndarray
     ) -> float:
         """
-        Calculate 3D Euclidean distance.
-        
+        3Dユークリッド距離を計算する。
+
         Args:
-            ugv_position: UGV position [x, y, z]
-            base_station_position: Base station position [x, y, z]
-            
+            ugv_position: UGV位置 [x, y, z]
+            base_station_position: 基地局位置 [x, y, z]
+
         Returns:
-            Distance [m]
+            距離 [m]
         """
         return float(np.linalg.norm(ugv_position - base_station_position))
-    
+
     def calculate_rssi(
         self,
         distance: float,
@@ -376,64 +385,65 @@ class CommsCalculator:
         add_noise: bool = True
     ) -> Tuple[float, float]:
         """
-        Calculate RSSI with optional AWGN.
-        
-        RSSI = Tx_Power - Path_Loss + Antenna_Gain + Noise
-        
+        RSSIを計算する（オプションでAWGNによる劣化を付加）。
+
+        RSSI = 送信電力 - パスロス + アンテナゲイン - 雑音劣化
+
+        劣化量は半正規分布 |N(0, σ)| に従う。
+
         Args:
-            distance: Distance [m]
-            antenna_gain_db: Combined antenna gain [dBi]
-            add_noise: Whether to add AWGN
-            
+            distance: 距離 [m]
+            antenna_gain_db: 合成アンテナゲイン [dBi]
+            add_noise: AWGN劣化を付加するかどうか
+
         Returns:
-            Tuple of (rssi [dBm], path_loss [dB])
+            (RSSI [dBm], パスロス [dB]) のタプル
         """
-        # Calculate path loss
+        # パスロス計算
         path_loss = self.propagation_model.calculate_path_loss(distance)
-        
-        # Base RSSI
+
+        # ベースRSSI
         rssi = self.tx_power_dbm - path_loss + antenna_gain_db
-        
-        # Add AWGN
+
+        # AWGNによる劣化
         if add_noise and self.noise_variance > 0:
-            noise = self._rng.normal(0, np.sqrt(self.noise_variance))
-            rssi += noise
-        
+            noise_degradation = abs(self._rng.normal(0, np.sqrt(self.noise_variance)))
+            rssi -= noise_degradation
+
         return rssi, path_loss
-    
+
     def calculate_throughput(self, rssi: float) -> float:
         """
-        Calculate throughput from RSSI using step function on MCS table.
-        
-        Uses the highest MCS level whose RSSI threshold is satisfied.
-        No interpolation between MCS levels — each RSSI range maps to
-        a fixed throughput value defined in the MCS table.
-        
-        Rules:
-        - RSSI <= rssi_min: 0 Gbps (no communication)
-        - rssi_min < RSSI < rssi_max: Step function (MCS table lookup)
-        - RSSI >= rssi_max: Maximum throughput (saturated)
-        
+        MCSテーブルのステップ関数によりスループットを決定する。
+
+        RSSIが各MCSレベルの閾値を満たす最大レベルのスループットを適用。
+        MCSレベル間の補間は行わない（ステップ関数方式）。
+
+        ルール:
+        - RSSI <= rssi_min: 0 Gbps（通信不可）
+        - rssi_min < RSSI < rssi_max: ステップ関数（MCSテーブル参照）
+        - RSSI >= rssi_max: 最大スループット（飽和）
+
         Args:
-            rssi: Received signal strength [dBm]
-            
+            rssi: 受信信号強度 [dBm]
+
         Returns:
-            Throughput [Gbps]
+            スループット [Gbps]
         """
-        # Below minimum threshold: no communication
+        # 最低閾値未満: 通信不可
         if rssi <= self.rssi_min:
             return 0.0
-        
-        # Above maximum threshold: saturate at max throughput
+
+        # 最大閾値以上: 最大スループットで飽和
         if rssi >= self.rssi_max:
             return self.mcs_throughput[-1]
-        
-        # Step function: find the highest MCS level whose RSSI threshold is met
-        # mcs_rssi is sorted ascending; searchsorted(side='right') - 1 gives
-        # the index of the largest mcs_rssi value <= rssi
+
+        # ステップ関数: RSSI閾値を満たす最大のMCSレベルを検索
+        # mcs_rssi は昇順ソート済み;
+        # searchsorted(side='right') - 1 で rssi 以下の最大インデックスを取得
         idx = int(np.searchsorted(self.mcs_rssi, rssi, side='right')) - 1
         return float(self.mcs_throughput[idx])
-    
+
     def calculate_all(
         self,
         ugv_position: np.ndarray,
@@ -442,21 +452,21 @@ class CommsCalculator:
         add_noise: bool = True
     ) -> dict:
         """
-        Calculate all communication metrics.
-        
+        全通信メトリクスを一括計算する。
+
         Args:
-            ugv_position: UGV position [x, y, z]
-            base_station_position: Base station position [x, y, z]
-            antenna_gain_db: Combined antenna gain [dBi]
-            add_noise: Whether to add AWGN
-            
+            ugv_position: UGV位置 [x, y, z]
+            base_station_position: 基地局位置 [x, y, z]
+            antenna_gain_db: 合成アンテナゲイン [dBi]
+            add_noise: AWGNを付加するかどうか
+
         Returns:
-            Dictionary with all metrics
+            全メトリクスを含む辞書
         """
         distance = self.calculate_distance(ugv_position, base_station_position)
         rssi, path_loss = self.calculate_rssi(distance, antenna_gain_db, add_noise)
         throughput = self.calculate_throughput(rssi)
-        
+
         return {
             'distance': distance,
             'rssi': rssi,

@@ -1,37 +1,37 @@
 # CommsQuality.msg
-# Custom message for communication quality metrics
+# 通信品質メトリクスのカスタムメッセージ定義
 
-# Header with timestamp
+# タイムスタンプ付きヘッダ
 std_msgs/Header header
 
-# Distance between UGV and base station [m]
+# UGV-基地局間の距離 [m]
 float64 distance
 
-# Received Signal Strength Indicator [dBm]
+# 受信信号強度 (RSSI) [dBm]
 float64 rssi
 
-# Instantaneous throughput [Gbps]
+# 瞬時スループット [Gbps]
 float64 throughput
 
-# Total data transmitted [Mb]
+# 累計伝送データ量 [Mb]
 float64 total_data_transmitted
 
-# UGV position in world coordinates [m]
+# UGVのワールド座標位置 [m]
 float64 ugv_x
 float64 ugv_y
 float64 ugv_z
 
-# Base station position in world coordinates [m]
+# 基地局のワールド座標位置 [m]
 float64 base_station_x
 float64 base_station_y
 float64 base_station_z
 
-# Antenna gains [dBi]
+# アンテナゲイン [dBi]
 float64 antenna_gain_e_plane
 float64 antenna_gain_h_plane
 
-# Path loss [dB]
+# パスロス [dB]
 float64 path_loss
 
-# Communication active flag
+# 通信アクティブフラグ
 bool comm_active

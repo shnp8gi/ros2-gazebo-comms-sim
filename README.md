@@ -9,22 +9,23 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 ### 主な機能
 
 - **リアルタイム通信品質計算**: RSSI、スループット、パスロスを動的に計算
-- **MCSテーブルベースのスループット推定**: CSVファイルから読み込み、線形補間による推定
+- **MCSテーブルベースのスループット推定**: CSVファイルから読み込み、ステップ関数によるMCSインデックス選択
 - **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始
 - **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）
 - **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（Strategyパターンで差し替え可能）
 - **マルチウェイポイント追従**: UGVの区間速度制御と自動経路追従
 - **通信データ量制限**: 設定可能な送信データ上限とCSVロギング
+- **ミッション完了時の自動CSV保存**: 全ウェイポイント到達時にCSVを自動保存
 
 ## 🛠️ 技術スタック
 
-| 項目 | バージョン/詳細 |
-|------|----------------|
-| OS | Ubuntu 22.04 LTS (Docker) |
-| ROS 2 | Humble Hawksbill |
-| シミュレータ | Gazebo Sim (Harmonic) |
-| 言語 | Python 3 |
-| 開発環境 | Docker / Docker Compose |
+| 項目         | バージョン/詳細           |
+| ------------ | ------------------------- |
+| OS           | Ubuntu 22.04 LTS (Docker) |
+| ROS 2        | Humble Hawksbill          |
+| シミュレータ | Gazebo Sim (Harmonic)     |
+| 言語         | Python 3                  |
+| 開発環境     | Docker / Docker Compose   |
 
 ## 📁 ディレクトリ構造
 
@@ -32,8 +33,8 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 ros2-gazebo-comms-sim/
 ├── config/                          # 設定ファイル
 │   ├── sim_params.yaml             # メインパラメータファイル
-│   ├── e_plane.csv                 # Eプレーン（垂直面）アンテナパターン
-│   ├── h_plane.csv                 # Hプレーン（水平面）アンテナパターン
+│   ├── e_plane.csv                 # E面（垂直面）アンテナパターン
+│   ├── h_plane.csv                 # H面（水平面）アンテナパターン
 │   └── MCStable.csv                # MCS（変調・符号化方式）テーブル
 │
 ├── models/                          # Gazeboモデル
@@ -64,7 +65,6 @@ ros2-gazebo-comms-sim/
 │   └── msg/
 │       └── CommsQuality.msg
 │
-├── log/                              # colcon/実行ログ
 ├── sim_results/                      # CSVログ出力ディレクトリ（comms_node.pyの出力先）
 │
 ├── docker-compose.yml
@@ -74,6 +74,37 @@ ros2-gazebo-comms-sim/
 ├── specification.md
 └── .gitignore
 ```
+
+## 🌐 座標系
+
+本シミュレータは**ENU（East-North-Up）座標系**を採用しています。
+
+| 軸  | 方向      |
+| --- | --------- |
+| X   | 前方 (正) |
+| Y   | 左方 (正) |
+| Z   | 上方 (正) |
+
+**SUVモデル原点**: ホイールベース中央・トレッド中央・地面レベル (z=0)
+
+```
+    前方 (+X)
+      ↑
+FL ●─────● FR      (x=+1.5)
+   │     │
+   │  ★  │  ← ★ = モデル原点 (0,0,0) = 地面レベル
+   │     │
+RL ●─────● RR      (x=-1.5)
+      ↓
+    後方 (-X)
+```
+
+**`antenna_offset`**: エンティティ原点からアンテナ位置への3D相対座標 `[x, y, z]` [m]
+
+| 設置例                | offset値           |
+| --------------------- | ------------------ |
+| SUV屋根中央にアンテナ | `[0.0, 0.0, 2.23]` |
+| SUV屋根前方にアンテナ | `[1.0, 0.0, 2.23]` |
 
 ## 🚀 クイックスタート
 
@@ -110,28 +141,33 @@ X11 Forwardingを使用してGazeboのGUIを表示します。
 #### Linux / WSL2
 
 ##### 1. X11アクセスを許可（初回のみ）
+
 ```bash
 xhost +local:docker
 ```
 
 ##### 2. GUIモードでコンテナ起動
+
 ```bash
 docker-compose run --rm sim-gui
 ```
 
- 以下コンテナ内
+以下コンテナ内
 
 ##### 3. パッケージのビルド
+
 ```bash
 colcon build --cmake-args -DBUILD_TESTING=ON
 ```
 
 ##### 4. ビルドしたパッケージをROS2の環境に設定する
+
 ```bash
 . install/setup.sh
 ```
 
 ##### 5. シミュレーション起動
+
 ```bash
 ros2 launch comms_sim_pkg sim_launch.py
 ```
@@ -140,9 +176,11 @@ ros2 launch comms_sim_pkg sim_launch.py
 
 1. VcXsrv等のXサーバーをインストール・起動
 2. WSL2のDISPLAY変数を設定
+
 ```bash
 export DISPLAY=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}'):0.0
 ```
+
 3. 上記Linuxと同様の手順でコンテナを起動
 
 ### CUIモード（Headless）
@@ -159,10 +197,10 @@ ros2 launch comms_sim_pkg sim_launch.py headless:=true
 
 ### GUI / CUI 切り替え
 
-| モード | コマンド | 用途 |
-|--------|----------|------|
-| GUI | `ros2 launch comms_sim_pkg sim_launch.py` | 可視化・デバッグ |
-| CUI | `ros2 launch comms_sim_pkg sim_launch.py headless:=true` | 高速実行・バッチ処理 |
+| モード | コマンド                                                 | 用途                 |
+| ------ | -------------------------------------------------------- | -------------------- |
+| GUI    | `ros2 launch comms_sim_pkg sim_launch.py`                | 可視化・デバッグ     |
+| CUI    | `ros2 launch comms_sim_pkg sim_launch.py headless:=true` | 高速実行・バッチ処理 |
 
 ## ⚙️ パラメータ設定
 
@@ -175,21 +213,21 @@ ros2 launch comms_sim_pkg sim_launch.py headless:=true
 ```yaml
 comms_simulator_node:
   ros__parameters:
-    sampling_rate: value               # 計算頻度 [Hz] (default: 100.0)
-    noise_variance: value              # AWGN分散 [dB] (default: 2.0)
-    e_plane_path: value                # E面アンテナCSV (default: "/workspace/config/e_plane.csv")
-    h_plane_path: value                # H面アンテナCSV (default: "/workspace/config/h_plane.csv")
-    mcs_table_path: value              # MCSテーブル (default: "/workspace/config/MCStable.csv")
-    link_establishment_time_ms: value  # リンク確立時間 [ms] (default: 2.0)
-    comm_data_limit_mb: value          # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
-    
-    path_loss:
-      frequency: value                 # 使用周波数 [Hz] (default: 6.0e10)
-      c: value                         # 光速 [m/s] (default: 299792458)
-      exponent: value                  # パスロス指数 (default: 2.0)
+    sampling_rate: value # 計算頻度 [Hz] (default: 100.0)
+    noise_variance: value # AWGN分散 [dB] (default: 2.0)
+    e_plane_path: value # E面アンテナCSV (default: "/workspace/config/e_plane.csv")
+    h_plane_path: value # H面アンテナCSV (default: "/workspace/config/h_plane.csv")
+    mcs_table_path: value # MCSテーブル (default: "/workspace/config/MCStable.csv")
+    link_establishment_time_ms: value # リンク確立時間 [ms] (default: 2.0)
+    comm_data_limit_mb: value # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
 
-    tx_power: value                    # 送信電力 [dBm] (default: -7.0)
-    ugv_spawn_pose:                    # UGVスポーン位置 [X, Y, Z] (ワールド座標)
+    path_loss:
+      frequency: value # 使用周波数 [Hz] (default: 6.0e10)
+      c: value # 光速 [m/s] (default: 299792458)
+      exponent: value # パスロス指数 (default: 2.0)
+
+    tx_power: value # 送信電力 [dBm] (default: -7.0)
+    ugv_spawn_pose: # UGVスポーン位置 [X, Y, Z] (ワールド座標)
       - value
       - value
       - value
@@ -203,42 +241,43 @@ comms_simulator_node:
 ugv_controller_node:
   ros__parameters:
     waypoints:
-      - [value, value, value, value]   # [X, Y, Z, V] (ワールド座標)
+      - [value, value, value, value] # [X, Y, Z, V] (ワールド座標)
       # ...
-    waypoint_tolerance: value          # 到達判定距離 [m] (default: 2.0)
-    control_rate: value                # 制御ループ周波数 [Hz] (default: 10.0)
-    max_angular_velocity: value        # 最大角速度 [rad/s] (default: 1.0)
-    heading_gain: value                # 方向制御ゲイン (default: 1.5)
+    waypoint_tolerance: value # 到達判定距離 [m] (default: 2.0)
+    control_rate: value # 制御ループ周波数 [Hz] (default: 10.0)
+    max_angular_velocity: value # 最大角速度 [rad/s] (default: 1.0)
+    heading_gain: value # 方向制御ゲイン (default: 1.5)
 ```
 
-※ `waypoints` はワールド座標として扱われます。実際の制御は `/odom` の相対移動量を使うため、`sim_launch.py` は `spawn_entities.suv.pose` を元に `spawn_pose` を自動生成して `ugv_controller_node` に渡し、`/odom` とワールド座標の差分を補正します（`ugv_controller_node.py` 内でオフセット計算）。
+> **Note**: `waypoints` はワールド座標として扱われます。`sim_launch.py` は `spawn_entities.suv.pose` を元に `spawn_pose` を自動生成して `ugv_controller_node` に渡し、`/odom` とワールド座標の差分を補正します。
 
 #### エンティティスポーン設定
 
 ```yaml
 spawn_entities:
   antenna:
-    model_uri: value                   # モデルURI (default: "models://antenna")
-    name: value                        # エンティティ名 (default: "antenna")
-    pose: [x, y, z, roll, pitch, yaw]  # (default: [0.0, 6.0, 0.0, 0.0, 0.0, 0.0])
-    static: value                      # 静的オブジェクト (default: true)
-    antenna_height_offset: value       # アンテナ高さ [m] (default: 3.0)
-    antenna_relative_rpy: [r, p, y]    # アンテナ相対角度 [rad] (default: [0.0, 0.0, -1.5708])
+    model_uri: value # モデルURI (default: "models://antenna")
+    name: value # エンティティ名 (default: "antenna")
+    pose: [x, y, z, roll, pitch, yaw] # (default: [0.0, 6.0, 0.0, 0.0, 0.0, 0.0])
+    static: value # 静的オブジェクト (default: true)
+    antenna_height_offset: value # アンテナ高さ [m] (default: 3.0)
+    antenna_relative_rpy: [r, p, y] # アンテナ相対角度 [rad] (default: [0.0, 0.0, -1.5708])
 
   suv:
-    model_uri: value                   # モデルURI (default: "models://SUV")
-    name: value                        # エンティティ名 (default: "suv")
-    pose: [x, y, z, roll, pitch, yaw]  # (default: [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    static: value                      # 静的オブジェクト (default: false)
-    antenna_height_offset: value       # アンテナ高さ [m] (default: 1.9)
-    antenna_relative_rpy: [r, p, y]    # アンテナ相対角度 [rad] (default: [0.0, 0.0, 0.0])
+    model_uri: value # モデルURI (default: "models://SUV")
+    name: value # エンティティ名 (default: "suv")
+    pose: [x, y, z, roll, pitch, yaw] # (default: [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+    static: value # 静的オブジェクト (default: false)
+    antenna_height_offset: value # アンテナ高さ [m] (default: 1.9)
+    antenna_relative_rpy: [r, p, y] # アンテナ相対角度 [rad] (default: [0.0, 0.0, 0.0])
 ```
 
 ## 📊 出力データ
 
 シミュレーション実行中に収集したログは、以下のディレクトリにCSVとして出力されます。
 
-- 出力先: `sim_results/`（`comms_sim_pkg/comms_sim_pkg/comms_node.py` 内で `/workspace/sim_results/` に保存）
+- 出力先: `sim_results/`（`/workspace/sim_results/` に保存）
+- 保存タイミング: **ミッション完了通知受信時**（全ウェイポイント到達時）およびノード終了時
 
 ### ファイル命名規則
 
@@ -246,55 +285,65 @@ spawn_entities:
 YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv
 ```
 
-例: `20251217_143052_LIMIT-UNLIMITED.csv`
+例: `20260217_143052_LIMIT-800MB.csv`
 
 ### CSV出力項目
 
-| 項目 | 単位 | 説明 |
-|------|------|------|
-| time_s | s | シミュレーション時間 |
-| ugv_x, ugv_y, ugv_z | m | UGV座標（ワールド座標） |
-| bs_x, bs_y, bs_z | m | 基地局アンテナ座標（ワールド座標、zは高さオフセット込み） |
-| distance | m | UGV-基地局間距離 |
-| rssi | dBm | 受信信号強度 |
-| throughput | Gbps | 瞬時スループット（リンク状態・通信上限を考慮後の値） |
-| total_data_mb | Mb | 累積送信データ量 |
-| path_loss | dB | パスロス |
-| e_gain, h_gain | dBi | 受信側（UGV）アンテナゲイン（E/H面） |
-| link_state | - | `DISCONNECTED` / `ESTABLISHING` / `CONNECTED` |
+各座標列の座標参照先:
+
+- **`ugv_body`**: UGV車体モデル原点（ホイールベース中央・地面レベル）
+- **`ugv_antenna`**: UGVアンテナ位置（= ugv_body + antenna_offset）
+- **`bs_origin`**: 基地局モデル原点
+- **`bs_antenna`**: 基地局アンテナ位置（= bs_origin + antenna_offset）
+- **`distance`**: ugv_antenna と bs_antenna 間の3D距離
+
+| 項目                                              | 単位 | 説明                                                 |
+| ------------------------------------------------- | ---- | ---------------------------------------------------- |
+| `time_s`                                          | s    | シミュレーション時間                                 |
+| `ugv_body_x`, `ugv_body_y`, `ugv_body_z`          | m    | UGV車体原点座標                                      |
+| `ugv_antenna_x`, `ugv_antenna_y`, `ugv_antenna_z` | m    | UGVアンテナ位置座標                                  |
+| `bs_origin_x`, `bs_origin_y`, `bs_origin_z`       | m    | 基地局モデル原点座標                                 |
+| `bs_antenna_x`, `bs_antenna_y`, `bs_antenna_z`    | m    | 基地局アンテナ位置座標                               |
+| `distance`                                        | m    | UGVアンテナ-基地局アンテナ間3D距離                   |
+| `rssi`                                            | dBm  | 受信信号強度                                         |
+| `throughput`                                      | Gbps | 瞬時スループット（リンク状態・通信上限を考慮後の値） |
+| `total_data_mb`                                   | Mb   | 累積送信データ量                                     |
+| `path_loss`                                       | dB   | パスロス                                             |
+| `e_gain`, `h_gain`                                | dBi  | 受信側（UGV）アンテナゲイン（E/H面）                 |
+| `link_state`                                      | -    | `DISCONNECTED` / `ESTABLISHING` / `CONNECTED`        |
 
 ## 🔌 ROSインターフェース
 
 ### トピック
 
-| トピック名 | メッセージ型 | 方向 | 説明 |
-|------------|-------------|------|------|
-| `/imu/data` | `sensor_msgs/Imu` | Sub | UGV姿勢情報（ros_gz_bridge経由でGazebo IMUを購読） |
-| `/odom` | `nav_msgs/Odometry` | Sub | UGVオドメトリ（ros_gz_bridge経由でGazebo Odometryを購読） |
-| `/cmd_vel` | `geometry_msgs/Twist` | Pub | 速度指令（ros_gz_bridge経由でGazeboへ送信） |
-| `/comms/quality` | `comms_sim_msgs/CommsQuality` | Pub | 通信品質 |
-| `/mission_complete` | `std_msgs/Bool` | Pub/Sub | UGV完走通知（UGVがPublish、通信ノードがSubscribeしてCSV保存をトリガ） |
-| `/clock` | `rosgraph_msgs/Clock` | Sub | シミュレーション時間（use_sim_time=true時） |
-
+| トピック名           | メッセージ型                  | 方向    | 説明                                                          |
+| -------------------- | ----------------------------- | ------- | ------------------------------------------------------------- |
+| `/imu/data`          | `sensor_msgs/Imu`             | Sub     | UGV姿勢情報（ros_gz_bridge経由）                              |
+| `/odom`              | `nav_msgs/Odometry`           | Sub     | UGVオドメトリ（ros_gz_bridge経由）                            |
+| `/cmd_vel`           | `geometry_msgs/Twist`         | Pub     | 速度指令（ros_gz_bridge経由でGazeboへ送信）                   |
+| `/comms/quality`     | `comms_sim_msgs/CommsQuality` | Pub     | 通信品質                                                      |
+| `/mission_complete`  | `std_msgs/Bool`               | Pub/Sub | UGV完走通知（UGVがPublish、通信ノードがSubscribeしてCSV保存） |
+| `/base_station/pose` | `geometry_msgs/PoseStamped`   | Sub     | 基地局姿勢（オプション、アンテナ方向計算に使用）              |
+| `/clock`             | `rosgraph_msgs/Clock`         | Sub     | シミュレーション時間（use_sim_time=true時）                   |
 
 ### カスタムメッセージ: CommsQuality
 
 ```
 std_msgs/Header header
-float64 distance
-float64 rssi
-float64 throughput
-float64 total_data_transmitted
-float64 ugv_x
-float64 ugv_y
-float64 ugv_z
-float64 base_station_x
-float64 base_station_y
-float64 base_station_z
-float64 antenna_gain_e_plane
-float64 antenna_gain_h_plane
-float64 path_loss
-bool comm_active
+float64 distance              # UGV-基地局間距離 [m]
+float64 rssi                  # 受信信号強度 [dBm]
+float64 throughput            # 瞬時スループット [Gbps]
+float64 total_data_transmitted # 累計伝送データ量 [Mb]
+float64 ugv_x                 # UGV位置X [m]
+float64 ugv_y                 # UGV位置Y [m]
+float64 ugv_z                 # UGV位置Z [m]
+float64 base_station_x        # 基地局位置X [m]
+float64 base_station_y        # 基地局位置Y [m]
+float64 base_station_z        # 基地局アンテナ位置Z [m]
+float64 antenna_gain_e_plane   # E面ゲイン [dBi]
+float64 antenna_gain_h_plane   # H面ゲイン [dBi]
+float64 path_loss              # パスロス [dB]
+bool comm_active               # 通信アクティブフラグ
 ```
 
 ## 🔧 伝搬路モデルの拡張（Strategy Pattern）

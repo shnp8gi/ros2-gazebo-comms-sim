@@ -1,13 +1,13 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =============================================================================
-# Antenna Pattern Parser
-# Parses E-plane and H-plane antenna gain CSV files
+# アンテナパターン解析モジュール
+# E面・H面アンテナゲインCSVファイルの読み込みと補間
 # =============================================================================
 """
-Antenna pattern parser for communication simulation.
-Reads CSV files containing antenna gain patterns and provides
-interpolated gain values for arbitrary angles.
+通信シミュレーション用アンテナパターン解析モジュール。
+CSVファイルからアンテナゲインパターンを読み込み、
+任意の角度に対する補間ゲイン値を提供する。
 """
 
 from typing import Tuple, Optional
@@ -17,106 +17,110 @@ from scipy.interpolate import interp1d
 
 class AntennaPatternParser:
     """
-    Parser for antenna radiation pattern CSV files.
-    
-    Provides linear interpolation of gain values for E-plane and H-plane
-    patterns based on angle.
-    
+    アンテナ放射パターンCSVファイルの解析クラス。
+
+    E面（垂直面）・H面（水平面）パターンに基づいて、
+    角度からゲイン値を線形補間により取得する。
+
     Attributes:
-        e_plane_interp: Interpolation function for E-plane gain
-        h_plane_interp: Interpolation function for H-plane gain
+        e_plane_interp: E面ゲインの補間関数
+        h_plane_interp: H面ゲインの補間関数
     """
-    
+
     def __init__(
         self,
         e_plane_path: Optional[str] = None,
-        h_plane_path: Optional[str] = None
+        h_plane_path: Optional[str] = None,
+        max_antenna_attenuation: float = 30.0
     ) -> None:
         """
-        Initialize the antenna pattern parser.
-        
+        アンテナパターン解析クラスを初期化する。
+
         Args:
-            e_plane_path: Path to E-plane gain CSV file
-            h_plane_path: Path to H-plane gain CSV file
+            e_plane_path: E面ゲインCSVファイルのパス
+            h_plane_path: H面ゲインCSVファイルのパス
+            max_antenna_attenuation: 各面の最大減衰量 [dB]。
+                パターン範囲外等で極端に低いゲイン値が得られた場合に
+                減衰をこの値でクランプする。旧C++実装と同等。
         """
         self.e_plane_interp: Optional[interp1d] = None
         self.h_plane_interp: Optional[interp1d] = None
         self.e_plane_peak: float = 0.0
         self.h_plane_peak: float = 0.0
-        
+        self.max_antenna_attenuation: float = max_antenna_attenuation
+
         if e_plane_path:
             self.load_e_plane(e_plane_path)
         if h_plane_path:
             self.load_h_plane(h_plane_path)
-    
+
     def _load_pattern(self, filepath: str) -> Tuple[interp1d, float]:
         """
-        Load antenna pattern from CSV file.
-        
-        Expected CSV format:
-        - Two columns: angle,gain (header row optional)
-        - Angle in degrees (e.g., -90 to +90), gain in dBi
-        - Lines starting with '#' are treated as comments
-        - 0.1 degree resolution (1801 rows for -90 to +90)
-        
+        CSVファイルからアンテナパターンを読み込む。
+
+        想定されるCSVフォーマット:
+        - 2列: angle,gain（ヘッダ行はオプション）
+        - 角度は度数（例: -90 ～ +90）、ゲインは dBi
+        - '#' で始まる行はコメントとして扱う
+        - 0.1度刻み（-90 ～ +90 で1801行）
+
         Args:
-            filepath: Path to CSV file
-            
+            filepath: CSVファイルのパス
+
         Returns:
-            Tuple of (interpolation function, peak gain in dBi)
-            
+            (補間関数, ピークゲイン [dBi]) のタプル
+
         Raises:
-            FileNotFoundError: If file does not exist
-            ValueError: If file format is invalid
+            FileNotFoundError: ファイルが存在しない場合
+            ValueError: ファイルフォーマットが不正な場合
         """
         angles = []
         gains = []
-        
+
         with open(filepath, 'r', encoding='utf-8') as f:
             header_found = False
             for line in f:
                 line = line.strip()
-                
-                # Skip empty lines and comments
+
+                # 空行とコメント行をスキップ
                 if not line or line.startswith('#'):
                     continue
-                
-                # Skip header row
+
+                # ヘッダ行をスキップ
                 if not header_found and 'angle' in line.lower():
                     header_found = True
                     continue
-                
-                # Parse data
+
+                # データ行の解析
                 parts = line.split(',')
                 if len(parts) >= 2:
                     try:
                         angle = float(parts[0].strip())
-                        # Handle negative sign that might be encoded differently
+                        # 全角マイナス記号の対応
                         gain_str = parts[1].strip().replace('−', '-')
                         gain = float(gain_str)
                         angles.append(angle)
                         gains.append(gain)
                     except ValueError:
                         continue
-        
+
         if not angles:
-            raise ValueError(f"No valid data found in {filepath}")
-        
-        # Convert to numpy arrays
+            raise ValueError(f"有効なデータが見つかりません: {filepath}")
+
+        # numpy配列に変換
         angles = np.array(angles)
         gains = np.array(gains)
-        
-        # Sort by angle
+
+        # 角度でソート
         sort_idx = np.argsort(angles)
         angles = angles[sort_idx]
         gains = gains[sort_idx]
-        
+
         peak_gain = float(np.max(gains))
-        
-        # Create interpolation function
-        # Out-of-range angles get a very large negative gain (-1000 dBi)
-        # which effectively means communication is impossible outside the
-        # antenna pattern's angular coverage.
+
+        # 補間関数を作成
+        # 範囲外の角度には非常に大きな負のゲイン (-1000 dBi) を割り当て、
+        # アンテナパターンの角度範囲外では事実上通信不可能であることを表現。
         interp_func = interp1d(
             angles, gains,
             kind='linear',
@@ -124,86 +128,86 @@ class AntennaPatternParser:
             fill_value=-1000.0
         )
         return interp_func, peak_gain
-    
+
     def load_e_plane(self, filepath: str) -> None:
         """
-        Load E-plane antenna pattern.
-        
+        E面（仰角方向）アンテナパターンを読み込む。
+
         Args:
-            filepath: Path to E-plane CSV file
+            filepath: E面CSVファイルのパス
         """
         interp, peak = self._load_pattern(filepath)
         self.e_plane_interp = interp
         self.e_plane_peak = peak
-    
+
     def load_h_plane(self, filepath: str) -> None:
         """
-        Load H-plane antenna pattern.
-        
+        H面（方位角方向）アンテナパターンを読み込む。
+
         Args:
-            filepath: Path to H-plane CSV file
+            filepath: H面CSVファイルのパス
         """
         interp, peak = self._load_pattern(filepath)
         self.h_plane_interp = interp
         self.h_plane_peak = peak
-    
+
     def get_e_plane_gain(self, angle_deg: float) -> float:
         """
-        Get E-plane antenna gain for given angle.
-        
+        指定角度でのE面アンテナゲインを取得する。
+
         Args:
-            angle_deg: Angle in degrees (-180 to 180)
-            
+            angle_deg: 角度 [度] (-180 ～ 180)
+
         Returns:
-            Gain in dBi
+            ゲイン [dBi]
         """
         if self.e_plane_interp is None:
             return 0.0
         return float(self.e_plane_interp(angle_deg))
-    
+
     def get_h_plane_gain(self, angle_deg: float) -> float:
         """
-        Get H-plane antenna gain for given angle.
-        
+        指定角度でのH面アンテナゲインを取得する。
+
         Args:
-            angle_deg: Angle in degrees (-180 to 180)
-            
+            angle_deg: 角度 [度] (-180 ～ 180)
+
         Returns:
-            Gain in dBi
+            ゲイン [dBi]
         """
         if self.h_plane_interp is None:
             return 0.0
         return float(self.h_plane_interp(angle_deg))
-    
+
     def get_combined_gain(
         self,
         elevation_deg: float,
         azimuth_deg: float
     ) -> Tuple[float, float, float]:
         """
-        Get combined antenna gain from E-plane (elevation) and H-plane (azimuth).
-        
+        E面（仰角）・H面（方位角）の合成ゲインを取得する。
+
         Args:
-            elevation_deg: Elevation angle in degrees (E-plane)
-            azimuth_deg: Azimuth angle in degrees (H-plane)
-            
+            elevation_deg: 仰角 [度]（E面）
+            azimuth_deg: 方位角 [度]（H面）
+
         Returns:
-            Tuple of (e_plane_gain, h_plane_gain, combined_gain) in dBi
+            (E面ゲイン, H面ゲイン, 合成ゲイン) [dBi] のタプル
         """
         e_gain = self.get_e_plane_gain(elevation_deg)
         h_gain = self.get_h_plane_gain(azimuth_deg)
-        
-        # Combined gain (simplified model: sum in dB domain)
-        # More accurate models would use 3D pattern data
+
+        # 合成ゲイン（簡易モデル: dB領域での加算）
+        # より正確なモデルでは3Dパターンデータを使用する
         combined = e_gain + h_gain
-        
+
         return e_gain, h_gain, combined
 
     @staticmethod
     def _rpy_to_rotmat(roll: float, pitch: float, yaw: float) -> np.ndarray:
-        """Return rotation matrix R = Rz(yaw) * Ry(pitch) * Rx(roll).
+        """回転行列 R = Rz(yaw) * Ry(pitch) * Rx(roll) を返す。
 
-        This maps vectors from antenna/body frame -> world frame.
+        アンテナ/ボディフレーム → ワールドフレームへの変換に使用。
         """
         cr, sr = float(np.cos(roll)), float(np.sin(roll))
         cp, sp = float(np.cos(pitch)), float(np.sin(pitch))
@@ -225,6 +229,7 @@ class AntennaPatternParser:
 
     @staticmethod
     def _wrap_pi(angle_rad: float) -> float:
+        """角度を [-π, π] の範囲に正規化する。"""
         return float((angle_rad + np.pi) % (2.0 * np.pi) - np.pi)
 
     def calculate_antenna_frame_angles(
@@ -233,27 +238,30 @@ class AntennaPatternParser:
         target_pos_world: np.ndarray,
         antenna_rpy_world: np.ndarray,
     ) -> Tuple[float, float]:
-        """Compute (elevation_rad, azimuth_rad) of target direction in antenna frame.
+        """アンテナフレームにおけるターゲット方向の (仰角, 方位角) を計算する。
 
-        - elevation: +up (asin(z))
-        - azimuth: atan2(y, x)
+        - 仰角: 上方向が正 (asin(z))
+        - 方位角: atan2(y, x)
 
-        `antenna_rpy_world` is the antenna frame orientation w.r.t world.
+        antenna_rpy_world はアンテナフレームのワールド座標系に対する姿勢。
         """
+        # ワールド座標系での方向ベクトル
         v_world = np.asarray(target_pos_world, dtype=float) - np.asarray(antenna_pos_world, dtype=float)
         norm = float(np.linalg.norm(v_world))
         if norm <= 1e-12:
             return 0.0, 0.0
 
+        # 単位ベクトルに正規化
         v_world /= norm
 
+        # 回転行列を生成
         r = self._rpy_to_rotmat(
             float(antenna_rpy_world[0]),
             float(antenna_rpy_world[1]),
             float(antenna_rpy_world[2]),
         )
 
-        # world -> antenna is inverse rotation (transpose).
+        # ワールド → アンテナフレーム: 逆回転（転置）
         v_ant = r.T @ v_world
 
         az = float(np.arctan2(v_ant[1], v_ant[0]))
@@ -261,12 +269,15 @@ class AntennaPatternParser:
         return el, self._wrap_pi(az)
 
     def get_gain_from_angles(self, elevation_rad: float, azimuth_rad: float) -> Tuple[float, float, float]:
-        """Lookup (E/H/total) gains using antenna-frame angles (radians).
+        """アンテナフレーム角度 [ラジアン] から (E面/H面/合成) ゲインを取得する。
 
-        Total gain is estimated via the 3-D pattern approximation:
-            G(el, az) = G_E(el) + G_H(az) - G_peak
-        where G_peak = max(peak_E, peak_H).  At boresight this equals
-        the peak gain; off-axis both planes contribute their roll-off.
+        合成ゲインは旧C++実装と同等の3Dパターン近似で推定:
+            各面の減衰 = g_peak - G_plane （max_antenna_attenuation でクランプ）
+            G(el, az) = g_peak - atten_E - atten_H  （g_peak - max_attenuation を下限）
+
+        ボアサイトではピークゲインに等しく、オフアクシスでは各面のロールオフが寄与する。
+        パターン範囲外で極端に低い値が得られた場合でも、減衰は max_antenna_attenuation で
+        クランプされるため RSSI が破綻しない。
         """
         elevation_deg = float(np.degrees(elevation_rad))
         azimuth_deg = float(np.degrees(azimuth_rad))
@@ -274,7 +285,18 @@ class AntennaPatternParser:
         e_gain = float(self.get_e_plane_gain(elevation_deg))
         h_gain = float(self.get_h_plane_gain(azimuth_deg))
         g_peak = max(self.e_plane_peak, self.h_plane_peak)
-        total = e_gain + h_gain - g_peak
+
+        # 各面の減衰量を算出し、max_antenna_attenuation でクランプ
+        e_atten = min(g_peak - e_gain, self.max_antenna_attenuation)
+        h_atten = min(g_peak - h_gain, self.max_antenna_attenuation)
+
+        # 合成ゲイン = ピーク - E面減衰 - H面減衰
+        total = g_peak - e_atten - h_atten
+
+        # 合成ゲインの下限もクランプ
+        min_gain = g_peak - self.max_antenna_attenuation
+        total = max(total, min_gain)
+
         return e_gain, h_gain, total
 
     def get_tx_rx_gains(
@@ -284,12 +306,14 @@ class AntennaPatternParser:
         rx_pos_world: np.ndarray,
         rx_rpy_world: np.ndarray,
     ) -> Tuple[float, float, float, float, float, float]:
-        """Compute separate antenna gains for TX and RX.
+        """送信側・受信側のアンテナゲインを個別に計算する。
 
         Returns:
-          (tx_e, tx_h, tx_total, rx_e, rx_h, rx_total) [dB]
+            (tx_e, tx_h, tx_total, rx_e, rx_h, rx_total) [dB]
         """
+        # 送信側: アンテナから受信側方向の角度を計算
         tx_el, tx_az = self.calculate_antenna_frame_angles(tx_pos_world, rx_pos_world, tx_rpy_world)
+        # 受信側: アンテナから送信側方向の角度を計算
         rx_el, rx_az = self.calculate_antenna_frame_angles(rx_pos_world, tx_pos_world, rx_rpy_world)
 
         tx_e, tx_h, tx_total = self.get_gain_from_angles(tx_el, tx_az)
@@ -303,35 +327,36 @@ class AntennaPatternParser:
         base_station_position: np.ndarray,
         ugv_orientation_euler: np.ndarray
     ) -> Tuple[float, float]:
-        """Backward-compatible API.
+        """後方互換API。
 
-        NOTE: This older helper only uses yaw for azimuth correction and does not
-        fully reflect roll/pitch. Prefer `calculate_antenna_frame_angles()`.
+        注意: この旧ヘルパーはyawのみで方位角補正を行い、
+        roll/pitchは完全には反映しない。
+        `calculate_antenna_frame_angles()` の使用を推奨。
         """
-        # Vector from UGV to base station
+        # UGVから基地局への方向ベクトル
         direction = base_station_position - ugv_position
-        
-        # Calculate distance in XY plane
+
+        # XY平面での水平距離
         horizontal_dist = np.sqrt(direction[0]**2 + direction[1]**2)
-        
-        # Elevation angle (vertical angle to base station)
+
+        # 仰角（基地局への垂直角度）
         elevation_rad = np.arctan2(direction[2], horizontal_dist)
-        
-        # Azimuth angle (horizontal angle to base station)
+
+        # 方位角（基地局への水平角度）
         azimuth_to_bs = np.arctan2(direction[1], direction[0])
-        
-        # Relative azimuth considering UGV yaw
+
+        # UGVのyawを考慮した相対方位角
         yaw = ugv_orientation_euler[2]
         relative_azimuth = azimuth_to_bs - yaw
-        
-        # Normalize to -180 to 180 degrees
+
+        # -180 ～ 180度に正規化
         elevation_deg = np.degrees(elevation_rad)
         azimuth_deg = np.degrees(relative_azimuth)
-        
-        # Wrap azimuth to -180 to 180
+
+        # 方位角を -180 ～ 180 にラップ
         while azimuth_deg > 180:
             azimuth_deg -= 360
         while azimuth_deg < -180:
             azimuth_deg += 360
-        
+
         return elevation_deg, azimuth_deg
