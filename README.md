@@ -110,26 +110,65 @@ RL ●─────● RR      (x=-1.5)
 
 ### 前提条件
 
-- Docker および Docker Compose がインストールされていること
 - X11サーバー（GUIモード使用時、Linux/WSL2）
 
-### 1. リポジトリのクローン
+### 初期セットアップ
+
+#### 1. Gitのインストール
+
+Ubuntu / WSL2 の場合:
+```bash
+sudo apt update
+sudo apt install git
+```
+Windows の場合は [Git for Windows](https://gitforwindows.org/) などをインストールしてください。
+
+#### 2. GitHubアカウントとSSHキーの準備
+
+本リポジトリのクローンにSSH接続を利用するため、アカウントとキーの登録を行います。
+
+1. **GitHubアカウントの作成**
+   - [GitHub登録ページ](https://github.com/signup) よりアカウントを作成してください。
+2. **SSHキーの生成** (Ubuntu/WSL2 もしくは Git Bash 等のターミナルで実行):
+   ```bash
+   ssh-keygen -t ed25519 -C "your_email@example.com"
+   ```
+   - 保存先やパスフレーズを聞かれますが、そのままEnterを押して進めて問題ありません。
+3. **公開鍵（Public key）の取得**:
+   ```bash
+   cat ~/.ssh/id_ed25519.pub
+   ```
+   - 表示された `ssh-ed25519 ...` から始まる文字列全体をコピーします。
+4. **GitHubへの鍵登録**:
+   - GitHubの [SSH keys 設定ページ](https://github.com/settings/keys) にアクセスします。
+   - 「New SSH key」をクリックし、タイトル（例: `My PC`）を入力してソースの枠内にコピーした公開鍵を貼り付け、「Add SSH key」で保存します。
+
+#### 3. Dockerのインストール
+
+Docker公式の手順に従って Docker をインストールしてください（`docker compose` コマンドが使用できるよう構成してください）。
+
+- [Docker Engine インストール手順 (Ubuntu)](https://docs.docker.com/engine/install/ubuntu/)
+- [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/)
+
+### 4. リポジトリのクローン
+
+SSHを利用してリポジトリをクローンします。
 
 ```bash
-git clone https://github.com/your-username/ros2-gazebo-comms-sim.git
+git clone git@github.com:your-username/ros2-gazebo-comms-sim.git
 cd ros2-gazebo-comms-sim
 ```
 
-### 2. Dockerイメージのビルド
+### 5. Dockerイメージのビルド
 
 ```bash
-docker-compose build
+docker compose build
 ```
 
-### 3. ワークスペースのビルド
+### 6. ワークスペースのビルド
 
 ```bash
-docker-compose run --rm build
+docker compose run --rm build
 ```
 
 ## 📺 シミュレータの実行
@@ -149,7 +188,7 @@ xhost +local:docker
 ##### 2. GUIモードでコンテナ起動
 
 ```bash
-docker-compose run --rm sim-gui
+docker compose run --rm sim-gui
 ```
 
 以下コンテナ内
@@ -175,6 +214,7 @@ ros2 launch comms_sim_pkg sim_launch.py
 #### Windows (WSL2 + X Server)
 
 1. VcXsrv等のXサーバーをインストール・起動
+   - **【重要】** VcXsrv (XLaunch) の起動時（Extra settings画面）は、必ず **「Disable access control」** にチェックを入れてください。設定が漏れるとDockerからの画面描画が拒否されます。
 2. WSL2のDISPLAY変数を設定
 
 ```bash
@@ -189,7 +229,7 @@ GUIなしで高速にシミュレーションを実行します。
 
 ```bash
 # CUIモードでコンテナ起動
-docker-compose run --rm sim-cui
+docker compose run --rm sim-cui
 
 # コンテナ内でHeadlessシミュレーション起動
 ros2 launch comms_sim_pkg sim_launch.py headless:=true
