@@ -17,7 +17,7 @@ services:
     environment:
       - DISPLAY=${DISPLAY}
       - QT_X11_NO_MITSHM=1
-      - LIBGL_ALWAYS_SOFTWARE=1
+      - XAUTHORITY=/tmp/.Xauthority
       - GZ_SIM_RESOURCE_PATH=/workspace/models
       - ROS_DOMAIN_ID=0
     
@@ -26,14 +26,22 @@ services:
       - .:/workspace:rw
       # X11 socket for GUI
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      # X11 authentication
+      - ~/.Xauthority:/tmp/.Xauthority:ro
       # Gazebo cache (optional, for faster model loading)
       - gz_cache:/root/.gz
     
     # Network mode for ROS 2 DDS communication
     network_mode: host
     
-    # Allow GPU access (if available)
-    privileged: true
+    # Allow GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
     
     stdin_open: true
     tty: true
@@ -71,6 +79,16 @@ services:
       - .:/workspace:rw
       # Gazebo cache
       - gz_cache:/root/.gz
+    
+    # Allow GPU access
+    deploy:
+      resources:
+        reservations:
+          devices:
+            - driver: nvidia
+              count: 1
+              capabilities: [gpu]
+
     
     network_mode: host
     
