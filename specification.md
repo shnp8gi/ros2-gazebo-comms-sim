@@ -11,12 +11,13 @@
 | 2025/12/22 | ver 3.0    | MCSテーブルベースのスループット計算への変更、リンク確立時間（Association time）の実装、RSSI閾値の自動取得機能、YAMLベースの完全パラメータ化                                                                                                                         |
 | 2026/01/04 | ver 3.1    | 実装（`sim_params.yaml`/`sim_launch.py`/`comms_node.py`）に合わせて、CSV出力先・ROSインターフェース・パラメータ定義の齟齬を修正                                                                                                                                     |
 | 2026/02/16 | ver 4.0    | MCSテーブル値を現行に更新、アンテナオフセットを3D相対座標`[x,y,z]`に変更、CSV出力列名にbody/antenna/origin区分を追加、座標系説明の追加、`sampling_rate`デフォルト値修正、`base_station_pose_topic`インターフェース追加、CSV出力タイミングにmission_complete時を追記 |
+| 2026/04/20 | ver 5.0    | 複数車両設定（マルチUGV）への対応、`link_controller_node`による集中スケジューリング（RSSI優先による通信アクセス権の調停）の追加、データ上限到達時の動的なリンク権限譲渡機能、`/cmd_vel`監視による時間軸(`time_s`, `vehicle_time_s`)起点のゼロ化、全ミッション完了時の自動終了、およびログノードの集約と個別CSV分離出力を追加 |
 
 ---
 
 ## 1. プロジェクト概要
 
-Gazebo Simで駆動する移動車両と固定基地局間の通信品質（RSSI/スループット）を、ROS 2ノード上で数理モデルを用いてシミュレーションし、その挙動を評価する。
+Gazebo Simで駆動する複数台の移動車両と固定基地局間の通信品質（RSSI/スループット）を、ROS 2ノード上で数理モデルを用いてシミュレーションし、その挙動を評価する。特にIEEE 802.15.3eなどを想定した、基地局による集中スケジューリングと時分割・優先制御を模擬する。
 
 ---
 
@@ -108,6 +109,9 @@ ros2-gazebo-comms-sim/
 │   │   ├── comms_node.py          # 通信シミュレータノード
 │   │   ├── comms_calculator.py    # 通信品質計算エンジン
 │   │   ├── antenna_parser.py      # アンテナパターン処理
+│   │   ├── link_controller_node.py# 集中通信アクセス調停（スケジュール）ノード
+│   │   ├── link_scheduling_strategy.py # スケジュール戦略パターン（RSSI優先等）
+│   │   ├── sim_logger_node.py     # ログ集約・CSV自動保存ノード
 │   │   └── ugv_controller_node.py # UGV制御ノード
 │   │
 │   ├── launch/                    # 起動ファイル
@@ -158,16 +162,25 @@ ros2-gazebo-comms-sim/
 | :----------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
 | **ノード名** | `comms_simulator_node`                                                                                                                    |
 | **実装言語** | Python 3                                                                                                                                  |
-| **役割**     | Gazeboから取得した位置情報（/odom）と姿勢情報（/imu/data）に基づき、カスタムの伝搬路モデルで通信品質を計算し、ロギング及びPublishを行う。 |
+| **役割**     | 複数分散配置される車両ごとで軌道と通信品質を計算する。基地局の調停ノード(`link_controller_node`)からのアクセス許可(`link_grant`)に従い通信状態を維持し、結果をロギングノードへパブリッシュする。 |
+
+### 6.1.2. リンクコントローラノード (`link_controller_node`)
+
+| 項目         | 詳細                                                                                                                                      |
+| :----------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
+| **ノード名** | `link_controller_node`                                                                                                                    |
+| **役割**     | 全車両から報告される優先順位（RSSI等）を集約し、基地局として特定のアクセス権(`link_grant`)を一つの車両にのみ割り当てるTDMAライクな集中調停ノード。 |
 
 ### 6.2. 通信インターフェース
 
 | 項目               | トピック名/パラメータ | メッセージ型                  | 送受信    | 備考                                                                  |
 | :----------------- | :-------------------- | :---------------------------- | :-------- | :-------------------------------------------------------------------- |
-| **車両位置**       | `/odom`               | `nav_msgs/Odometry`           | Subscribe | Gazeboから車両の位置を取得（`spawn_pose` によりワールド座標へ補正）。 |
+| **車両位置**       | `/odom`               | `nav_msgs/Odometry`           | Subscribe | Gazeboから車両の位置を取得。                                |
 | **車両姿勢**       | `/imu/data`           | `sensor_msgs/Imu`             | Subscribe | Gazeboから車両の姿勢を取得。                                          |
-| **通信結果**       | `/comms/quality`      | カスタム (`CommsQuality.msg`) | Publish   | 計算されたRSSI値とスループットを出力。                                |
-| **ミッション完了** | `/mission_complete`   | `std_msgs/Bool`               | Subscribe | UGV完走通知。受信時にCSV保存をトリガする。                            |
+| **通信結果**       | `/{vehicle}/comms/quality` | カスタム (`CommsQuality.msg`) | Publish   | 計算された通信状態をログ集約ノードへ出力。                                |
+| **アクセス要求**   | `/{vehicle}/link_request` | `std_msgs/Float64`            | Publish   | コントローラへRSSIを報告して通信権限を要求。上限到達時は `-inf` を送信し権限を譲渡。 |
+| **アクセス許可**   | `/{vehicle}/link_grant`   | `std_msgs/Bool`               | Subscribe | コントローラから通信権の付与を受け取る。                             |
+| **ミッション完了** | `/{vehicle}/mission_complete` | `std_msgs/Bool`               | Publish/Sub | UGV完走通知。ログ集約ノードが全完了を受信し自動終了をトリガ。 |
 | **基地局姿勢**     | `/base_station/pose`  | `geometry_msgs/PoseStamped`   | Subscribe | 基地局の姿勢（オプション）。アンテナ方向計算に利用。                  |
 
 ### 6.3. 伝搬路モデル計算ロジック
@@ -337,8 +350,8 @@ ugv_controller_node:
 
 | 項目             | 詳細                                                                                                                                                                           |
 | :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **全体終了条件** | UGVの全ウェイポイント到達をもって、シミュレーション全体を終了し、ROS 2ドメインをシャットダウンする。                                                                           |
-| **通信停止条件** | 送信データ量 (`TotalDataTransmission`) が `comm_data_limit_mb` に達したとき、`comms_simulator_node` は**データ送信機能のみを停止**する。車両の移動とノードの実行は継続される。 |
+| **全体終了条件** | シミュレーションに参加する**全車両 (`vehicle_names`) が全てのウェイポイントに到達したタイミング**をもって、`sim_logger_node`がCSVデータの強制書き出しとシステムプロセスの安全なシャットダウン(Sys.exit)を呼び出す。 |
+| **通信停止と譲渡** | 個別車両の送信データ累計 (`TotalDataTransmission`) が `comm_data_limit_mb` に達した場合、その車両は状態を `DISCONNECTED` に変更し、基地局調停ノードへの送信要求 (RSSI) を `-inf` に落とすことで、自動的に他車両へ通信権(`link_grant`)を譲る協調動作を行う。 |
 
 ---
 
@@ -348,10 +361,11 @@ ugv_controller_node:
 
 | 項目                 | 詳細                                                                                                                                                                       |
 | :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **出力タイミング**   | (1) ミッション完了通知（`/mission_complete`）受信時、(2) ノード終了時（`atexit`フック）。                                                                                  |
-| **出力ディレクトリ** | `/workspace/sim_results/`                                                                                                                                                  |
-| **ファイル命名規則** | `YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv` <br> (`-1.0`の場合は `LIMIT-UNLIMITED.csv`)。                                                                                       |
-| **CSVヘッダー**      | コメント行 (`# ...`) で以下の情報を記載: <br> - データ量制限 <br> - 伝搬路モデル名 <br> - 送信電力 <br> - 雑音分散 <br> - 各座標カラムの定義（body/antenna/origin の意味） |
+| **保存ノード**       | 専用の `sim_logger_node.py` が担当する。`CONNECTED` 状態の有効な通信データのみを記録する。                                                                                 |
+| **出力タイミング**   | 全車両のミッション完了通知（`/mission_complete`）が揃った時、またはプロセス終了・終了割込時（`atexit`フック）。                                                                                  |
+| **出力ディレクトリ** | `/workspace/sim_results/`（コンテナ内の所有権はホストマウント権限に自動追従して可読・編集可能化される）                                                                                                                                                  |
+| **ファイル出力形**   | 統合CSV: `YYYYMMDD_HHMMSS_combined_results.csv` <br> 車両個別CSV: `YYYYMMDD_HHMMSS_{vehicle_name}_results.csv` の複数ファイルに分けて自動出力。 |
+| **時間軸の起点**     | 各車両の `/cmd_vel` メッセージを監視し、**いずれかの車両が最初に動き出した瞬間**を `time_s = 0.0` とする。また、**各車両ごとの個別開始時間**も `vehicle_time_s = 0.0` として計算される。距離への換算を容易にするための仕様。 |
 
 ### CSV出力項目
 
@@ -365,7 +379,10 @@ ugv_controller_node:
 
 | 項目名                                            | 単位   | 説明                                                     |
 | :------------------------------------------------ | :----- | :------------------------------------------------------- |
-| `time_s`                                          | [s]    | シミュレーション時刻                                     |
+| `time_s`                                          | [s]    | シミュレーション時刻（最初に指令で車両が移動を開始した瞬間を 0.0 とする） |
+| `vehicle_time_s`                                  | [s]    | 車両別時刻（その車両自身が移動を開始した瞬間を 0.0 とする） |
+| `vehicle_name`                                    | string | 対象車両の名前 (例: suv_0)                               |
+| `has_link_grant`                                  | bool   | 集中制御局からの通信許可フラグ                           |
 | `ugv_body_x`, `ugv_body_y`, `ugv_body_z`          | [m]    | UGV車体原点座標                                          |
 | `ugv_antenna_x`, `ugv_antenna_y`, `ugv_antenna_z` | [m]    | UGVアンテナ位置座標                                      |
 | `bs_origin_x`, `bs_origin_y`, `bs_origin_z`       | [m]    | 基地局モデル原点座標                                     |
@@ -382,21 +399,10 @@ ugv_controller_node:
 ### CSV出力例
 
 ```csv
-# 通信シミュレーション結果
-# データ上限: 800.0 Mb
-# 伝搬路モデル: Log-Distance Path Loss Model
-# 送信電力: -7.0 dBm
-# 雑音分散: 2.0 dB
-#
-# 列の座標定義:
-#   ugv_body    = UGV車体モデル原点（ホイールベース中心・地面レベル）
-#   ugv_antenna = UGVアンテナ位置（ugv_body + antenna_offset）
-#   bs_origin   = 基地局モデル原点
-#   bs_antenna  = 基地局アンテナ位置（bs_origin + antenna_offset）
-#   distance    = ugv_antenna と bs_antenna 間の3D距離
-#
-time_s,ugv_body_x,ugv_body_y,ugv_body_z,ugv_antenna_x,ugv_antenna_y,ugv_antenna_z,bs_origin_x,bs_origin_y,bs_origin_z,bs_antenna_x,bs_antenna_y,bs_antenna_z,distance,rssi,throughput,total_data_mb,path_loss,e_gain,h_gain,link_state
-0.0,-20.0,0.0,0.0,-20.0,0.0,2.23,0.0,3.0,0.0,0.0,3.0,2.79,20.42,-55.2,0.0,0.0,65.2,8.5,6.2,DISCONNECTED
+# 通信シミュレーション統合結果 (Centralized Log)
+# 対象車両: suv_0, suv_1
+time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,throughput_Gbps,total_data_MB,path_loss_dB,e_gain_dB,h_gain_dB,comm_active,ugv_x_m,ugv_y_m,ugv_z_m,bs_x_m,bs_y_m,bs_z_m,link_state
+15.0,15.0,suv_0,True,20.42,-55.2,4.6,1.2,65.2,8.5,6.2,True,-20.0,0.0,0.0,0.0,3.0,0.0,CONNECTED
 ```
 
 ---
@@ -489,6 +495,6 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 
 ---
 
-**Document Version**: 4.0  
-**Last Updated**: 2026年2月16日  
+**Document Version**: 5.0  
+**Last Updated**: 2026年04月20日  
 **Status**: Active Development

@@ -129,6 +129,21 @@ class LinkControllerNode(Node):
             )
             self._mission_subs.append(sub_mc)
 
+        # ストラテジーの初期化
+        try:
+            from .link_scheduling_strategy import SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy
+        except ImportError:
+            from link_scheduling_strategy import SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy
+
+        if self.scheduling_policy == 'sequential':
+            self.strategy = SequentialStrategy()
+        elif self.scheduling_policy == 'round_robin':
+            self.strategy = RoundRobinStrategy(self.time_slot_duration)
+        elif self.scheduling_policy == 'rssi_priority':
+            self.strategy = RssiPriorityStrategy()
+        else:
+            self.strategy = SequentialStrategy()
+
         # =====================================================================
         # スケジューリングタイマー (10Hz)
         # =====================================================================
@@ -138,7 +153,7 @@ class LinkControllerNode(Node):
             f'LinkControllerNode 初期化完了\n'
             f'  車両数: {len(self.vehicle_names)}\n'
             f'  車両名: {self.vehicle_names}\n'
-            f'  ポリシー: {self.scheduling_policy}\n'
+            f'  ポリシー: {self.scheduling_policy} (Strategy initialized)\n'
             f'  タイムスロット: {self.time_slot_duration} s'
         )
 
@@ -166,73 +181,29 @@ class LinkControllerNode(Node):
 
     def _schedule_tick(self) -> None:
         """定期的にリンク権を決定し、各車両にブロードキャストする。"""
-        if self.scheduling_policy == 'sequential':
-            self._policy_sequential()
-        elif self.scheduling_policy == 'round_robin':
-            self._policy_round_robin()
-        elif self.scheduling_policy == 'rssi_priority':
-            self._policy_rssi_priority()
+        current_time = self.get_clock().now().nanoseconds / 1e9
+
+        new_idx, log_msg = self.strategy.determine_active_link(
+            self._rssi,
+            self._mission_complete,
+            self._active_idx,
+            self.vehicle_names,
+            current_time
+        )
+
+        if log_msg:
+            self.get_logger().info(log_msg)
+            self._active_idx = new_idx
 
         # リンクグラントをパブリッシュ
         active_name = self.vehicle_names[self._active_idx]
         for name, pub in self._grant_pubs.items():
             msg = Bool()
-            msg.data = (name == active_name)
+            # 対象の車両のみリンク権を True にする
+            # rssi_threshold による足切りはここで実施（対象車両であっても閾値未満ならGrantしない）
+            has_grant = (name == active_name)
+            msg.data = has_grant
             pub.publish(msg)
-
-    def _policy_sequential(self) -> None:
-        """
-        sequential ポリシー:
-        現在の車両のミッションが完了したら次の車両に切替。
-        """
-        current_name = self.vehicle_names[self._active_idx]
-        if self._mission_complete.get(current_name, False):
-            next_idx = self._active_idx + 1
-            if next_idx < len(self.vehicle_names):
-                self._active_idx = next_idx
-                self.get_logger().info(
-                    f'リンク切替: {current_name} → '
-                    f'{self.vehicle_names[self._active_idx]} '
-                    f'(sequential: ミッション完了)'
-                )
-
-    def _policy_round_robin(self) -> None:
-        """
-        round_robin ポリシー:
-        一定時間ごとに次の車両に切替。
-        """
-        current_time = self.get_clock().now().nanoseconds / 1e9
-
-        if self._last_slot_switch_time is None:
-            self._last_slot_switch_time = current_time
-            return
-
-        elapsed = current_time - self._last_slot_switch_time
-        if elapsed >= self.time_slot_duration:
-            old_name = self.vehicle_names[self._active_idx]
-            self._active_idx = (self._active_idx + 1) % len(self.vehicle_names)
-            self._last_slot_switch_time = current_time
-            self.get_logger().info(
-                f'リンク切替: {old_name} → '
-                f'{self.vehicle_names[self._active_idx]} '
-                f'(round_robin: {elapsed:.1f}s 経過)'
-            )
-
-    def _policy_rssi_priority(self) -> None:
-        """
-        rssi_priority ポリシー:
-        RSSIが最も高い車両にリンク権を付与。
-        """
-        best_name = max(self._rssi, key=self._rssi.get)
-        best_idx = self.vehicle_names.index(best_name)
-        if best_idx != self._active_idx:
-            old_name = self.vehicle_names[self._active_idx]
-            self._active_idx = best_idx
-            self.get_logger().info(
-                f'リンク切替: {old_name} → {best_name} '
-                f'(rssi_priority: RSSI={self._rssi[best_name]:.1f} dBm)',
-                throttle_duration_sec=2.0
-            )
 
 
 def main(args=None):

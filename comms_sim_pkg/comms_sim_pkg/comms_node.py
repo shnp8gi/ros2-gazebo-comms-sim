@@ -28,10 +28,6 @@ UGVと基地局間の通信品質をシミュレーションするROS 2ノード
     - base_station_pose_topic: 基地局姿勢トピック名
 """
 
-import atexit
-import csv
-import os
-from datetime import datetime
 from typing import Optional, List, Tuple
 from enum import Enum
 
@@ -43,7 +39,7 @@ from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Header
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
 
 # ros2 launch経由で実行可能なように絶対インポートを優先
 try:
@@ -221,14 +217,12 @@ class CommsSimulatorNode(Node):
 
         # ログ記録準備完了フラグ（トリガー条件が満たされたらTrue）
         self._logging_ready: bool = (self._logging_trigger == 'immediate')
+        # 排他制御（Link Grant）状態
+        self.has_link_grant: bool = False
+
         # リンク確立状態管理
         self.link_state: LinkState = LinkState.DISCONNECTED
         self.link_establishment_start_time: Optional[float] = None
-
-        # CSV出力用データログ
-        self.data_log: List[dict] = []
-        # CSV保存済みフラグ（二重保存防止）
-        self._csv_saved: bool = False
 
         # =====================================================================
         # QoSプロファイル
@@ -283,6 +277,15 @@ class CommsSimulatorNode(Node):
             10
         )
 
+        # リンクグラント受信
+        if self.vehicle_name:
+            self.link_grant_sub = self.create_subscription(
+                Bool,
+                f'/{self.vehicle_name}/link_grant',
+                self._on_link_grant,
+                10
+            )
+
         # 基地局姿勢サブスクライバ（オプション: 基地局の回転対応）
         self._bs_pose_sub = self.create_subscription(
             PoseStamped,
@@ -294,10 +297,17 @@ class CommsSimulatorNode(Node):
         # =====================================================================
         # パブリッシャ
         # =====================================================================
+        if self.vehicle_name:
+            quality_topic = f'/{self.vehicle_name}/comms/quality'
+            self.link_request_pub = self.create_publisher(Float64, f'/{self.vehicle_name}/link_request', 10)
+        else:
+            quality_topic = '/comms/quality'
+            self.link_request_pub = None
+
         if CommsQuality is not None:
             self.quality_pub = self.create_publisher(
                 CommsQuality,
-                '/comms/quality',
+                quality_topic,
                 10
             )
         else:
@@ -309,11 +319,6 @@ class CommsSimulatorNode(Node):
         # =====================================================================
         period = 1.0 / self.sampling_rate
         self.calc_timer = self.create_timer(period, self.calculate_and_publish)
-
-        # =====================================================================
-        # 終了時クリーンアップ登録
-        # =====================================================================
-        atexit.register(self.save_log_to_csv)
 
         self.get_logger().info(
             f'CommsSimulatorNode 初期化完了\n'
@@ -456,15 +461,23 @@ class CommsSimulatorNode(Node):
             self._logging_ready = True
             self.get_logger().info('外部トピックによりログ記録を開始します。')
 
+    def _on_link_grant(self, msg: Bool) -> None:
+        """リンク権付与通知コールバック"""
+        self.has_link_grant = msg.data
+        if not self.has_link_grant and self.link_state != LinkState.DISCONNECTED:
+            self.get_logger().info('リンク権喪失。通信を切断します。', throttle_duration_sec=2.0)
+            self.link_state = LinkState.DISCONNECTED
+            self.link_establishment_start_time = None
+
     def _update_link_state(self, rssi: float, current_time: float) -> bool:
         """
-        RSSIに基づいてリンク確立状態を更新する。
+        RSSIとリンク権限(has_link_grant)に基づいてリンク確立状態を更新する。
 
         状態遷移:
-        - DISCONNECTED → ESTABLISHING: RSSIが閾値を上回った
+        - DISCONNECTED → ESTABLISHING: RSSIが閾値を上回り、かつリンク権限がある
         - ESTABLISHING → CONNECTED: リンク確立時間が経過した
-        - ESTABLISHING → DISCONNECTED: RSSIが閾値を下回った
-        - CONNECTED → DISCONNECTED: RSSIが閾値を下回った
+        - ESTABLISHING → DISCONNECTED: RSSIが閾値を下回った、またはリンク権限を失った
+        - CONNECTED → DISCONNECTED: RSSIが閾値を下回った、またはリンク権限を失った
 
         Args:
             rssi: 現在のRSSI [dBm]
@@ -473,6 +486,14 @@ class CommsSimulatorNode(Node):
         Returns:
             通信が許可される場合True、それ以外はFalse
         """
+        if not self.has_link_grant or not self.comm_active:
+            if self.link_state != LinkState.DISCONNECTED:
+                self.link_state = LinkState.DISCONNECTED
+                self.link_establishment_start_time = None
+                if not self.comm_active:
+                    self.get_logger().info('データ伝送終了のためリンクを切断しました')
+            return False
+
         if self.link_state == LinkState.DISCONNECTED:
             # RSSIが閾値を超えたか確認
             if rssi > self.rssi_threshold:
@@ -563,7 +584,14 @@ class CommsSimulatorNode(Node):
         current_time = self.get_clock().now().nanoseconds / 1e9
         elapsed = current_time - (self.simulation_start_time or current_time)
 
-        # RSSIに基づくリンク状態更新
+        # リンク権限要求（RSSIレポート）
+        # データ上限に到達して通信不要になった場合は最低のRSSIを報告し優先権を譲渡する
+        if hasattr(self, 'link_request_pub') and self.link_request_pub:
+            req_msg = Float64()
+            req_msg.data = float(metrics['rssi']) if self.comm_active else float('-inf')
+            self.link_request_pub.publish(req_msg)
+
+        # RSSIとリンク権限に基づくリンク状態更新
         link_ready = self._update_link_state(metrics['rssi'], current_time)
 
         # 実効スループット計算（リンク状態とログ準備完了を考慮）
@@ -586,33 +614,6 @@ class CommsSimulatorNode(Node):
                             f'データ上限到達: {self.total_data_transmitted:.2f} MB'
                         )
 
-        # データログ記録
-        log_entry = {
-            'time_s': elapsed,
-            'ugv_body_x_m': ugv_pos[0],
-            'ugv_body_y_m': ugv_pos[1],
-            'ugv_body_z_m': ugv_pos[2],
-            'ugv_antenna_x_m': ugv_antenna_pos[0],
-            'ugv_antenna_y_m': ugv_antenna_pos[1],
-            'ugv_antenna_z_m': ugv_antenna_pos[2],
-            'bs_origin_x_m': self.base_station_position[0],
-            'bs_origin_y_m': self.base_station_position[1],
-            'bs_origin_z_m': self.base_station_position[2],
-            'bs_antenna_x_m': bs_antenna_pos[0],
-            'bs_antenna_y_m': bs_antenna_pos[1],
-            'bs_antenna_z_m': bs_antenna_pos[2],
-            'distance_m': metrics['distance'],
-            'rssi_dBm': metrics['rssi'],
-            'throughput_Gbps': actual_throughput,
-            'total_data_MB': self.total_data_transmitted,
-            'path_loss_dB': metrics['path_loss'],
-            'e_gain_dB': float(rx_e),
-            'h_gain_dB': float(rx_h),
-            'link_state': self.link_state.name,
-        }
-        if self._logging_ready:
-            self.data_log.append(log_entry)
-
         # ROSメッセージとしてパブリッシュ
         if self.quality_pub is not None and CommsQuality is not None:
             msg = CommsQuality()
@@ -633,92 +634,24 @@ class CommsSimulatorNode(Node):
             msg.antenna_gain_h_plane = float(rx_h)
             msg.path_loss = metrics['path_loss']
             msg.comm_active = self.comm_active
+            msg.link_state = self.link_state.name
 
             self.quality_pub.publish(msg)
 
-        # ログ情報出力
-        link_status = f"[{self.link_state.name}]"
-        self.get_logger().info(
-            f'[{elapsed:.1f}s] {link_status} D={metrics["distance"]:.1f}m, '
-            f'RSSI={metrics["rssi"]:.1f}dBm, '
-            f'TP={actual_throughput:.2f}Gbps, '
-            f'Total={self.total_data_transmitted:.1f}MB',
-            throttle_duration_sec=1.0
-        )
-
-    def save_log_to_csv(self) -> None:
-        """収集したデータをCSVファイルに保存する。"""
-        if self._csv_saved:
-            self.get_logger().info('CSV保存済み')
-            return
-        if not self.data_log:
-            self.get_logger().info('保存するデータがありません')
-            return
-
-        # ファイル名生成
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        if self.comm_data_limit_mb > 0:
-            limit_str = f'LIMIT-{self.comm_data_limit_mb:.0f}MB'
-        else:
-            limit_str = 'LIMIT-UNLIMITED'
-
-        if self.vehicle_name:
-            filename = f'{timestamp}_{self.vehicle_name}_{limit_str}.csv'
-        else:
-            filename = f'{timestamp}_{limit_str}.csv'
-        output_dir = '/workspace/sim_results/'
-
-        # 出力ディレクトリ作成（存在しない場合）
-        os.makedirs(output_dir, exist_ok=True)
-        filepath = os.path.join(output_dir, filename)
-
-        # CSV書き込み
-        try:
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                # ヘッダコメント
-                f.write(f'# 通信シミュレーション結果\n')
-                f.write(f'# データ上限: {self.comm_data_limit_mb} MB\n')
-                f.write(f'# 伝搬路モデル: {self.propagation_model.model_name}\n')
-                f.write(f'# 送信電力: {self.tx_power} dBm\n')
-                f.write(f'# 雑音分散: {self.noise_variance} dB\n')
-                f.write('#\n')
-                f.write('# 列の座標定義:\n')
-                f.write('#   ugv_body    = UGV車体モデル原点（ホイールベース中心・地面レベル）\n')
-                f.write('#   ugv_antenna = UGVアンテナ位置（ugv_body + antenna_offset）\n')
-                f.write('#   bs_origin   = 基地局モデル原点\n')
-                f.write('#   bs_antenna  = 基地局アンテナ位置（bs_origin + antenna_offset）\n')
-                f.write('#   distance    = ugv_antenna と bs_antenna 間の3D距離\n')
-                f.write('#\n')
-
-                # データ書き込み
-                fieldnames = [
-                    'time_s',
-                    'ugv_body_x_m', 'ugv_body_y_m', 'ugv_body_z_m',
-                    'ugv_antenna_x_m', 'ugv_antenna_y_m', 'ugv_antenna_z_m',
-                    'bs_origin_x_m', 'bs_origin_y_m', 'bs_origin_z_m',
-                    'bs_antenna_x_m', 'bs_antenna_y_m', 'bs_antenna_z_m',
-                    'distance_m', 'rssi_dBm', 'throughput_Gbps', 'total_data_MB',
-                    'path_loss_dB', 'e_gain_dB', 'h_gain_dB', 'link_state'
-                ]
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(self.data_log)
-
-            self._csv_saved = True
-            self.get_logger().info(f'データ保存完了: {filepath}')
-        except Exception as e:
-            self.get_logger().error(f'CSV保存失敗: {e}')
+        # ログ情報出力 (CONNECTED時のみ出力)
+        if self.link_state == LinkState.CONNECTED:
+            link_status = f"[{self.link_state.name}]"
+            self.get_logger().info(
+                f'[{elapsed:.1f}s] {link_status} D={metrics["distance"]:.1f}m, '
+                f'RSSI={metrics["rssi"]:.1f}dBm, '
+                f'TP={actual_throughput:.2f}Gbps, '
+                f'Total={self.total_data_transmitted:.1f}MB',
+                throttle_duration_sec=1.0
+            )
 
     def _on_mission_complete(self, msg: Bool) -> None:
-        """ミッション完了通知受信時にCSVを保存する（1回のみ）。"""
-        if not msg.data:
-            return
-        if self._saved_on_mission_complete:
-            return
-
-        self._saved_on_mission_complete = True
-        self.get_logger().info('ミッション完了通知受信。CSV保存中...')
-        self.save_log_to_csv()
+        """ミッション完了通知受信コールバック"""
+        pass
 
 
 def main(args=None):
@@ -732,7 +665,6 @@ def main(args=None):
     except KeyboardInterrupt:
         pass
     finally:
-        node.save_log_to_csv()
         node.destroy_node()
         try:
             rclpy.shutdown()

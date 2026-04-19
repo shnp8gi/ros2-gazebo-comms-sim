@@ -28,6 +28,9 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   comms_sim_pkg/comms_node.py
   comms_sim_pkg/ugv_controller_node.py
+  comms_sim_pkg/link_controller_node.py
+  comms_sim_pkg/sim_logger_node.py
+  comms_sim_pkg/link_scheduling_strategy.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

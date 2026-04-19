@@ -35,3 +35,6 @@ float64 path_loss
 
 # 通信アクティブフラグ
 bool comm_active
+
+# リンク確立状態 (DISCONNECTED, ESTABLISHING, CONNECTED)
+string link_state

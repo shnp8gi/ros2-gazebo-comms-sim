@@ -40,7 +40,11 @@ from launch.actions import (
     OpaqueFunction,
     TimerAction,
     LogInfo,
+    RegisterEventHandler,
+    EmitEvent,
 )
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -543,9 +547,9 @@ def launch_setup(context, *args, **kwargs):
         if waypoints_raw:
             if isinstance(waypoints_raw[0], (list, tuple)):
                 for waypoint in waypoints_raw:
-                    waypoints_param.extend(waypoint)
+                    waypoints_param.extend([float(v) for v in waypoint])
             else:
-                waypoints_param = waypoints_raw
+                waypoints_param = [float(v) for v in waypoints_raw]
 
         ugv_param_file = os.path.join(
             tempfile.gettempdir(), f'ugv_controller_{v_name}.params.yaml'
@@ -602,6 +606,64 @@ def launch_setup(context, *args, **kwargs):
             ]
         )
         actions.append(ugv_node)
+
+    # =========================================================================
+    # link_controller_node & sim_logger_node の起動
+    # =========================================================================
+    vehicle_names = [v.get('name', 'suv') for v in vehicles]
+    link_ctrl_params = config.get('link_controller_node', {}).get('ros__parameters', {})
+    
+    if len(vehicle_names) > 0:
+        link_controller_node = TimerAction(
+            period=comms_node_delay,
+            actions=[
+                Node(
+                    package='comms_sim_pkg',
+                    executable='link_controller_node.py',
+                    name='link_controller_node',
+                    output='screen',
+                    parameters=[
+                        {
+                            'vehicle_names': vehicle_names,
+                            'scheduling_policy': str(link_ctrl_params.get('scheduling_policy', 'sequential')),
+                            'time_slot_duration_s': float(link_ctrl_params.get('time_slot_duration_s', 10.0)),
+                            'rssi_threshold': float(link_ctrl_params.get('rssi_threshold', -75.0)),
+                            'use_sim_time': use_sim_time_bool
+                        }
+                    ]
+                )
+            ]
+        )
+        actions.append(link_controller_node)
+        
+        sim_logger_node_action = Node(
+            package='comms_sim_pkg',
+            executable='sim_logger_node.py',
+            name='sim_logger_node',
+            output='screen',
+            parameters=[
+                {
+                    'vehicle_names': vehicle_names,
+                    'output_dir': '/workspace/sim_results/',
+                    'use_sim_time': use_sim_time_bool
+                }
+            ]
+        )
+
+        sim_logger_node = TimerAction(
+            period=comms_node_delay + 1.0,
+            actions=[sim_logger_node_action]
+        )
+        actions.append(sim_logger_node)
+        
+        # sim_logger_node がミッション完了を検知して終了したら、全体の launch をシャットダウンする
+        shutdown_event = RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=sim_logger_node_action,
+                on_exit=[EmitEvent(event=Shutdown())]
+            )
+        )
+        actions.append(shutdown_event)
 
     return actions
 

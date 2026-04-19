@@ -13,9 +13,10 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 - **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始
 - **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）
 - **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（Strategyパターンで差し替え可能）
-- **マルチウェイポイント追従**: UGVの区間速度制御と自動経路追従
-- **通信データ量制限**: 設定可能な送信データ上限とCSVロギング
-- **ミッション完了時の自動CSV保存**: 全ウェイポイント到達時にCSVを自動保存
+- **マルチ車両・マルチウェイポイント追従**: 複数UGVの同期待機、区間速度制御と自動経路追従
+- **IEEE 802.15.3eライクな集中スケジューリング**: 基地局側でRSSI等に基づき通信権（Grant）を1台ずつ排他的に付与
+- **通信データ量制限と自律的な権限譲渡**: データ上限に到達した車両は自主的に切断・優先度を下げて後続へリンク権を譲渡
+- **ミッション完了時の自動終了とCSV保存**: 全車両のミッション完了を検知して安全に自動シャットダウンし、統合CSV・個別CSVを生成
 
 ## 🛠️ 技術スタック
 
@@ -52,6 +53,9 @@ ros2-gazebo-comms-sim/
 │   │   ├── comms_node.py          # 通信シミュレータノード（/comms/quality publish, CSV保存）
 │   │   ├── comms_calculator.py    # 通信品質計算（RSSI/Throughput）
 │   │   ├── antenna_parser.py      # アンテナパターン処理（E/H面CSV補間）
+│   │   ├── link_controller_node.py# 基地局側調停ノード（アクセス許可付与）
+│   │   ├── link_scheduling_strategy.py # スケジューリング戦略
+│   │   ├── sim_logger_node.py     # ログノード（ミッション監視とCSV出力）
 │   │   └── ugv_controller_node.py # UGV制御ノード（/cmd_vel publish）
 │   ├── launch/
 │   │   └── sim_launch.py          # Gazebo起動/スポーン/ブリッジ/ノード起動
@@ -321,11 +325,10 @@ spawn_entities:
 
 ### ファイル命名規則
 
-```
-YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv
-```
+- **統合CSV** (全車両): `YYYYMMDD_HHMMSS_combined_results.csv`
+- **車両個別CSV**: `YYYYMMDD_HHMMSS_{vehicle_name}_results.csv`
 
-例: `20260217_143052_LIMIT-800MB.csv`
+（例: `20260420_143052_combined_results.csv`）
 
 ### CSV出力項目
 
@@ -339,7 +342,10 @@ YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv
 
 | 項目                                              | 単位 | 説明                                                 |
 | ------------------------------------------------- | ---- | ---------------------------------------------------- |
-| `time_s`                                          | s    | シミュレーション時間                                 |
+| `time_s`                                          | s    | シミュレーション時間 (最初に移動指令が出た瞬間を起点)|
+| `vehicle_time_s`                                  | s    | その車両単体が移動指令を受けてからの時間             |
+| `vehicle_name`                                    | -    | 出力元の車両名 (例: suv_0)                           |
+| `has_link_grant`                                  | bool | 基地局から通信権が与えられているか                   |
 | `ugv_body_x`, `ugv_body_y`, `ugv_body_z`          | m    | UGV車体原点座標                                      |
 | `ugv_antenna_x`, `ugv_antenna_y`, `ugv_antenna_z` | m    | UGVアンテナ位置座標                                  |
 | `bs_origin_x`, `bs_origin_y`, `bs_origin_z`       | m    | 基地局モデル原点座標                                 |
@@ -362,7 +368,9 @@ YYYYMMDD_HHMMSS_LIMIT-[上限値]MB.csv
 | `/odom`              | `nav_msgs/Odometry`           | Sub     | UGVオドメトリ（ros_gz_bridge経由）                            |
 | `/cmd_vel`           | `geometry_msgs/Twist`         | Pub     | 速度指令（ros_gz_bridge経由でGazeboへ送信）                   |
 | `/comms/quality`     | `comms_sim_msgs/CommsQuality` | Pub     | 通信品質                                                      |
-| `/mission_complete`  | `std_msgs/Bool`               | Pub/Sub | UGV完走通知（UGVがPublish、通信ノードがSubscribeしてCSV保存） |
+| `/link_request`      | `std_msgs/Float64`            | Pub     | 基地局へRSSIをスコアとして報告し通信権限を要求                |
+| `/link_grant`        | `std_msgs/Bool`               | Sub     | 完了局からのアクセス許可(TDMA的スケジューリング)              |
+| `/mission_complete`  | `std_msgs/Bool`               | Pub     | UGV完走通知（全車完了で`sim_logger_node`が自動終了を実行）    |
 | `/base_station/pose` | `geometry_msgs/PoseStamped`   | Sub     | 基地局姿勢（オプション、アンテナ方向計算に使用）              |
 | `/clock`             | `rosgraph_msgs/Clock`         | Sub     | シミュレーション時間（use_sim_time=true時）                   |
 
