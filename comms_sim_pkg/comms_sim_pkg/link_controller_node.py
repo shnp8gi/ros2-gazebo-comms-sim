@@ -32,6 +32,8 @@ import rclpy
 from rclpy.node import Node
 from std_msgs.msg import Bool, Float64
 
+from comms_sim_msgs.msg import CommsQuality
+
 
 class LinkControllerNode(Node):
     """
@@ -50,6 +52,9 @@ class LinkControllerNode(Node):
         self.declare_parameter('vehicle_names', [''])
         self.declare_parameter('scheduling_policy', 'sequential')
         self.declare_parameter('time_slot_duration_s', 10.0)
+        self.declare_parameter('beam_gain_threshold', 5.0)
+        self.declare_parameter('weight_distance', 0.7)
+        self.declare_parameter('weight_angle', 0.3)
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -57,6 +62,15 @@ class LinkControllerNode(Node):
         ).lower()
         self.time_slot_duration: float = float(
             self.get_parameter('time_slot_duration_s').value
+        )
+        self.beam_gain_threshold: float = float(
+            self.get_parameter('beam_gain_threshold').value
+        )
+        self.weight_distance: float = float(
+            self.get_parameter('weight_distance').value
+        )
+        self.weight_angle: float = float(
+            self.get_parameter('weight_angle').value
         )
 
         # 車両名リストのパース
@@ -72,7 +86,10 @@ class LinkControllerNode(Node):
             return
 
         # ポリシー検証
-        valid_policies = ('sequential', 'round_robin', 'rssi_priority')
+        valid_policies = (
+            'sequential', 'round_robin', 'rssi_priority',
+            'geometric_beam_priority', 'geometric_weighted'
+        )
         if self.scheduling_policy not in valid_policies:
             self.get_logger().warn(
                 f'不明なポリシー: "{self.scheduling_policy}"。'
@@ -91,6 +108,11 @@ class LinkControllerNode(Node):
             name: float('-inf') for name in self.vehicle_names
         }
 
+        # 各車両のジオメトリ情報 (距離, アンテナゲイン, 有効フラグ等)
+        self._geometry_info: Dict[str, dict] = {
+            name: {} for name in self.vehicle_names
+        }
+
         # 各車両のミッション完了フラグ
         self._mission_complete: Dict[str, bool] = {
             name: False for name in self.vehicle_names
@@ -104,6 +126,7 @@ class LinkControllerNode(Node):
         # =====================================================================
         self._grant_pubs: Dict[str, object] = {}
         self._request_subs: List[object] = []
+        self._quality_subs: List[object] = []
         self._mission_subs: List[object] = []
 
         for name in self.vehicle_names:
@@ -120,6 +143,15 @@ class LinkControllerNode(Node):
             )
             self._request_subs.append(sub)
 
+            # 幾何学・品質 サブスクライバ（距離・ゲイン情報を取得）
+            sub_q = self.create_subscription(
+                CommsQuality,
+                f'/{name}/comms/quality',
+                lambda msg, vn=name: self._on_comms_quality(vn, msg),
+                10
+            )
+            self._quality_subs.append(sub_q)
+
             # ミッション完了 サブスクライバ
             sub_mc = self.create_subscription(
                 Bool,
@@ -131,9 +163,15 @@ class LinkControllerNode(Node):
 
         # ストラテジーの初期化
         try:
-            from .link_scheduling_strategy import SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy
+            from .link_scheduling_strategy import (
+                SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy,
+                GeometricBeamPriorityStrategy, GeometricWeightedStrategy
+            )
         except ImportError:
-            from link_scheduling_strategy import SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy
+            from link_scheduling_strategy import (
+                SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy,
+                GeometricBeamPriorityStrategy, GeometricWeightedStrategy
+            )
 
         if self.scheduling_policy == 'sequential':
             self.strategy = SequentialStrategy()
@@ -141,6 +179,10 @@ class LinkControllerNode(Node):
             self.strategy = RoundRobinStrategy(self.time_slot_duration)
         elif self.scheduling_policy == 'rssi_priority':
             self.strategy = RssiPriorityStrategy()
+        elif self.scheduling_policy == 'geometric_beam_priority':
+            self.strategy = GeometricBeamPriorityStrategy(self.beam_gain_threshold)
+        elif self.scheduling_policy == 'geometric_weighted':
+            self.strategy = GeometricWeightedStrategy(self.weight_distance, self.weight_angle)
         else:
             self.strategy = SequentialStrategy()
 
@@ -165,6 +207,15 @@ class LinkControllerNode(Node):
         """各車両からのRSSI報告を受信。"""
         self._rssi[vehicle_name] = msg.data
 
+    def _on_comms_quality(self, vehicle_name: str, msg: CommsQuality) -> None:
+        """各車両からの通信品質・幾何学情報を受信。"""
+        self._geometry_info[vehicle_name] = {
+            'distance': msg.distance,
+            'antenna_gain_e_plane': msg.antenna_gain_e_plane,
+            'antenna_gain_h_plane': msg.antenna_gain_h_plane,
+            'comm_active': msg.comm_active
+        }
+
     def _on_mission_complete(self, vehicle_name: str, msg: Bool) -> None:
         """各車両のミッション完了通知を受信。"""
         if not msg.data:
@@ -186,6 +237,7 @@ class LinkControllerNode(Node):
         new_idx, log_msg = self.strategy.determine_active_link(
             self._rssi,
             self._mission_complete,
+            self._geometry_info,
             self._active_idx,
             self.vehicle_names,
             current_time

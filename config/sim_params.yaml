@@ -55,7 +55,7 @@ simulation:
 comms_simulator_node:
   ros__parameters:
     # 通信品質計算のサンプリングレート [Hz]
-    sampling_rate: 1000.0
+    sampling_rate: 100.0
 
     # AWGN分散 [dB]
     noise_variance: 1.0
@@ -72,7 +72,7 @@ comms_simulator_node:
     link_establishment_time_ms: 2.0
 
     # 通信データ上限 [MB] (-1.0 で無制限)
-    comm_data_limit_mb: 800
+    comm_data_limit_mb: -1
 
     # パスロスモデルパラメータ
     # PL(d) = PL(d₀) + 10 × n × log₁₀(d / d₀)
@@ -111,16 +111,16 @@ comms_simulator_node:
     # -----------------------------------------------------------------------------
 ugv_controller_common:
   # ウェイポイント到達判定距離 [m]
-  waypoint_tolerance: 0.05
+  waypoint_tolerance: 1.0
 
   # 制御ループレート [Hz]
   control_rate: 100.0
 
   # 最大角速度 [rad/s]
-  max_angular_velocity: 1.0
+  max_angular_velocity: 0.3
 
   # ヘディング制御ゲイン（比例制御）
-  heading_gain: 1.5
+  heading_gain: 0.6
 
 # -----------------------------------------------------------------------------
 # リンク制御ノードパラメータ (基地局用中央スケジューラ)
@@ -131,15 +131,29 @@ link_controller_node:
     #   sequential: 車両順に通信、ミッション完了で次へ切替
     #   round_robin: タイムスロットで順番に切替
     #   rssi_priority: RSSI最大の車両を優先（すれ違い・V2I通信向け）
-    scheduling_policy: "rssi_priority"
+    #   geometric_beam_priority: アンテナゲインが閾値以上の車両のうち、最も距離が近いものを優先
+    #   geometric_weighted: 距離とアンテナゲインの正規化スコアを重み付け加算して評価
+    scheduling_policy: "geometric_beam_priority"
 
     # タイムスロット長 [s] (round_robin ポリシー時のみ有効)
     time_slot_duration_s: 10.0
 
-    # 最低RSSI閾値 [dBm]
-    # 車両から届くRSSIがこの値を下回る場合、その車両にはリンク権限を与えない
-    # (comms_node側の MCSテーブル最小RSSI より少し大きいか同等の値が望ましい)
+    # 最低RSSI閾値 [dBm] (rssi_priority ポリシー時のみ有効)
     rssi_threshold: -75
+
+    # -------------------------------------------------------------------------
+    # 幾何学ベース制御用パラメータ (geometric_* ポリシー時に有効)
+    # -------------------------------------------------------------------------
+    # [geometric_beam_priority 用] 
+    # 対象を絞り込むための最小アンテナゲイン閾値 [dBi]
+    beam_gain_threshold: 5.0
+
+    # [geometric_weighted 用] 
+    # 距離の近さに対する重み係数 (0.0 ~ 1.0)
+    weight_distance: 0.7
+
+    # アンテナゲインの高さに対する重み係数 (0.0 ~ 1.0)
+    weight_angle: 0.3
 
 # -----------------------------------------------------------------------------
 # スポーンエンティティ設定 (基地局等の静的エンティティ)
@@ -185,32 +199,66 @@ spawn_entities:
     # フォーマット: [roll, pitch, yaw]
     antenna_relative_rpy: [ 0.0, -0.03, 3.40 ]
 
-# -----------------------------------------------------------------------------
+# -------------------------------------------------------------------------------------------------------------------------------
 # 車両リスト（複数台対応）
 # 各車両はそれぞれ個別のトピック名前空間で制御される
 #   /{vehicle_name}/cmd_vel   : 速度指令 (ROS → Gazebo)
 #   /{vehicle_name}/odom      : オドメトリ (Gazebo → ROS)
 #   /{vehicle_name}/imu       : IMUセンサ (Gazebo → ROS)
-# -----------------------------------------------------------------------------
+#
+# 速度メモ
+# 2.78 m/s = 10 km/h     16.67 m/s = 60 km/h     30.56 m/s = 110 km/h     44.44 m/s = 160 km/h     58.33 m/s = 210 km/h
+# 5.56 m/s = 20 km/h     19.44 m/s = 70 km/h     33.33 m/s = 120 km/h     47.22 m/s = 170 km/h     61.11 m/s = 220 km/h
+# 8.33 m/s = 30 km/h     22.22 m/s = 80 km/h     36.11 m/s = 130 km/h     50.00 m/s = 180 km/h     63.89 m/s = 230 km/h
+# 11.11 m/s = 40 km/h    25.00 m/s = 90 km/h     38.89 m/s = 140 km/h     52.78 m/s = 190 km/h     66.67 m/s = 240 km/h
+# 13.9 m/s = 50 km/h     27.78 m/s = 100 km/h    41.67 m/s = 150 km/h     55.56 m/s = 200 km/h     69.44 m/s = 250 km/h
+# --------------------------------------------------------------------------------------------------------------------------------
 vehicles:
   - name: "suv_0"
     model_uri: "models://SUV"
     # ポーズ: [x, y, z, roll, pitch, yaw]
-    pose: [ -60, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    pose: [ -300, 0.0, 0.0, 0.0, 0.0, 0.0 ]
     # 車両原点からのアンテナ位置オフセット [x, y, z] [m]
     antenna_offset: [ 0.0, 0.0, 2.23 ]
     # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
     antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
     # ウェイポイントリスト: [X, Y, Z, V]  V = 目標速度 [m/s]
     waypoints:
-      - [ -60, 0.0, 0.0, 2.78 ]
-      - [ 0.0, 0.0, 0.0, 2.78 ]
+      - [ -300, 0.0, 0.0, 13.9 ]
+      - [ 100.0, 0.0, 0.0, 13.9 ]
 
   - name: "suv_1"
     model_uri: "models://SUV"
-    pose: [ -50, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    pose: [ -330, 0.0, 0.0, 0.0, 0.0, 0.0 ]
     antenna_offset: [ 0.0, 0.0, 2.23 ]
     antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
     waypoints:
-      - [ -50, 0.0, 0.0, 2.78 ]
-      - [ 10.0, 0.0, 0.0, 2.78 ]
+      - [ -330, 0.0, 0.0, 13.9 ]
+      - [ 70.0, 0.0, 0.0, 13.9 ]
+
+  - name: "suv_2"
+    model_uri: "models://SUV"
+    pose: [ -360, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    antenna_offset: [ 0.0, 0.0, 2.23 ]
+    antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
+    waypoints:
+      - [ -360, 0.0, 0.0, 13.9 ]
+      - [ 40.0, 0.0, 0.0, 13.9 ]
+
+  - name: "suv_3"
+    model_uri: "models://SUV"
+    pose: [ -390, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    antenna_offset: [ 0.0, 0.0, 2.23 ]
+    antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
+    waypoints:
+      - [ -390, 0.0, 0.0, 13.9 ]
+      - [ 10.0, 0.0, 0.0, 13.9 ]
+
+  - name: "suv_4"
+    model_uri: "models://SUV"
+    pose: [ -420, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    antenna_offset: [ 0.0, 0.0, 2.23 ]
+    antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
+    waypoints:
+      - [ -420, 0.0, 0.0, 13.9 ]
+      - [ -20, 0.0, 0.0, 13.9 ]

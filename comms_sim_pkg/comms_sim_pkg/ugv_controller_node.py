@@ -166,6 +166,9 @@ class UGVControllerNode(Node):
         self.odom_offset_x: float = 0.0
         self.odom_offset_y: float = 0.0
         self.odom_offset_z: float = 0.0
+        self.current_cmd_vel: float = 0.0
+        self.max_acceleration: float = 0.5
+        self.last_log_time: float = 0.0
 
         # 位置更新コールバック（通信ノード連携用）
         self.position_callback: Optional[Callable[[np.ndarray], None]] = None
@@ -330,10 +333,25 @@ class UGVControllerNode(Node):
 
         # 直進速度（急旋回時は減速）
         turn_factor = 1.0 - min(1.0, abs(heading_error) / (math.pi / 2))
-        cmd.linear.x = target.velocity * max(0.3, turn_factor)
+        target_linear = target.velocity * max(0.3, turn_factor)
+
+        # 急加速によるタイヤの空転(スリップ)とオドメトリ誤差を防ぐための加速度制限
+        accel_step = self.max_acceleration / self.control_rate
+        if target_linear > self.current_cmd_vel:
+            self.current_cmd_vel = min(self.current_cmd_vel + accel_step, target_linear)
+        else:
+            self.current_cmd_vel = max(self.current_cmd_vel - accel_step, target_linear)
+            
+        cmd.linear.x = self.current_cmd_vel
 
         # 指令値パブリッシュ
         self.cmd_vel_pub.publish(cmd)
+
+        # デバッグ: 1秒ごとに現在の指令速度とオドメトリの変化を表示して空転を監視
+        current_time = self.get_clock().now().nanoseconds / 1e9
+        if current_time - getattr(self, 'last_log_time', 0.0) >= 1.0:
+            self.last_log_time = current_time
+            self.get_logger().info(f"[スリップ監視] 指令速度: {self.current_cmd_vel:.2f} m/s, オドメトリ距離: {self.current_x:.2f}")
 
         # デバッグログ
         self.get_logger().debug(

@@ -284,7 +284,7 @@ def launch_setup(context, *args, **kwargs):
         gz_cmd = ['gz', 'sim', '-s', '-v', str(verbosity), '-r', world_file]
     else:
         # GUIモード
-        gz_cmd = ['gz', 'sim', '-v', str(verbosity), '-r', world_file]
+        gz_cmd = ['gz', 'sim', '-v', str(verbosity), '-r', '--render-engine', 'ogre', world_file]
 
     gz_sim = ExecuteProcess(
         cmd=gz_cmd,
