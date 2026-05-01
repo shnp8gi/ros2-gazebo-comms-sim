@@ -88,7 +88,7 @@ class LinkControllerNode(Node):
         # ポリシー検証
         valid_policies = (
             'sequential', 'round_robin', 'rssi_priority',
-            'geometric_beam_priority', 'geometric_weighted'
+            'geometric_beam_priority', 'physical_score_priority', 'geometric_weighted'
         )
         if self.scheduling_policy not in valid_policies:
             self.get_logger().warn(
@@ -165,12 +165,14 @@ class LinkControllerNode(Node):
         try:
             from .link_scheduling_strategy import (
                 SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy,
-                GeometricBeamPriorityStrategy, GeometricWeightedStrategy
+                GeometricBeamPriorityStrategy, GeometricWeightedStrategy,
+                PhysicalScorePriorityStrategy
             )
         except ImportError:
             from link_scheduling_strategy import (
                 SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy,
-                GeometricBeamPriorityStrategy, GeometricWeightedStrategy
+                GeometricBeamPriorityStrategy, GeometricWeightedStrategy,
+                PhysicalScorePriorityStrategy
             )
 
         if self.scheduling_policy == 'sequential':
@@ -181,15 +183,17 @@ class LinkControllerNode(Node):
             self.strategy = RssiPriorityStrategy()
         elif self.scheduling_policy == 'geometric_beam_priority':
             self.strategy = GeometricBeamPriorityStrategy(self.beam_gain_threshold)
+        elif self.scheduling_policy == 'physical_score_priority':
+            self.strategy = PhysicalScorePriorityStrategy(self.beam_gain_threshold)
         elif self.scheduling_policy == 'geometric_weighted':
             self.strategy = GeometricWeightedStrategy(self.weight_distance, self.weight_angle)
         else:
             self.strategy = SequentialStrategy()
 
         # =====================================================================
-        # スケジューリングタイマー (10Hz)
+        # スケジューリングタイマー (1000Hz)
         # =====================================================================
-        self._schedule_timer = self.create_timer(0.1, self._schedule_tick)
+        self._schedule_timer = self.create_timer(0.001, self._schedule_tick)
 
         self.get_logger().info(
             f'LinkControllerNode 初期化完了\n'
@@ -213,7 +217,10 @@ class LinkControllerNode(Node):
             'distance': msg.distance,
             'antenna_gain_e_plane': msg.antenna_gain_e_plane,
             'antenna_gain_h_plane': msg.antenna_gain_h_plane,
-            'comm_active': msg.comm_active
+            'path_loss': msg.path_loss,
+            'comm_active': msg.comm_active,
+            'link_state': msg.link_state,
+            'rssi': msg.rssi
         }
 
     def _on_mission_complete(self, vehicle_name: str, msg: Bool) -> None:
@@ -247,12 +254,47 @@ class LinkControllerNode(Node):
             self.get_logger().info(log_msg)
             self._active_idx = new_idx
 
-        # リンクグラントをパブリッシュ
+        # 現在のgrant保持者のlink_stateを確認
+        # DISCONNECTED状態の場合、幾何学スコアが最良の車両に即座にgrantを移す
         active_name = self.vehicle_names[self._active_idx]
+        active_info = self._geometry_info.get(active_name, {})
+        active_link_state = active_info.get('link_state', 'DISCONNECTED')
+
+        if active_link_state == 'DISCONNECTED' and active_info:
+            best_score = float('-inf')
+            best_idx = None
+            for i, name in enumerate(self.vehicle_names):
+                if i == self._active_idx:
+                    continue
+                info = self._geometry_info.get(name, {})
+                if not info.get('comm_active', False):
+                    continue
+                # 幾何学スコア = E面ゲイン + H面ゲイン - パスロス
+                e_gain = info.get('antenna_gain_e_plane', -999.0)
+                h_gain = info.get('antenna_gain_h_plane', -999.0)
+                path_loss = info.get('path_loss', 999.0)
+                score = e_gain + h_gain - path_loss
+                if score > best_score:
+                    best_score = score
+                    best_idx = i
+            if best_idx is not None:
+                active_score = (
+                    active_info.get('antenna_gain_e_plane', -999.0) +
+                    active_info.get('antenna_gain_h_plane', -999.0) -
+                    active_info.get('path_loss', 999.0)
+                )
+                if best_score > active_score:
+                    old_name = active_name
+                    self._active_idx = best_idx
+                    active_name = self.vehicle_names[self._active_idx]
+                    self.get_logger().info(
+                        f'強制リンク切替: {old_name}(DISCONNECTED) → {active_name} '
+                        f'(geo_score={best_score:.1f})'
+                    )
+
+        # リンクグラントをパブリッシュ
         for name, pub in self._grant_pubs.items():
             msg = Bool()
-            # 対象の車両のみリンク権を True にする
-            # rssi_threshold による足切りはここで実施（対象車両であっても閾値未満ならGrantしない）
             has_grant = (name == active_name)
             msg.data = has_grant
             pub.publish(msg)

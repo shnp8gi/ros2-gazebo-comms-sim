@@ -55,7 +55,7 @@ simulation:
 comms_simulator_node:
   ros__parameters:
     # 通信品質計算のサンプリングレート [Hz]
-    sampling_rate: 100.0
+    sampling_rate: 1000.0
 
     # AWGN分散 [dB]
     noise_variance: 1.0
@@ -131,9 +131,10 @@ link_controller_node:
     #   sequential: 車両順に通信、ミッション完了で次へ切替
     #   round_robin: タイムスロットで順番に切替
     #   rssi_priority: RSSI最大の車両を優先（すれ違い・V2I通信向け）
-    #   geometric_beam_priority: アンテナゲインが閾値以上の車両のうち、最も距離が近いものを優先
+    #   geometric_beam_priority: 角度ベースで最もアライメント（min(e_gain, h_gain)）が良い車両を優先
+    #   physical_score_priority: 基地局で推定した受信電力（e_gain + h_gain - path_loss）が最高の車両を優先
     #   geometric_weighted: 距離とアンテナゲインの正規化スコアを重み付け加算して評価
-    scheduling_policy: "geometric_beam_priority"
+    scheduling_policy: "physical_score_priority"
 
     # タイムスロット長 [s] (round_robin ポリシー時のみ有効)
     time_slot_duration_s: 10.0
@@ -225,40 +226,40 @@ vehicles:
     # ウェイポイントリスト: [X, Y, Z, V]  V = 目標速度 [m/s]
     waypoints:
       - [ -300, 0.0, 0.0, 13.9 ]
-      - [ 100.0, 0.0, 0.0, 13.9 ]
+      - [ 80.0, 0.0, 0.0, 13.9 ]
 
   - name: "suv_1"
+    model_uri: "models://SUV"
+    pose: [ -310, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    antenna_offset: [ 0.0, 0.0, 2.23 ]
+    antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
+    waypoints:
+      - [ -310, 0.0, 0.0, 13.9 ]
+      - [ 70.0, 0.0, 0.0, 13.9 ]
+
+  - name: "suv_2"
+    model_uri: "models://SUV"
+    pose: [ -320, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    antenna_offset: [ 0.0, 0.0, 2.23 ]
+    antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
+    waypoints:
+      - [ -320, 0.0, 0.0, 13.9 ]
+      - [ 60.0, 0.0, 0.0, 13.9 ]
+
+  - name: "suv_3"
     model_uri: "models://SUV"
     pose: [ -330, 0.0, 0.0, 0.0, 0.0, 0.0 ]
     antenna_offset: [ 0.0, 0.0, 2.23 ]
     antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
     waypoints:
       - [ -330, 0.0, 0.0, 13.9 ]
-      - [ 70.0, 0.0, 0.0, 13.9 ]
-
-  - name: "suv_2"
-    model_uri: "models://SUV"
-    pose: [ -360, 0.0, 0.0, 0.0, 0.0, 0.0 ]
-    antenna_offset: [ 0.0, 0.0, 2.23 ]
-    antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
-    waypoints:
-      - [ -360, 0.0, 0.0, 13.9 ]
-      - [ 40.0, 0.0, 0.0, 13.9 ]
-
-  - name: "suv_3"
-    model_uri: "models://SUV"
-    pose: [ -390, 0.0, 0.0, 0.0, 0.0, 0.0 ]
-    antenna_offset: [ 0.0, 0.0, 2.23 ]
-    antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
-    waypoints:
-      - [ -390, 0.0, 0.0, 13.9 ]
-      - [ 10.0, 0.0, 0.0, 13.9 ]
+      - [ 50.0, 0.0, 0.0, 13.9 ]
 
   - name: "suv_4"
     model_uri: "models://SUV"
-    pose: [ -420, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    pose: [ -340, 0.0, 0.0, 0.0, 0.0, 0.0 ]
     antenna_offset: [ 0.0, 0.0, 2.23 ]
     antenna_relative_rpy: [ 0.0, 0.03, 0.26 ]
     waypoints:
-      - [ -420, 0.0, 0.0, 13.9 ]
-      - [ -20, 0.0, 0.0, 13.9 ]
+      - [ -340, 0.0, 0.0, 13.9 ]
+      - [ 40, 0.0, 0.0, 13.9 ]

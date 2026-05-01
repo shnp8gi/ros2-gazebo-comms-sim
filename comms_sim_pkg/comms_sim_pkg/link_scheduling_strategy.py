@@ -120,9 +120,15 @@ class RssiPriorityStrategy(LinkSchedulingStrategy):
 
 class GeometricBeamPriorityStrategy(LinkSchedulingStrategy):
     """
-    geometric_beam_priority ポリシー (案1):
-    アンテナゲイン（角度の良さ）が閾値以上の車両を「ビーム幅内にいる」として優先対象とする。
-    対象の中で「物理的な直線距離」が最も近い車両に通信権を与える。
+    geometric_beam_priority ポリシー:
+    
+    地上局アンテナ角度・車両移動方向・車両アンテナ角度が形成する三角形において、
+    地上局側の角度と車両側の角度がともに最小となる（アライメントが良い）車両を選択する。
+    
+    アンテナゲイン(E面/H面)はoff-boresight角の関数であり、ゲインが高い = 角度が小さい。
+    したがって min(E面ゲイン, H面ゲイン) を最大化することで、
+    両端の角度を最小化し、双方向で最もアライメントが良い車両を選ぶ。
+    （パスロスによる距離の減衰は意図的に考慮せず、ビームへの入り具合のみを評価する）
     """
     def __init__(self, beam_gain_threshold: float):
         self.beam_gain_threshold = beam_gain_threshold
@@ -139,37 +145,105 @@ class GeometricBeamPriorityStrategy(LinkSchedulingStrategy):
         if not geometry_info:
             return current_active_idx, None
 
-        in_beam_vehicles = []
-        out_beam_vehicles = []
+        candidates = []
 
         for name, info in geometry_info.items():
-            if not info.get('comm_active', False):
+            if not info.get('comm_active', True):
                 continue
-            dist = info.get('distance', float('inf'))
-            gain = info.get('antenna_gain_e_plane', -999.0)
             
-            if gain >= self.beam_gain_threshold:
-                in_beam_vehicles.append((name, dist))
-            else:
-                out_beam_vehicles.append((name, dist))
+            e_gain = info.get('antenna_gain_e_plane', -999.0)
+            h_gain = info.get('antenna_gain_h_plane', -999.0)
+            dist = info.get('distance', float('inf'))
+            
+            if e_gain < self.beam_gain_threshold or h_gain < self.beam_gain_threshold:
+                continue
+                
+            # アライメント品質 = 三角形の両端のうち悪い方の角度に対応するゲイン
+            alignment_quality = min(e_gain, h_gain)
+            
+            candidates.append((name, alignment_quality, e_gain, h_gain, dist))
 
-        # ビーム内の車両があれば、その中で一番近いものを選択
-        if in_beam_vehicles:
-            in_beam_vehicles.sort(key=lambda x: x[1])
-            best_name = in_beam_vehicles[0][0]
-            best_dist = in_beam_vehicles[0][1]
-        # いなければ、ビーム外でも一番近いものを選択（フェールセーフ）
-        elif out_beam_vehicles:
-            out_beam_vehicles.sort(key=lambda x: x[1])
-            best_name = out_beam_vehicles[0][0]
-            best_dist = out_beam_vehicles[0][1]
-        else:
+        if not candidates:
             return current_active_idx, None
+
+        # アライメント品質が最も高い車両を選択
+        # 同スコアの場合は距離が近い方を優先
+        candidates.sort(key=lambda x: (-x[1], x[4]))
+        best_name = candidates[0][0]
+        best_quality = candidates[0][1]
+        best_dist = candidates[0][4]
 
         best_idx = vehicle_names.index(best_name)
         if best_idx != current_active_idx:
             old_name = vehicle_names[current_active_idx]
-            msg = f'リンク切替: {old_name} → {best_name} (geometric_beam: dist={best_dist:.1f}m)'
+            msg = (
+                f'リンク切替: {old_name} → {best_name} '
+                f'(alignment: min_gain={best_quality:.1f}dBi, dist={best_dist:.1f}m)'
+            )
+            return best_idx, msg
+            
+        return current_active_idx, None
+
+class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
+    """
+    physical_score_priority ポリシー:
+    
+    基地局側で計算可能な幾何学情報（アンテナゲインと距離）を用いて、
+    仮想的な受信電力をスコア化し、電波物理的に最適な車両を選択する。
+    実システム（IEEE 802.15.3e PNC）で実現可能な方式。
+    
+    物理スコア = E面ゲイン(θ_BS) + H面ゲイン(θ_V) - パスロス(距離)
+    """
+    def __init__(self, beam_gain_threshold: float):
+        self.beam_gain_threshold = beam_gain_threshold
+
+    def determine_active_link(
+        self, 
+        rssi_dict, 
+        mission_complete_dict,
+        geometry_info,
+        current_active_idx,
+        vehicle_names,
+        current_time
+    ):
+        if not geometry_info:
+            return current_active_idx, None
+
+        candidates = []
+
+        for name, info in geometry_info.items():
+            if not info.get('comm_active', True):
+                continue
+            
+            e_gain = info.get('antenna_gain_e_plane', -999.0)
+            h_gain = info.get('antenna_gain_h_plane', -999.0)
+            path_loss = info.get('path_loss', 999.0)
+            dist = info.get('distance', float('inf'))
+            
+            if e_gain < self.beam_gain_threshold or h_gain < self.beam_gain_threshold:
+                continue
+            
+            # 物理スコア: アンテナアライメントと距離の統合指標
+            phys_score = e_gain + h_gain - path_loss
+            
+            candidates.append((name, phys_score, dist, e_gain, h_gain))
+
+        if not candidates:
+            return current_active_idx, None
+
+        # 物理スコアが最も高い車両を選択
+        candidates.sort(key=lambda x: -x[1])
+        best_name = candidates[0][0]
+        best_score = candidates[0][1]
+        best_dist = candidates[0][2]
+
+        best_idx = vehicle_names.index(best_name)
+        if best_idx != current_active_idx:
+            old_name = vehicle_names[current_active_idx]
+            msg = (
+                f'リンク切替: {old_name} → {best_name} '
+                f'(phys_score={best_score:.1f}, dist={best_dist:.1f}m)'
+            )
             return best_idx, msg
             
         return current_active_idx, None
@@ -196,7 +270,7 @@ class GeometricWeightedStrategy(LinkSchedulingStrategy):
         if not geometry_info:
             return current_active_idx, None
 
-        active_info = {n: i for n, i in geometry_info.items() if i.get('comm_active', False)}
+        active_info = {n: i for n, i in geometry_info.items() if i.get('comm_active', True)}
         if not active_info:
             return current_active_idx, None
 

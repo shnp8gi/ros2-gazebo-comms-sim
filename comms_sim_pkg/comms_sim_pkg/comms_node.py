@@ -223,6 +223,7 @@ class CommsSimulatorNode(Node):
         # リンク確立状態管理
         self.link_state: LinkState = LinkState.DISCONNECTED
         self.link_establishment_start_time: Optional[float] = None
+        self._last_rssi: Optional[float] = None  
 
         # =====================================================================
         # QoSプロファイル
@@ -463,11 +464,21 @@ class CommsSimulatorNode(Node):
 
     def _on_link_grant(self, msg: Bool) -> None:
         """リンク権付与通知コールバック"""
+        prev_grant = self.has_link_grant
         self.has_link_grant = msg.data
         if not self.has_link_grant and self.link_state != LinkState.DISCONNECTED:
             self.get_logger().info('リンク権喪失。通信を切断します。', throttle_duration_sec=2.0)
             self.link_state = LinkState.DISCONNECTED
             self.link_establishment_start_time = None
+        elif (self.has_link_grant and not prev_grant
+              and self.link_state == LinkState.DISCONNECTED):
+            if self._last_rssi is not None and self._last_rssi > self.rssi_threshold:
+                current_time = self.get_clock().now().nanoseconds / 1e9
+                self.link_state = LinkState.ESTABLISHING
+                self.link_establishment_start_time = current_time
+                self.get_logger().info(
+                    f'リンク権取得 → リンク確立開始 (RSSI: {self._last_rssi:.1f} dBm)'
+                )
 
     def _update_link_state(self, rssi: float, current_time: float) -> bool:
         """
@@ -579,6 +590,9 @@ class CommsSimulatorNode(Node):
             antenna_gain_db=antenna_gain_db,
             add_noise=True,
         )
+
+        # 最新RSSIをキャッシュ（_on_link_grant での即時遷移判定用）
+        self._last_rssi = metrics['rssi']
 
         # 現在時刻の取得
         current_time = self.get_clock().now().nanoseconds / 1e9

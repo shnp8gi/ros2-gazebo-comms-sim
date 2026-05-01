@@ -13,9 +13,10 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 - **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始
 - **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）
 - **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（Strategyパターンで差し替え可能）
-- **マルチ車両・マルチウェイポイント追従**: 複数UGVの同期待機、区間速度制御と自動経路追従
-- **IEEE 802.15.3eライクな集中スケジューリング**: 基地局側でRSSI等に基づき通信権（Grant）を1台ずつ排他的に付与
-- **通信データ量制限と自律的な権限譲渡**: データ上限に到達した車両は自主的に切断・優先度を下げて後続へリンク権を譲渡
+- **マルチ車両・高密度・マルチウェイポイント追従**: 複数台のUGVによる同期待機、区間速度制御（スリップ防止用加速度制御対応）、および自動経路追従
+- **集中スケジューリング**: 基地局側で通信権（Grant）を1台ずつ排他的に付与（RSSI優先に加え、アンテナアライメントに基づく幾何学スコアや推定受信電力ベースのポリシーを搭載）
+- **プロアクティブハンドオーバーと自律的権限譲渡**: 通信データ上限到達時の自律的な譲渡のほか、リンク切断（DISCONNECTED）時に即座に最適な幾何学スコアを持つ後続車両へ通信権を強制切替する機能
+- **GPUアクセラレーション対応**: Docker Composeでの NVIDIA GPU リソース割り当てにより、GUIモードでの高速なGazeboレンダリングをサポート
 - **ミッション完了時の自動終了とCSV保存**: 全車両のミッション完了を検知して安全に自動シャットダウンし、統合CSV・個別CSVを生成
 
 ## 🛠️ 技術スタック
@@ -26,7 +27,7 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 | ROS 2        | Humble Hawksbill          |
 | シミュレータ | Gazebo Sim (Harmonic)     |
 | 言語         | Python 3                  |
-| 開発環境     | Docker / Docker Compose   |
+| 開発環境     | Docker / Docker Compose (NVIDIA GPU対応) |
 
 ## 📁 ディレクトリ構造
 
@@ -257,13 +258,15 @@ ros2 launch comms_sim_pkg sim_launch.py headless:=true
 ```yaml
 comms_simulator_node:
   ros__parameters:
-    sampling_rate: value # 計算頻度 [Hz] (default: 100.0)
-    noise_variance: value # AWGN分散 [dB] (default: 2.0)
+    sampling_rate: value # 計算頻度 [Hz] (default: 1000.0)
+    noise_variance: value # AWGN分散 [dB] (default: 1.0)
     e_plane_path: value # E面アンテナCSV (default: "/workspace/config/e_plane.csv")
     h_plane_path: value # H面アンテナCSV (default: "/workspace/config/h_plane.csv")
     mcs_table_path: value # MCSテーブル (default: "/workspace/config/MCStable.csv")
     link_establishment_time_ms: value # リンク確立時間 [ms] (default: 2.0)
     comm_data_limit_mb: value # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
+    max_antenna_attenuation: value # アンテナ最大減衰量 [dB] (default: 30.0)
+    logging_start_trigger: value # ログ記録開始トリガー (immediate, on_movement, on_topic) (default: "on_movement")
 
     path_loss:
       frequency: value # 使用周波数 [Hz] (default: 6.0e10)
@@ -271,10 +274,19 @@ comms_simulator_node:
       exponent: value # パスロス指数 (default: 2.0)
 
     tx_power: value # 送信電力 [dBm] (default: -7.0)
-    ugv_spawn_pose: # UGVスポーン位置 [X, Y, Z] (ワールド座標)
-      - value
-      - value
-      - value
+```
+
+#### リンク制御パラメータ（集中スケジューラ）
+
+```yaml
+link_controller_node:
+  ros__parameters:
+    scheduling_policy: value # スケジューリングポリシー (例: physical_score_priority, geometric_beam_priority, rssi_priority)
+    time_slot_duration_s: value # round_robin時のスロット長 [s] (default: 10.0)
+    rssi_threshold: value # rssi_priority時の閾値 [dBm] (default: -75)
+    beam_gain_threshold: value # geometric_beam_priority用の最小ゲイン閾値 [dBi] (default: 5.0)
+    weight_distance: value # geometric_weighted用の距離重み係数 (default: 0.7)
+    weight_angle: value # geometric_weighted用の角度重み係数 (default: 0.3)
 ```
 
 ※ 通信距離はワールド座標で計算されます。`/odom`（相対座標）からワールド座標へ変換するため、通常は `spawn_entities.suv.pose` と同じ値を指定します（launch が自動で渡します）。
