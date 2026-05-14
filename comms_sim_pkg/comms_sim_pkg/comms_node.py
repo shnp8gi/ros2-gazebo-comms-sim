@@ -210,6 +210,8 @@ class CommsSimulatorNode(Node):
         self.ugv_local_position: Optional[np.ndarray] = None
         self._odom_offset_set: bool = False
         self._odom_offset: np.ndarray = np.zeros(3, dtype=float)
+        self._initial_position_verified: bool = False
+        self._verification_attempt_count: int = 0
 
         self.total_data_transmitted: float = 0.0  # 累計伝送データ量 [MB]
         self.comm_active: bool = True
@@ -395,6 +397,32 @@ class CommsSimulatorNode(Node):
 
         # オフセット適用済みの位置を保存（ワールド座標系）
         self.ugv_local_position = odom_pos + self._odom_offset
+
+        # --- 初期位置の自己補正・検証システム ---
+        if not getattr(self, '_initial_position_verified', True) and isinstance(self.ugv_spawn_pose, (list, tuple)) and len(self.ugv_spawn_pose) >= 3:
+            expected = np.array([
+                float(self.ugv_spawn_pose[0]),
+                float(self.ugv_spawn_pose[1]),
+                float(self.ugv_spawn_pose[2]),
+            ], dtype=float)
+            error = np.linalg.norm((self.ugv_local_position - expected)[:2])
+            
+            if error > 10.0:
+                self._verification_attempt_count += 1
+                self.get_logger().warn(
+                    f'[通信ノード自己補正] 異常な初期位置を検出 (World: {self.ugv_local_position[0]:.1f}, {self.ugv_local_position[1]:.1f} '
+                    f'| Spawn: {expected[0]:.1f}, {expected[1]:.1f})。オフセットを再計算します。'
+                )
+                self._odom_offset = expected - odom_pos
+                self.ugv_local_position = odom_pos + self._odom_offset
+            elif error <= 0.5:
+                self._initial_position_verified = True
+                self.get_logger().info('通信ノード: 初期位置の検証が完了しました。')
+            else:
+                self._verification_attempt_count += 1
+                if self._verification_attempt_count > 50:
+                    self._initial_position_verified = True
+                    self.get_logger().info('通信ノード: 初期位置の検証をタイムアウトで完了しました。')
 
         # シミュレーション開始時刻を記録
         if self.simulation_start_time is None:

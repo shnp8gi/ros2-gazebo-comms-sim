@@ -104,6 +104,7 @@ class UGVControllerNode(Node):
         self.declare_parameter('control_rate', 10.0)
         self.declare_parameter('max_angular_velocity', 1.0)
         self.declare_parameter('heading_gain', 1.5)
+        self.declare_parameter('max_acceleration', 0.5)
         self.declare_parameter('spawn_pose', [0.0, 0.0, 0.0])
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
@@ -115,6 +116,7 @@ class UGVControllerNode(Node):
         self.control_rate = self.get_parameter('control_rate').value
         self.max_angular_vel = self.get_parameter('max_angular_velocity').value
         self.heading_gain = self.get_parameter('heading_gain').value
+        self.max_acceleration = self.get_parameter('max_acceleration').value
         self.spawn_pose = self.get_parameter('spawn_pose').value
         self.odom_topic = self.get_parameter('odom_topic').value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
@@ -166,8 +168,9 @@ class UGVControllerNode(Node):
         self.odom_offset_x: float = 0.0
         self.odom_offset_y: float = 0.0
         self.odom_offset_z: float = 0.0
+        self.initial_position_verified: bool = False
+        self.verification_attempt_count: int = 0
         self.current_cmd_vel: float = 0.0
-        self.max_acceleration: float = 0.5
         self.last_log_time: float = 0.0
 
         # 位置更新コールバック（通信ノード連携用）
@@ -261,6 +264,10 @@ class UGVControllerNode(Node):
             msg.pose.pose.orientation.z,
             msg.pose.pose.orientation.w
         )
+        self.actual_linear_x = msg.twist.twist.linear.x
+
+
+
         self.odom_received = True
 
         # スポーン位置を使ってodom→ワールドオフセットを1回だけ計算
@@ -271,13 +278,42 @@ class UGVControllerNode(Node):
             self.odom_offset_z = float(self.spawn_pose[2]) - self.current_z
             self.odom_offset_set = True
             self.get_logger().info(
-                f'odomオフセット計算完了: '
+                f'odomオフセット初回計算: '
                 f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
             )
 
         self.world_x = self.current_x + self.odom_offset_x
         self.world_y = self.current_y + self.odom_offset_y
         self.world_z = self.current_z + self.odom_offset_z
+
+        # --- 初期位置の自己補正・検証システム ---
+        if not self.initial_position_verified and isinstance(self.spawn_pose, (list, tuple)) and len(self.spawn_pose) >= 3:
+            expected_x = float(self.spawn_pose[0])
+            expected_y = float(self.spawn_pose[1])
+            error_x = abs(self.world_x - expected_x)
+            error_y = abs(self.world_y - expected_y)
+
+            if error_x > 10.0 or error_y > 10.0:
+                self.verification_attempt_count += 1
+                self.get_logger().warn(
+                    f'[自己補正] 異常な初期位置を検出 (World: {self.world_x:.1f}, {self.world_y:.1f} '
+                    f'| Spawn: {expected_x}, {expected_y})。オフセットを再計算します。'
+                )
+                self.odom_offset_x = expected_x - self.current_x
+                self.odom_offset_y = expected_y - self.current_y
+                self.odom_offset_z = float(self.spawn_pose[2]) - self.current_z
+                
+                self.world_x = self.current_x + self.odom_offset_x
+                self.world_y = self.current_y + self.odom_offset_y
+                self.world_z = self.current_z + self.odom_offset_z
+            elif error_x <= 0.5 and error_y <= 0.5:
+                self.initial_position_verified = True
+                self.get_logger().info('初期位置の検証が完了しました。シミュレーション(車両移動)を開始します。')
+            else:
+                self.verification_attempt_count += 1
+                if self.verification_attempt_count > 50:
+                    self.initial_position_verified = True
+                    self.get_logger().info('初期位置の検証をタイムアウトで完了しました。')
 
         # 位置更新コールバック呼び出し
         if self.position_callback:
@@ -288,6 +324,10 @@ class UGVControllerNode(Node):
         """メイン制御ループ。"""
         if not self.odom_received:
             self.get_logger().debug('オドメトリ待機中...', throttle_duration_sec=2.0)
+            return
+
+        if not getattr(self, 'initial_position_verified', True):
+            self.get_logger().debug('初期位置の検証・補正中...', throttle_duration_sec=2.0)
             return
 
         if self.mission_complete:
@@ -347,11 +387,11 @@ class UGVControllerNode(Node):
         # 指令値パブリッシュ
         self.cmd_vel_pub.publish(cmd)
 
-        # デバッグ: 1秒ごとに現在の指令速度とオドメトリの変化を表示して空転を監視
+        # デバッグ: 1秒ごとに現在の指令速度と実際の速度、位置を表示して空転を監視
         current_time = self.get_clock().now().nanoseconds / 1e9
         if current_time - getattr(self, 'last_log_time', 0.0) >= 1.0:
             self.last_log_time = current_time
-            self.get_logger().info(f"[スリップ監視] 指令速度: {self.current_cmd_vel:.2f} m/s, オドメトリ距離: {self.current_x:.2f}")
+            self.get_logger().info(f"[スリップ監視] 指令速度: {self.current_cmd_vel:.2f} m/s, 実際速度: {getattr(self, 'actual_linear_x', 0.0):.2f} m/s, 現在位置: {self.world_x:.2f}")
 
         # デバッグログ
         self.get_logger().debug(

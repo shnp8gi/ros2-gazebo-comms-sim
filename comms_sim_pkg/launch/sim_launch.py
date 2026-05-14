@@ -273,6 +273,7 @@ def launch_setup(context, *args, **kwargs):
     control_rate = float(ugv_common.get('control_rate', 10.0))
     max_angular_velocity = float(ugv_common.get('max_angular_velocity', 1.0))
     heading_gain = float(ugv_common.get('heading_gain', 1.5))
+    max_acceleration = float(ugv_common.get('max_acceleration', 0.5))
 
     actions = []
 
@@ -472,71 +473,82 @@ def launch_setup(context, *args, **kwargs):
     for vehicle_cfg in vehicles:
         v_name = vehicle_cfg.get('name', 'suv')
         v_pose = vehicle_cfg.get('pose', [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-
-        # 車両のアンテナパラメータ
-        v_antenna_offset = [0.0, 0.0, 1.9]
-        v_antenna_relative_rpy = [0.0, 0.0, 0.0]
-
-        v_offset_raw = vehicle_cfg.get('antenna_offset')
-        if isinstance(v_offset_raw, list) and len(v_offset_raw) >= 3:
-            v_antenna_offset = [float(v) for v in v_offset_raw[:3]]
-
-        v_rpy = vehicle_cfg.get('antenna_relative_rpy')
-        if isinstance(v_rpy, list) and len(v_rpy) >= 3:
-            v_antenna_relative_rpy = [float(r) for r in v_rpy[:3]]
-
-        # スポーン位置
         suv_pose = [float(v_pose[0]), float(v_pose[1]), float(v_pose[2])]
 
+        # アンテナ設定の読み込み（後方互換性対応含む）
+        v_antennas = vehicle_cfg.get('antennas', [])
+        if not v_antennas:
+            # 旧設定の場合、デフォルトで1つのアンテナを作成
+            v_antennas = [{
+                'name': v_name,
+                'offset': vehicle_cfg.get('antenna_offset', [0.0, 0.0, 1.9]),
+                'relative_rpy': vehicle_cfg.get('antenna_relative_rpy', [0.0, 0.0, 0.0])
+            }]
+
         # -----------------------------------------------------------------
-        # 通信シミュレータノード（車両ごと）
+        # 通信シミュレータノード（アンテナごと）
         # -----------------------------------------------------------------
-        comms_node = TimerAction(
-            period=comms_node_delay,
-            actions=[
-                Node(
-                    package='comms_sim_pkg',
-                    executable='comms_node.py',
-                    name=f'comms_simulator_{v_name}',
-                    output='screen',
-                    parameters=[
-                        {
-                            'vehicle_name': v_name,
-                            'sampling_rate': float(comms_params.get('sampling_rate', 1.0)),
-                            'noise_variance': float(comms_params.get('noise_variance', 2.0)),
-                            'e_plane_path': comms_params.get('e_plane_path', ''),
-                            'h_plane_path': comms_params.get('h_plane_path', ''),
-                            'mcs_table_path': comms_params.get('mcs_table_path', ''),
-                            'link_establishment_time_ms': float(comms_params.get('link_establishment_time_ms', comms_params.get('link_establishment_time', 2.0))),
-                            'comm_data_limit_mb': float(comms_params.get('comm_data_limit_mb', comms_params.get('comm_data_limit', 100.0))),
-                            'path_loss.c': float(comms_params.get('path_loss', {}).get('c', 299792458)),
-                            'path_loss.frequency': float(comms_params.get('path_loss', {}).get('frequency', 6.0e10)),
-                            'path_loss.exponent': float(comms_params.get('path_loss', {}).get('exponent', 2.0)),
-                            'path_loss.d0': float(comms_params.get('path_loss', {}).get('d0', 1.0)),
-                            'path_loss.pl_d0': float(comms_params.get('path_loss', {}).get('pl_d0', -1.0)),
-                            'tx_power': float(comms_params.get('tx_power', -7.0)),
-                            'max_antenna_attenuation': float(comms_params.get('max_antenna_attenuation', 30.0)),
-                            'logging_start_trigger': str(comms_params.get('logging_start_trigger', 'on_movement')),
-                            'logging_start_topic': str(comms_params.get('logging_start_topic', '/logging/start')),
-                            'ugv_spawn_pose': suv_pose,
-                            'base_station_position': antenna_base_position,
-                            'base_station_antenna_offset': antenna_antenna_offset,
-                            'ugv_antenna_offset': v_antenna_offset,
-                            'base_station_antenna_relative_rpy': antenna_relative_rpy,
-                            'ugv_antenna_relative_rpy': v_antenna_relative_rpy,
-                            'odom_topic': f'/{v_name}/odom',
-                            'cmd_vel_topic': f'/{v_name}/cmd_vel',
-                            'mission_complete_topic': f'/{v_name}/mission_complete',
-                            'use_sim_time': use_sim_time == 'true'
-                        },
-                    ],
-                    remappings=[
-                        ('/imu/data', f'/world/{world_name}/model/{v_name}/link/chassis/sensor/imu_sensor/imu'),
-                    ]
-                )
-            ]
-        )
-        actions.append(comms_node)
+        for ant_cfg in v_antennas:
+            ant_name = ant_cfg.get('name', f"{v_name}_ant")
+            
+            # 車両のアンテナパラメータ
+            v_antenna_offset = [0.0, 0.0, 1.9]
+            v_antenna_relative_rpy = [0.0, 0.0, 0.0]
+
+            v_offset_raw = ant_cfg.get('offset')
+            if isinstance(v_offset_raw, list) and len(v_offset_raw) >= 3:
+                v_antenna_offset = [float(v) for v in v_offset_raw[:3]]
+
+            v_rpy = ant_cfg.get('relative_rpy')
+            if isinstance(v_rpy, list) and len(v_rpy) >= 3:
+                v_antenna_relative_rpy = [float(r) for r in v_rpy[:3]]
+
+            comms_node = TimerAction(
+                period=comms_node_delay,
+                actions=[
+                    Node(
+                        package='comms_sim_pkg',
+                        executable='comms_node.py',
+                        name=f'comms_simulator_{ant_name}',
+                        output='screen',
+                        parameters=[
+                            {
+                                'vehicle_name': ant_name,
+                                'sampling_rate': float(comms_params.get('sampling_rate', 1.0)),
+                                'noise_variance': float(comms_params.get('noise_variance', 2.0)),
+                                'e_plane_path': comms_params.get('e_plane_path', ''),
+                                'h_plane_path': comms_params.get('h_plane_path', ''),
+                                'mcs_table_path': comms_params.get('mcs_table_path', ''),
+                                'link_establishment_time_ms': float(comms_params.get('link_establishment_time_ms', comms_params.get('link_establishment_time', 2.0))),
+                                'comm_data_limit_mb': float(comms_params.get('comm_data_limit_mb', comms_params.get('comm_data_limit', 100.0))),
+                                'path_loss.c': float(comms_params.get('path_loss', {}).get('c', 299792458)),
+                                'path_loss.frequency': float(comms_params.get('path_loss', {}).get('frequency', 6.0e10)),
+                                'path_loss.exponent': float(comms_params.get('path_loss', {}).get('exponent', 2.0)),
+                                'path_loss.d0': float(comms_params.get('path_loss', {}).get('d0', 1.0)),
+                                'path_loss.pl_d0': float(comms_params.get('path_loss', {}).get('pl_d0', -1.0)),
+                                'tx_power': float(comms_params.get('tx_power', -7.0)),
+                                'max_antenna_attenuation': float(comms_params.get('max_antenna_attenuation', 30.0)),
+                                'logging_start_trigger': str(comms_params.get('logging_start_trigger', 'on_movement')),
+                                'logging_start_topic': str(comms_params.get('logging_start_topic', '/logging/start')),
+                                'ugv_spawn_pose': suv_pose,
+                                'base_station_position': antenna_base_position,
+                                'base_station_antenna_offset': antenna_antenna_offset,
+                                'ugv_antenna_offset': v_antenna_offset,
+                                'base_station_antenna_relative_rpy': antenna_relative_rpy,
+                                'ugv_antenna_relative_rpy': v_antenna_relative_rpy,
+                                'odom_topic': f'/{v_name}/odom',
+                                'cmd_vel_topic': f'/{v_name}/cmd_vel',
+                                'mission_complete_topic': f'/{v_name}/mission_complete',
+                                'use_sim_time': use_sim_time == 'true'
+                            },
+                        ],
+                        remappings=[
+                            ('/imu/data', f'/world/{world_name}/model/{v_name}/link/chassis/sensor/imu_sensor/imu'),
+                        ]
+                    )
+                ]
+            )
+            actions.append(comms_node)
 
         # -----------------------------------------------------------------
         # UGVコントローラノード（車両ごと）
@@ -563,6 +575,7 @@ def launch_setup(context, *args, **kwargs):
                     'control_rate': control_rate,
                     'max_angular_velocity': max_angular_velocity,
                     'heading_gain': heading_gain,
+                    'max_acceleration': max_acceleration,
                     'spawn_pose': suv_pose,
                     'odom_topic': f'/{v_name}/odom',
                     'cmd_vel_topic': f'/{v_name}/cmd_vel',
@@ -610,7 +623,16 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     # link_controller_node & sim_logger_node の起動
     # =========================================================================
-    vehicle_names = [v.get('name', 'suv') for v in vehicles]
+    vehicle_names = []
+    base_vehicle_names = []
+    for v in vehicles:
+        base_name = v.get('name', 'suv')
+        base_vehicle_names.append(base_name)
+        if 'antennas' in v and v['antennas']:
+            for a in v['antennas']:
+                vehicle_names.append(a.get('name'))
+        else:
+            vehicle_names.append(base_name)
     link_ctrl_params = config.get('link_controller_node', {}).get('ros__parameters', {})
     
     if len(vehicle_names) > 0:
@@ -644,6 +666,7 @@ def launch_setup(context, *args, **kwargs):
             parameters=[
                 {
                     'vehicle_names': vehicle_names,
+                    'base_vehicle_names': base_vehicle_names,
                     'output_dir': '/workspace/sim_results/',
                     'use_sim_time': use_sim_time_bool
                 }

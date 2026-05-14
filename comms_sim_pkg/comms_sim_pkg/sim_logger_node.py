@@ -26,6 +26,7 @@ class SimLoggerNode(Node):
         super().__init__('sim_logger_node')
         
         self.declare_parameter('vehicle_names', [''])
+        self.declare_parameter('base_vehicle_names', [''])
         self.declare_parameter('output_dir', '/workspace/sim_results/')
         
         vehicle_names_raw = self.get_parameter('vehicle_names').value
@@ -34,6 +35,12 @@ class SimLoggerNode(Node):
         else:
             self.vehicle_names = []
             
+        base_vehicle_names_raw = self.get_parameter('base_vehicle_names').value
+        if isinstance(base_vehicle_names_raw, list):
+            self.base_vehicle_names = [str(v) for v in base_vehicle_names_raw if v]
+        else:
+            self.base_vehicle_names = self.vehicle_names.copy()
+            
         self.output_dir = self.get_parameter('output_dir').value
         
         self.data_log: List[dict] = []
@@ -41,7 +48,7 @@ class SimLoggerNode(Node):
         
         # 状態保持
         self._link_grants: Dict[str, bool] = {name: False for name in self.vehicle_names}
-        self._mission_status: Dict[str, bool] = {name: False for name in self.vehicle_names}
+        self._mission_status: Dict[str, bool] = {name: False for name in self.base_vehicle_names}
         
         self._quality_subs = []
         self._grant_subs = []
@@ -71,6 +78,7 @@ class SimLoggerNode(Node):
             )
             self._quality_subs.append(sub_quality)
 
+        for name in self.base_vehicle_names:
             # Mission Complete Subscriber
             sub_mission = self.create_subscription(
                 Bool,
