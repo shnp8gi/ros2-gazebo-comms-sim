@@ -36,7 +36,7 @@ RUN apt-get update && apt-get install -y gz-harmonic && rm -rf /var/lib/apt/list
 RUN apt-get update && apt-get install -y ros-humble-ros-gzharmonic \
     python3-numpy python3-scipy python3-pandas && rm -rf /var/lib/apt/lists/*
 
-# VirtualGL Installation for Remote GPU Rendering (X11 Forwarding)
+# VirtualGL Installation for Remote GPU Rendering
 RUN wget https://github.com/VirtualGL/virtualgl/releases/download/3.1.1/virtualgl_3.1.1_amd64.deb -O /tmp/virtualgl.deb && \
     apt-get update && apt-get install -y /tmp/virtualgl.deb libglvnd-dev libegl1-mesa-dev && \
     rm /tmp/virtualgl.deb && rm -rf /var/lib/apt/lists/*

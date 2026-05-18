@@ -238,7 +238,24 @@ def launch_setup(context, *args, **kwargs):
             )
     world_name = sim_config.get('world_name', 'comms_sim_world')
     verbosity = sim_config.get('verbosity', 3)
-    headless = headless_arg_bool if headless_arg else sim_config.get('headless', False)
+    headless = sim_config.get('headless', False)
+    if headless_arg and str(headless_arg).lower() != 'auto':
+        # コマンドライン引数が明示されていればそれを最優先
+        headless = (str(headless_arg).lower() == 'true')
+    elif str(headless_arg).lower() == 'auto':
+        if headless:
+            # YAMLで headless: true が明示されていればそれを尊重する
+            # （sweep_sim.py 等がプログラム的に設定した値を DISPLAY 検出で上書きしない）
+            print("[sim_launch] YAML設定 headless: true を使用します（headlessモード）")
+        else:
+            # YAML が false（またはデフォルト）の場合のみ DISPLAY 自動検出を行う
+            display_env = os.environ.get('DISPLAY', '')
+            if not display_env:
+                print("[sim_launch] DISPLAY未設定のため、自動的にheadlessモードに切り替えます")
+                headless = True
+            else:
+                print(f"[sim_launch] DISPLAY={display_env} が設定されています。GUIモードで起動します")
+                headless = False
     model_prefix = sim_config.get('model_path_prefix', '/workspace/models')
 
     # YAMLからタイミング設定を取得
@@ -280,18 +297,63 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     # Gazeboシミュレーション
     # =========================================================================
+    # GPU利用可否の判定
+    has_nvidia = (
+        os.path.exists('/dev/dri') or
+        os.environ.get('NVIDIA_VISIBLE_DEVICES', '') not in ('', 'void')
+    )
+
+    # X11フォワーディング（リモート接続）かどうかを判定
+    # DISPLAY が "localhost:N.M" や "hostname:N.M" 形式 → X11フォワーディング
+    display_env = os.environ.get('DISPLAY', '')
+    is_x11_forwarding = ':' in display_env and (
+        '.' in display_env or          # localhost:10.0 形式
+        display_env.startswith('localhost:') or
+        (not display_env.startswith(':'))  # リモートホスト付き
+    )
+
+    # 基本の環境変数（GPU/CPU 共通）
+    gz_env = {
+        'GZ_SIM_RESOURCE_PATH': '/workspace/models',
+    }
+
     if headless:
-        # ヘッドレスモード（サーバーのみ）
+        # ヘッドレスモード（GUIなし・レンダリングなし）
+        # 物理エンジン(DART)はCPUベースのため、headlessではGPUは使用されない
         gz_cmd = ['gz', 'sim', '-s', '-v', str(verbosity), '-r', world_file]
+        if has_nvidia:
+            gz_env.update({
+                'LIBGL_ALWAYS_SOFTWARE': '0',
+                '__NV_PRIME_RENDER_OFFLOAD': '1',
+                '__GLX_VENDOR_LIBRARY_NAME': 'nvidia',
+                '__EGL_VENDOR_LIBRARY_FILENAMES': '/usr/share/glvnd/egl_vendor.d/10_nvidia.json',
+            })
+            print("[sim_launch] headless: GPUあり（レンダリングなしのためCPU物理演算）")
+        else:
+            print("[sim_launch] headless: CPU モードで実行します")
+    elif has_nvidia and not is_x11_forwarding:
+        # GUIモード + ローカルGPU接続: ogre2 でハードウェアレンダリング
+        gz_cmd = ['gz', 'sim', '-v', str(verbosity), '-r', '--render-engine', 'ogre2', world_file]
+        gz_env.update({
+            'LIBGL_ALWAYS_SOFTWARE': '0',
+            '__NV_PRIME_RENDER_OFFLOAD': '1',
+            '__GLX_VENDOR_LIBRARY_NAME': 'nvidia',
+        })
+        print("[sim_launch] GUI: GPU (ogre2) レンダリングモードで起動します")
     else:
-        # GUIモード
+        # GUIモード + X11フォワーディング or GPU なし: ogre で CPU レンダリング
         gz_cmd = ['gz', 'sim', '-v', str(verbosity), '-r', '--render-engine', 'ogre', world_file]
+        gz_env['LIBGL_ALWAYS_SOFTWARE'] = '1'
+        if is_x11_forwarding:
+            print("[sim_launch] GUI: X11フォワーディング経由 → CPU (ogre) レンダリングで起動します")
+        else:
+            print("[sim_launch] GUI: GPU未検出 → CPU (ogre) レンダリングで起動します")
 
     gz_sim = ExecuteProcess(
         cmd=gz_cmd,
         name='gazebo',
         output='screen',
-        additional_env={'GZ_SIM_RESOURCE_PATH': '/workspace/models'}
+        additional_env=gz_env
     )
     actions.append(gz_sim)
 
@@ -448,6 +510,7 @@ def launch_setup(context, *args, **kwargs):
     antenna_base_position = [0.0, 0.0, 0.0]
     antenna_antenna_offset = [0.0, 0.0, 3.0]
     antenna_relative_rpy = [0.0, 0.0, 0.0]
+    antenna_base_rpy = [0.0, 0.0, 0.0]
 
     if isinstance(spawn_entities, dict):
         antenna_cfg = spawn_entities.get('antenna') or spawn_entities.get('Antenna')
@@ -455,6 +518,8 @@ def launch_setup(context, *args, **kwargs):
             pose = antenna_cfg.get('pose')
             if isinstance(pose, list) and len(pose) >= 3:
                 antenna_base_position = [float(pose[0]), float(pose[1]), float(pose[2])]
+            if isinstance(pose, list) and len(pose) >= 6:
+                antenna_base_rpy = [float(pose[3]), float(pose[4]), float(pose[5])]
             antenna_offset_raw = antenna_cfg.get('antenna_offset')
             if isinstance(antenna_offset_raw, list) and len(antenna_offset_raw) >= 3:
                 antenna_antenna_offset = [float(v) for v in antenna_offset_raw[:3]]
@@ -533,6 +598,7 @@ def launch_setup(context, *args, **kwargs):
                                 'ugv_spawn_pose': suv_pose,
                                 'base_station_position': antenna_base_position,
                                 'base_station_antenna_offset': antenna_antenna_offset,
+                                'base_station_rpy': antenna_base_rpy,
                                 'ugv_antenna_offset': v_antenna_offset,
                                 'base_station_antenna_relative_rpy': antenna_relative_rpy,
                                 'ugv_antenna_relative_rpy': v_antenna_relative_rpy,
@@ -669,7 +735,7 @@ def launch_setup(context, *args, **kwargs):
                     'vehicle_names': vehicle_names,
                     'base_vehicle_names': base_vehicle_names,
                     'output_dir': '/workspace/sim_results/',
-                    'log_only_connected': bool(sim_config.get('log_only_connected', True)),
+                    'logging_level': int(sim_config.get('logging_level', 1)),
                     'use_sim_time': use_sim_time_bool
                 }
             ]
@@ -705,8 +771,8 @@ def generate_launch_description():
 
     declare_headless = DeclareLaunchArgument(
         'headless',
-        default_value='false',
-        description='Gazeboをヘッドレスモードで起動するかどうか'
+        default_value='auto',
+        description='Gazeboをヘッドレスモードで起動するかどうか (true/false/auto: yamlに従う)'
     )
 
     return LaunchDescription([

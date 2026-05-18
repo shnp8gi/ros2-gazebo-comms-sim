@@ -13,7 +13,7 @@ services:
       - DISPLAY=${DISPLAY}
       - GZ_SIM_RESOURCE_PATH=/workspace/models
       - ROS_DOMAIN_ID=0
-    
+
     volumes:
       - .:/workspace:rw
       - /tmp/.X11-unix:/tmp/.X11-unix:rw

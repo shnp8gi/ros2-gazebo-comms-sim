@@ -1,13 +1,24 @@
 # =============================================================================
 # GPU Extension Configuration
+# NVIDIA GPU使用時のみ docker-compose.yml と組み合わせて使用する
+# 使用方法: docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d sim
 # =============================================================================
 services:
   sim:
     environment:
+      # X11 / Qt 関連
       - QT_X11_NO_MITSHM=1
+      # NVIDIA GPU 認識
       - NVIDIA_VISIBLE_DEVICES=all
       - NVIDIA_DRIVER_CAPABILITIES=all
-    
+      # OpenGL / EGL でハードウェアレンダリングを強制
+      - LIBGL_ALWAYS_SOFTWARE=0
+      - __NV_PRIME_RENDER_OFFLOAD=1
+      - __GLX_VENDOR_LIBRARY_NAME=nvidia
+      # Gazebo Harmonic: ogre2 は EGL バックエンドを優先
+      - GZ_RENDERING_ENGINE=ogre2
+      - MESA_GL_VERSION_OVERRIDE=4.5
+
     deploy:
       resources:
         reservations:
@@ -15,3 +26,7 @@ services:
             - driver: nvidia
               count: all
               capabilities: [gpu, compute, graphics, utility, display]
+
+    # NVIDIA GPU デバイスをコンテナに直接マウント
+    volumes:
+      - /dev/dri:/dev/dri

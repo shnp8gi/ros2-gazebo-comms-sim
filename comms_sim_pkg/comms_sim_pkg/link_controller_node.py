@@ -58,6 +58,7 @@ class LinkControllerNode(Node):
         self.declare_parameter('weight_distance', 0.7)
         self.declare_parameter('weight_angle', 0.3)
         self.declare_parameter('scheduling_rate_hz', 1000.0)
+        self.declare_parameter('proactive_handover_score_threshold', -80.0)
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -77,6 +78,9 @@ class LinkControllerNode(Node):
         )
         self.scheduling_rate_hz: float = float(
             self.get_parameter('scheduling_rate_hz').value
+        )
+        self.proactive_handover_score_threshold: float = float(
+            self.get_parameter('proactive_handover_score_threshold').value
         )
 
         # 車両名リストのパース
@@ -316,12 +320,19 @@ class LinkControllerNode(Node):
                     active_info.get('antenna_gain_h_plane', -999.0) -
                     active_info.get('path_loss', 999.0)
                 )
-                if best_score > active_score:
+                # 最良スコアが閾値を下回る場合は強制切替しない
+                # （geometry_info 未到達・初期値など信頼できないデータによる誤切替を防ぐ）
+                if best_score < self.proactive_handover_score_threshold:
+                    self.get_logger().debug(
+                        f'リンク切り替え（接続制御）スキップ: best_score={best_score:.1f} < '
+                        f'threshold={self.proactive_handover_score_threshold:.1f}'
+                    )
+                elif best_score > active_score:
                     old_name = active_name
                     self._active_idx = best_idx
                     active_name = self.vehicle_names[self._active_idx]
                     self.get_logger().info(
-                        f'強制リンク切替: {old_name}(DISCONNECTED) → {active_name} '
+                        f'リンク切り替え（接続制御）: {old_name}(DISCONNECTED) → {active_name} '
                         f'(geo_score={best_score:.1f})'
                     )
                     self._last_grant_change_time = current_time

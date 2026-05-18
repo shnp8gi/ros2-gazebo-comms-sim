@@ -190,7 +190,6 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
     
     基地局側で計算可能な幾何学情報（アンテナゲインと距離）を用いて、
     仮想的な受信電力をスコア化し、電波物理的に最適な車両を選択する。
-    実システム（IEEE 802.15.3e PNC）で実現可能な方式。
     
     物理スコア = E面ゲイン(θ_BS) + H面ゲイン(θ_V) - パスロス(距離)
     """

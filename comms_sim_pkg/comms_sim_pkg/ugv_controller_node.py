@@ -30,7 +30,7 @@ import rclpy
 from rclpy.node import Node
 from rclpy.parameter import Parameter
 from rcl_interfaces.msg import ParameterDescriptor
-from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
+from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from geometry_msgs.msg import Twist
 from nav_msgs.msg import Odometry
 from std_msgs.msg import Bool
@@ -121,6 +121,7 @@ class UGVControllerNode(Node):
         self.odom_topic = self.get_parameter('odom_topic').value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
         self.mission_complete_topic = self.get_parameter('mission_complete_topic').value
+        self.is_shinkansen = 'shinkansen' in self.odom_topic
 
         # ウェイポイント解析
         self.waypoints: List[Waypoint] = []
@@ -208,10 +209,17 @@ class UGVControllerNode(Node):
         )
 
         # ミッション完了通知（他ノード向け、例: comms_node）
+        # TRANSIENT_LOCAL（ラッチ型）: sim_logger が遅く起動しても受信できる
+        _mission_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
         self.mission_complete_pub = self.create_publisher(
             Bool,
             self.mission_complete_topic,
-            10
+            _mission_qos
         )
 
         # =====================================================================
@@ -286,6 +294,13 @@ class UGVControllerNode(Node):
         self.world_y = self.current_y + self.odom_offset_y
         self.world_z = self.current_z + self.odom_offset_z
 
+        if self.is_shinkansen:
+            # ウェイポイント間の直線上に完全に投影して固定する
+            px, py, segment_yaw = self.get_current_segment_pose()
+            self.world_x = px
+            self.world_y = py
+            self.current_yaw = segment_yaw
+
         # --- 初期位置の自己補正・検証システム ---
         if not self.initial_position_verified and isinstance(self.spawn_pose, (list, tuple)) and len(self.spawn_pose) >= 3:
             expected_x = float(self.spawn_pose[0])
@@ -347,6 +362,7 @@ class UGVControllerNode(Node):
         # ウェイポイント到達チェック
         if distance < self.waypoint_tolerance:
             self.get_logger().info(
+
                 f'ウェイポイント {self.current_waypoint_idx} 到達！ '
                 f'({target.x}, {target.y})'
             )
@@ -363,6 +379,9 @@ class UGVControllerNode(Node):
         # ヘディング偏差計算
         heading_error = self.normalize_angle(target_heading - self.current_yaw)
 
+        if self.is_shinkansen:
+            heading_error = 0.0
+
         # 速度指令生成
         cmd = Twist()
 
@@ -370,6 +389,9 @@ class UGVControllerNode(Node):
         angular_vel = self.heading_gain * heading_error
         angular_vel = max(-self.max_angular_vel, min(self.max_angular_vel, angular_vel))
         cmd.angular.z = angular_vel
+
+        if self.is_shinkansen:
+            cmd.angular.z = 0.0
 
         # 直進速度（急旋回時は減速）
         turn_factor = 1.0 - min(1.0, abs(heading_error) / (math.pi / 2))
@@ -439,6 +461,55 @@ class UGVControllerNode(Node):
         while angle < -math.pi:
             angle += 2 * math.pi
         return angle
+
+    def get_current_segment_pose(self) -> tuple:
+        """
+        現在走行中のウェイポイント区間（直線）上の投影位置と方位を計算する。
+        """
+        if not self.waypoints or self.current_waypoint_idx >= len(self.waypoints):
+            return self.world_x, self.world_y, self.current_yaw
+
+        # 前の地点 A を決定
+        if self.current_waypoint_idx == 0:
+            ax = float(self.spawn_pose[0])
+            ay = float(self.spawn_pose[1])
+        else:
+            prev_wp = self.waypoints[self.current_waypoint_idx - 1]
+            ax = prev_wp.x
+            ay = prev_wp.y
+
+        # 次の目標地点 B を取得
+        curr_wp = self.waypoints[self.current_waypoint_idx]
+        bx = curr_wp.x
+        by = curr_wp.y
+
+        # ベクトル AB
+        vx = bx - ax
+        vy = by - ay
+        v_len_sq = vx*vx + vy*vy
+
+        # 区間が点の場合（長さ0）は目標点そのまま
+        if v_len_sq < 1e-6:
+            return bx, by, math.atan2(vy, vx)
+
+        # ベクトル AP (P = 現在位置)
+        ux = self.world_x - ax
+        uy = self.world_y - ay
+
+        # 投影比率 t
+        t = (ux * vx + uy * vy) / v_len_sq
+
+        # 区間内 [0, 1] に制限
+        t = max(0.0, min(1.0, t))
+
+        # 投影位置 P'
+        px = ax + t * vx
+        py = ay + t * vy
+
+        # 直線の方位角
+        yaw = math.atan2(vy, vx)
+
+        return px, py, yaw
 
     def is_mission_complete(self) -> bool:
         """ミッション完了状態を確認する。"""

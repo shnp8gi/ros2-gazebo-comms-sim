@@ -31,6 +31,8 @@ UGVと基地局間の通信品質をシミュレーションするROS 2ノード
 from typing import Optional, List, Tuple
 from enum import Enum
 
+import os
+import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
@@ -116,6 +118,7 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('ugv_antenna_relative_rpy', [0.0, 0.0, 0.0])
         self.declare_parameter('base_station_antenna_relative_rpy', [0.0, 0.0, 0.0])
         self.declare_parameter('base_station_pose_topic', '/base_station/pose')
+        self.declare_parameter('base_station_rpy', [0.0, 0.0, 0.0])
         self.declare_parameter('logging_start_trigger', 'on_movement')
         self.declare_parameter('logging_start_topic', '/logging/start')
         self.declare_parameter('max_antenna_attenuation', 30.0)
@@ -159,7 +162,7 @@ class CommsSimulatorNode(Node):
         pl_d0 = self.get_parameter('path_loss.pl_d0').value
 
         # 基地局エンティティの姿勢 (roll, pitch, yaw) [rad]
-        self.base_station_entity_rpy: np.ndarray = np.array([0.0, 0.0, 0.0], dtype=float)
+        self.base_station_entity_rpy: np.ndarray = np.array(self.get_parameter('base_station_rpy').value, dtype=float)
 
         # =====================================================================
         # コンポーネント初期化
@@ -323,6 +326,36 @@ class CommsSimulatorNode(Node):
         # 定期計算タイマー
         # =====================================================================
         period = 1.0 / self.sampling_rate
+        # YAMLからこのアンテナに属する車両のウェイポイントをロード
+        self.waypoints: List[List[float]] = []
+        try:
+            import yaml
+            yaml_path = "/workspace/config/sim_params.yaml"
+            if os.path.exists(yaml_path):
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    vehicles_cfg = config.get('vehicles', [])
+                    for v in vehicles_cfg:
+                        is_match = False
+                        if v.get('name') == self.vehicle_name:
+                            is_match = True
+                        elif 'antennas' in v:
+                            for a in v['antennas']:
+                                if a.get('name') == self.vehicle_name:
+                                    is_match = True
+                                    break
+                        if is_match:
+                            wps_raw = v.get('waypoints', [])
+                            if wps_raw:
+                                if isinstance(wps_raw[0], (list, tuple)):
+                                    self.waypoints = [list(wp) for wp in wps_raw]
+                                else:
+                                    self.waypoints = [wps_raw[i:i+4] for i in range(0, len(wps_raw), 4)]
+                            self.get_logger().info(f'[{self.vehicle_name}] ロードされたウェイポイント数: {len(self.waypoints)}')
+                            break
+        except Exception as e:
+            self.get_logger().warn(f'[{self.vehicle_name}] ウェイポイントのロード失敗: {e}')
+
         self.timer_cb_group = MutuallyExclusiveCallbackGroup()
         self.calc_timer = self.create_timer(
             period, 
@@ -405,6 +438,13 @@ class CommsSimulatorNode(Node):
         # オフセット適用済みの位置を保存（ワールド座標系）
         self.ugv_local_position = odom_pos + self._odom_offset
 
+        if 'shinkansen' in self.vehicle_name:
+            # ウェイポイント間の直線上に完全に投影して固定する
+            px, py, segment_yaw = self.get_current_segment_pose()
+            if px is not None:
+                self.ugv_local_position[0] = px
+                self.ugv_local_position[1] = py
+
         # --- 初期位置の自己補正・検証システム ---
         if not getattr(self, '_initial_position_verified', True) and isinstance(self.ugv_spawn_pose, (list, tuple)) and len(self.ugv_spawn_pose) >= 3:
             expected = np.array([
@@ -444,6 +484,64 @@ class CommsSimulatorNode(Node):
             msg.orientation.z,
             msg.orientation.w
         )
+
+        if 'shinkansen' in self.vehicle_name:
+            px, py, segment_yaw = self.get_current_segment_pose()
+            if segment_yaw is not None:
+                self.ugv_orientation = np.array([0.0, 0.0, segment_yaw], dtype=float)
+
+    def get_current_segment_pose(self) -> tuple:
+        """
+        現在走行中のウェイポイント区間（直線）上の投影位置と方位を計算する。
+        """
+        if not self.waypoints or self.ugv_local_position is None:
+            return None, None, None
+
+        # 現在位置
+        ux = float(self.ugv_local_position[0])
+        uy = float(self.ugv_local_position[1])
+
+        # 現在位置に最も近い投影先セグメントを選択する
+        best_px, best_py = ux, uy
+        best_yaw = 0.0
+        min_dist_sq = float('inf')
+
+        # 前の地点 A
+        ax = float(self.ugv_spawn_pose[0])
+        ay = float(self.ugv_spawn_pose[1])
+
+        for wp in self.waypoints:
+            bx = float(wp[0])
+            by = float(wp[1])
+
+            # ベクトル AB
+            vx = bx - ax
+            vy = by - ay
+            v_len_sq = vx*vx + vy*vy
+
+            if v_len_sq < 1e-6:
+                dist_sq = (ux - bx)**2 + (uy - by)**2
+                if dist_sq < min_dist_sq:
+                    min_dist_sq = dist_sq
+                    best_px, best_py = bx, by
+                    best_yaw = math.atan2(vy, vx)
+            else:
+                # 投影比率 t
+                t = ((ux - ax) * vx + (uy - ay) * vy) / v_len_sq
+                t = max(0.0, min(1.0, t))
+
+                px = ax + t * vx
+                py = ay + t * vy
+
+                dist_sq = (ux - px)**2 + (uy - py)**2
+                if dist_sq < min_dist_sq:
+                    min_dist_sq = dist_sq
+                    best_px, best_py = px, py
+                    best_yaw = math.atan2(vy, vx)
+
+            ax, ay = bx, by
+
+        return best_px, best_py, best_yaw
 
     def set_ugv_local_position(self, position: np.ndarray) -> None:
         """
