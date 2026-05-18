@@ -30,6 +30,8 @@ from typing import Dict, List, Optional
 
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from std_msgs.msg import Bool, Float64
 
 from comms_sim_msgs.msg import CommsQuality
@@ -55,6 +57,7 @@ class LinkControllerNode(Node):
         self.declare_parameter('beam_gain_threshold', 5.0)
         self.declare_parameter('weight_distance', 0.7)
         self.declare_parameter('weight_angle', 0.3)
+        self.declare_parameter('scheduling_rate_hz', 1000.0)
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -71,6 +74,9 @@ class LinkControllerNode(Node):
         )
         self.weight_angle: float = float(
             self.get_parameter('weight_angle').value
+        )
+        self.scheduling_rate_hz: float = float(
+            self.get_parameter('scheduling_rate_hz').value
         )
 
         # 車両名リストのパース
@@ -102,6 +108,7 @@ class LinkControllerNode(Node):
         # =====================================================================
         # 現在リンク権を持つ車両のインデックス
         self._active_idx: int = 0
+        self._last_grant_change_time: float = 0.0
 
         # 各車両の最新RSSI
         self._rssi: Dict[str, float] = {
@@ -191,9 +198,16 @@ class LinkControllerNode(Node):
             self.strategy = SequentialStrategy()
 
         # =====================================================================
-        # スケジューリングタイマー (1000Hz)
+        # スケジューリングタイマー
         # =====================================================================
-        self._schedule_timer = self.create_timer(0.001, self._schedule_tick)
+        self.timer_cb_group = MutuallyExclusiveCallbackGroup()
+        
+        timer_period = 1.0 / self.scheduling_rate_hz if self.scheduling_rate_hz > 0 else 0.001
+        self._schedule_timer = self.create_timer(
+            timer_period, 
+            self._schedule_tick,
+            callback_group=self.timer_cb_group
+        )
 
         self.get_logger().info(
             f'LinkControllerNode 初期化完了\n'
@@ -238,9 +252,22 @@ class LinkControllerNode(Node):
     # =========================================================================
 
     def _schedule_tick(self) -> None:
-        """定期的にリンク権を決定し、各車両にブロードキャストする。"""
+        """
+        定期的にリンク権を決定し、各車両にブロードキャストする。
+        
+        スケジューリングは以下の2フェーズで行われます:
+        【フェーズ1: ポリシーベースのスケジュール決定】
+          設定された scheduling_policy (例: physical_score_priority, sequential 等)
+          に従って、Strategyクラスが「次にリンク権を持つべき車両」を決定します。
+        
+        【フェーズ2: プロアクティブ・ハンドオーバー（通信断絶の回避）】
+          フェーズ1で選ばれた車両が物理的な要因（距離やアンテナ角度など）により
+          実際には通信を確立できていない（DISCONNECTED）場合、通信可能な別の車両を
+          探して強制的にリンク権を切り替える安全装置です。
+        """
         current_time = self.get_clock().now().nanoseconds / 1e9
 
+        # --- フェーズ1: 基本的なスケジューリング実行 ---
         new_idx, log_msg = self.strategy.determine_active_link(
             self._rssi,
             self._mission_complete,
@@ -253,14 +280,19 @@ class LinkControllerNode(Node):
         if log_msg:
             self.get_logger().info(log_msg)
             self._active_idx = new_idx
+            self._last_grant_change_time = current_time
 
+        # --- フェーズ2: プロアクティブ・ハンドオーバー実行 ---
         # 現在のgrant保持者のlink_stateを確認
-        # DISCONNECTED状態の場合、幾何学スコアが最良の車両に即座にgrantを移す
+        # DISCONNECTED状態の場合、物理スコア（受信電力の推定値）が最良の車両に即座にgrantを移す
         active_name = self.vehicle_names[self._active_idx]
         active_info = self._geometry_info.get(active_name, {})
         active_link_state = active_info.get('link_state', 'DISCONNECTED')
 
-        if active_link_state == 'DISCONNECTED' and active_info:
+        # リンク権付与直後は状態が伝播・確立するまでの猶予期間（0.1秒）を設ける
+        grace_period_passed = (current_time - self._last_grant_change_time) > 0.1
+
+        if active_link_state == 'DISCONNECTED' and active_info and grace_period_passed:
             best_score = float('-inf')
             best_idx = None
             for i, name in enumerate(self.vehicle_names):
@@ -269,7 +301,8 @@ class LinkControllerNode(Node):
                 info = self._geometry_info.get(name, {})
                 if not info.get('comm_active', False):
                     continue
-                # 幾何学スコア = E面ゲイン + H面ゲイン - パスロス
+                # 物理スコア = 送信側総ゲイン(E) + 受信側総ゲイン(H) - パスロス
+                # これは実質的にノイズを含まない理想的なRSSI(受信電力)に比例します
                 e_gain = info.get('antenna_gain_e_plane', -999.0)
                 h_gain = info.get('antenna_gain_h_plane', -999.0)
                 path_loss = info.get('path_loss', 999.0)
@@ -291,6 +324,7 @@ class LinkControllerNode(Node):
                         f'強制リンク切替: {old_name}(DISCONNECTED) → {active_name} '
                         f'(geo_score={best_score:.1f})'
                     )
+                    self._last_grant_change_time = current_time
 
         # リンクグラントをパブリッシュ
         for name, pub in self._grant_pubs.items():
@@ -305,9 +339,11 @@ def main(args=None):
     rclpy.init(args=args)
 
     node = LinkControllerNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
 
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:

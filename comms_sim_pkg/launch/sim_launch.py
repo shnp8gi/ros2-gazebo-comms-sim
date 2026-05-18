@@ -647,6 +647,7 @@ def launch_setup(context, *args, **kwargs):
                     parameters=[
                         {
                             'vehicle_names': vehicle_names,
+                            'scheduling_rate_hz': float(link_ctrl_params.get('scheduling_rate_hz', 1000.0)),
                             'scheduling_policy': str(link_ctrl_params.get('scheduling_policy', 'sequential')),
                             'time_slot_duration_s': float(link_ctrl_params.get('time_slot_duration_s', 10.0)),
                             'rssi_threshold': float(link_ctrl_params.get('rssi_threshold', -75.0)),
@@ -668,6 +669,7 @@ def launch_setup(context, *args, **kwargs):
                     'vehicle_names': vehicle_names,
                     'base_vehicle_names': base_vehicle_names,
                     'output_dir': '/workspace/sim_results/',
+                    'log_only_connected': bool(sim_config.get('log_only_connected', True)),
                     'use_sim_time': use_sim_time_bool
                 }
             ]

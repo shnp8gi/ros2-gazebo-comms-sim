@@ -39,6 +39,9 @@ simulation:
 
   # エンティティスポーン用のモデルパスプレフィックス
   model_path_prefix: "/workspace/models"
+  
+  # データログの条件 (true: CONNECTED時のみ記録, false: 全ての通信品質データを記録)
+  log_only_connected: true
 
   # ノード起動タイミング設定
   timing:
@@ -130,6 +133,9 @@ ugv_controller_common:
 # -----------------------------------------------------------------------------
 link_controller_node:
   ros__parameters:
+    # スケジューリング処理を実行する周期 (Hz)
+    scheduling_rate_hz: 1000.0
+
     # スケジューリングポリシー
     #   sequential: 車両順に通信、ミッション完了で次へ切替
     #   round_robin: タイムスロットで順番に切替
@@ -252,7 +258,7 @@ spawn_entities:
     antenna_offset: [ 0.0, 0.0, 2.79 ]
     # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
     # フォーマット: [roll, pitch, yaw]
-    antenna_relative_rpy: [ 0.0, -0.03, 3.40 ]
+    antenna_relative_rpy: [ 0.0, -0.03, -0.785 ]
 
 # -------------------------------------------------------------------------------------------------------------------------------
 # 車両リスト（複数台対応）
@@ -289,11 +295,11 @@ vehicles:
       - [ 100.0, 0.0, 0.0, 83.33 ]
     antennas:
       - name: "shinkansen_front"
-        offset: [ 25.0, 0.0, 3.5 ]
+        offset: [ 1.0, 0.0, 3.5 ]
         relative_rpy: [ 0.0, 0.03, 0.0 ]
       - name: "shinkansen_mid"
         offset: [ 0.0, 0.0, 3.5 ]
         relative_rpy: [ 0.0, 0.03, 0.0 ]
       - name: "shinkansen_rear"
-        offset: [ -25, 0.0, 3.5 ]
+        offset: [ -1, 0.0, 3.5 ]
         relative_rpy: [ 0.0, 0.03, 0.0 ]

@@ -28,6 +28,7 @@ class SimLoggerNode(Node):
         self.declare_parameter('vehicle_names', [''])
         self.declare_parameter('base_vehicle_names', [''])
         self.declare_parameter('output_dir', '/workspace/sim_results/')
+        self.declare_parameter('log_only_connected', True)
         
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         if isinstance(vehicle_names_raw, list):
@@ -42,6 +43,7 @@ class SimLoggerNode(Node):
             self.base_vehicle_names = self.vehicle_names.copy()
             
         self.output_dir = self.get_parameter('output_dir').value
+        self.log_only_connected = self.get_parameter('log_only_connected').value
         
         self.data_log: List[dict] = []
         self._csv_saved = False
@@ -128,8 +130,8 @@ class SimLoggerNode(Node):
 
 
     def _on_quality(self, vehicle_name: str, msg: CommsQuality):
-        # リンク確立(CONNECTED)状態の期間のみログに残す
-        if msg.link_state != 'CONNECTED':
+        # リンク確立(CONNECTED)状態の期間のみログに残す（設定パラメータに従う）
+        if self.log_only_connected and msg.link_state != 'CONNECTED':
             return
             
         current_time = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9

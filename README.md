@@ -73,8 +73,10 @@ ros2-gazebo-comms-sim/
 ├── sim_results/                      # CSVログ出力ディレクトリ（comms_node.pyの出力先）
 │
 ├── docker-compose.yml
+├── docker-compose.gpu.yml            # GPU設定オーバーライド
 ├── Dockerfile
 ├── entrypoint.sh
+├── start.sh                          # コンテナ自動起動・GPU判定スクリプト
 ├── README.md
 ├── specification.md
 └── .gitignore
@@ -164,56 +166,47 @@ git clone git@github.com:your-username/ros2-gazebo-comms-sim.git
 cd ros2-gazebo-comms-sim
 ```
 
-### 5. Dockerイメージのビルド
+### 5. ワークスペースのビルド（初回およびコード変更時）
 
-```bash
-docker compose build
-```
-
-### 6. ワークスペースのビルド
-
+専用のビルドコンテナを使ってパッケージをビルドします。（イメージは自動でビルドされます）
 ```bash
 docker compose run --rm build
 ```
 
 ## 📺 シミュレータの実行
 
-### GUIモード（推奨）
+### コンテナの起動（自動GPU判定）
 
-X11 Forwardingを使用してGazeboのGUIを表示します。
+`start.sh` を使用してコンテナをバックグラウンドで起動します。スクリプトが自動的にNVIDIA GPUの有無を判定し、最適な設定（CPU/GPU）で起動します。同時にX11のアクセス許可も行われます。
 
 #### Linux / WSL2
 
-##### 1. X11アクセスを許可（初回のみ）
-
 ```bash
-xhost +local:docker
+./start.sh
 ```
 
-##### 2. GUIモードでコンテナ起動
+コンテナが起動したら、以下のコマンドでコンテナ内のシェルに接続します。
 
 ```bash
-docker compose run --rm sim-gui
+docker compose exec sim bash
 ```
 
 以下コンテナ内
 
-##### 3. パッケージのビルド
+##### ワークスペースのセットアップ
+
+新しく開いたシェルにビルド済みのパッケージを認識させます。（※コードを修正した場合は、ここで `colcon build --symlink-install` を実行して再ビルドすることも可能です）
 
 ```bash
-colcon build --cmake-args -DBUILD_TESTING=ON
+source install/setup.bash
 ```
 
-##### 4. ビルドしたパッケージをROS2の環境に設定する
+##### シミュレーション起動
+
+X11 Forwarding経由でもサーバー側のGPUを使って高速描画を行うため、**`vglrun -d egl`** を先頭につけてシミュレーションを実行します。（※ホスト上にXサーバーが無くても、EGLバックエンドにより直接GPUにアクセスできます）
 
 ```bash
-. install/setup.sh
-```
-
-##### 5. シミュレーション起動
-
-```bash
-ros2 launch comms_sim_pkg sim_launch.py
+vglrun -d egl ros2 launch comms_sim_pkg sim_launch.py
 ```
 
 #### Windows (WSL2 + X Server)
@@ -230,13 +223,9 @@ export DISPLAY=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}'):0.0
 
 ### CUIモード（Headless）
 
-GUIなしで高速にシミュレーションを実行します。
+GUIなしで高速にシミュレーションを実行します。GUI起動時と同様に `start.sh` で起動し `docker compose exec sim bash` で中に入った後、以下のコマンドを実行します。
 
 ```bash
-# CUIモードでコンテナ起動
-docker compose run --rm sim-cui
-
-# コンテナ内でHeadlessシミュレーション起動
 ros2 launch comms_sim_pkg sim_launch.py headless:=true
 ```
 

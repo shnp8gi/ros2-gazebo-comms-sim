@@ -34,6 +34,8 @@ from enum import Enum
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry
@@ -321,7 +323,12 @@ class CommsSimulatorNode(Node):
         # 定期計算タイマー
         # =====================================================================
         period = 1.0 / self.sampling_rate
-        self.calc_timer = self.create_timer(period, self.calculate_and_publish)
+        self.timer_cb_group = MutuallyExclusiveCallbackGroup()
+        self.calc_timer = self.create_timer(
+            period, 
+            self.calculate_and_publish,
+            callback_group=self.timer_cb_group
+        )
 
         self.get_logger().info(
             f'CommsSimulatorNode 初期化完了\n'
@@ -672,8 +679,8 @@ class CommsSimulatorNode(Node):
             msg.base_station_x = self.base_station_position[0]
             msg.base_station_y = self.base_station_position[1]
             msg.base_station_z = bs_antenna_pos[2]
-            msg.antenna_gain_e_plane = float(rx_e)
-            msg.antenna_gain_h_plane = float(rx_h)
+            msg.antenna_gain_e_plane = float(tx_total)
+            msg.antenna_gain_h_plane = float(rx_total)
             msg.path_loss = metrics['path_loss']
             msg.comm_active = self.comm_active
             msg.link_state = self.link_state.name
@@ -701,9 +708,11 @@ def main(args=None):
     rclpy.init(args=args)
 
     node = CommsSimulatorNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
 
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
@@ -711,7 +720,7 @@ def main(args=None):
         try:
             rclpy.shutdown()
         except Exception:
-            pass  # 既にシャットダウン済みの場合は無視
+            pass
 
 
 if __name__ == '__main__':

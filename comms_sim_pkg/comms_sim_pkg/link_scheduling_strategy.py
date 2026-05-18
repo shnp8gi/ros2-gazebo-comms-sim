@@ -217,14 +217,14 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
             
             e_gain = info.get('antenna_gain_e_plane', -999.0)
             h_gain = info.get('antenna_gain_h_plane', -999.0)
-            path_loss = info.get('path_loss', 999.0)
             dist = info.get('distance', float('inf'))
+            rssi = rssi_dict.get(name, -999.0)
             
             if e_gain < self.beam_gain_threshold or h_gain < self.beam_gain_threshold:
                 continue
             
-            # 物理スコア: アンテナアライメントと距離の統合指標
-            phys_score = e_gain + h_gain - path_loss
+            # 物理スコア: comms_nodeが計算した実際のRSSIを使用する
+            phys_score = rssi
             
             candidates.append((name, phys_score, dist, e_gain, h_gain))
 
