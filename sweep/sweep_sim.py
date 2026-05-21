@@ -8,13 +8,13 @@ import shutil
 import re
 import datetime
 
-PROGRESS_LOG = "sweep_progress.log"
+PROGRESS_LOG = "sweep/log/sweep_progress.log"
 # 1タスクあたりの最大待機時間 [秒]
 TASK_TIMEOUT_SEC = 120
 # スイープ時の加速倍率 (ヘッドレス時のみ有効。1.0=リアルタイム)
-SWEEP_REAL_TIME_FACTOR = 0.0
+SWEEP_REAL_TIME_FACTOR = 1.0
 # パラメータスイープを繰り返す回数
-NUM_RUNS = 1
+NUM_RUNS = 2
 
 def log_progress(line: str):
     """進捗ログにタイムスタンプ付きで1行書き込む"""
@@ -25,8 +25,8 @@ def log_progress(line: str):
 # ---------------------------------------------------------
 # パラメータスイープ設定
 # ---------------------------------------------------------
-Y_POSITIONS = [2, 3, 4] # 基地局のY位置 (m)
-ANGLES_DEG = [i * 0.2 for i in range(26)] # アンテナの角度 (-X方向からのズレ, deg)
+Y_POSITIONS = [1] # 基地局のY位置 (m)
+ANGLES_DEG = [i*0.2 for i in range(15, 40)]
 
 
 CONFIG_PATH = "config/sim_params.yaml"
@@ -78,11 +78,17 @@ def average_summaries(summary_files, output_file):
     averaged.to_csv(output_file, index=False)
 
 def main():
-    # バックアップの作成
-    if not os.path.exists(BACKUP_PATH):
-        shutil.copy2(CONFIG_PATH, BACKUP_PATH)
+    # 常に実行時の最新設定ファイルをバックアップする
+    if os.path.exists(BACKUP_PATH):
+        os.remove(BACKUP_PATH)
+    shutil.copy2(CONFIG_PATH, BACKUP_PATH)
 
     sweep_start_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+
+    # 進捗ログの保存先を実行時のタイムスタンプサブディレクトリ配下に動的決定
+    global PROGRESS_LOG
+    PROGRESS_LOG = f"sweep/log/{sweep_start_time}/sweep_progress.log"
+    os.makedirs(os.path.dirname(PROGRESS_LOG), exist_ok=True)
 
     total_tasks_per_run = len(Y_POSITIONS) * len(ANGLES_DEG)
     total_runs_tasks = total_tasks_per_run * NUM_RUNS
@@ -167,13 +173,19 @@ def main():
                 with open(CONFIG_PATH, 'w', encoding='utf-8') as f:
                     f.write(content)
 
+                # 書き込み後の内容を検証
+                with open(CONFIG_PATH, 'r', encoding='utf-8') as f_verify:
+                    verify_content = f_verify.read()
+                    verify_match = re.findall(r'summary_filename:\s*"(.*?)"', verify_content)
+                    print(f"DEBUG_VERIFY: Written summary_filename in yaml is: {verify_match}")
+
                 # シミュレーションの実行
                 # Docker内かホストかを判定してコマンドを選択
                 is_docker = os.path.exists('/.dockerenv')
                 if is_docker:
-                    cmd = ["bash", "-c", "source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch comms_sim_pkg sim_launch.py"]
+                    cmd = ["bash", "-c", "export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/config/fastdds_no_shm.xml && source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch comms_sim_pkg sim_launch.py"]
                 else:
-                    cmd = ["docker", "compose", "exec", "-T", "sim", "bash", "-c", "source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch comms_sim_pkg sim_launch.py"]
+                    cmd = ["docker", "compose", "exec", "-T", "sim", "bash", "-c", "export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/config/fastdds_no_shm.xml && source /opt/ros/humble/setup.bash && source install/setup.bash && ros2 launch comms_sim_pkg sim_launch.py"]
 
                 # os.setsid() で新規プロセスグループを作成し、タイムアウト時に
                 # gz sim / ROS ノードなど孫プロセスまで SIGKILL で一括終了できるようにする

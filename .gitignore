@@ -122,13 +122,18 @@ $RECYCLE.BIN/
 *.sqlite
 
 
-# Keep log directory structure but ignore contents
+# Keep simulation results directory structure but ignore data contents
 sim_results/*
 !sim_results/.gitkeep
+
+# Keep sweep logs directory structure but ignore log files
+sweep/log/*
+!sweep/log/.gitkeep
 
 # -----------------------------------------------------------------------------
 # Temporary Files
 # -----------------------------------------------------------------------------
+sweep/test_regex.py
 *.tmp
 *.temp
 *.bak

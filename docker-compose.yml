@@ -20,6 +20,7 @@ services:
       - gz_cache:/root/.gz
     
     network_mode: host
+    ipc: host
     privileged: true
     stdin_open: true
     tty: true

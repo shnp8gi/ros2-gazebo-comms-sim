@@ -31,7 +31,7 @@ _MISSION_QOS = QoSProfile(
 )
 
 # 車両停止を検知してから強制シャットダウンするまでの猶予時間 [壁時計秒]
-# RTF=10 なら 3s壁時計 = 30s シミュレーション時間
+# RTF=10（固定）なら 3s壁時計 = 30s シミュレーション時間
 _WATCHDOG_STOP_TIMEOUT_SEC = 3.0
 
 class SimLoggerNode(Node):
@@ -112,14 +112,14 @@ class SimLoggerNode(Node):
                 if self.logging_level == 3:
                     fields = ['time_s', 'vehicle_name', 'distance_m', 'rssi_dBm', 'throughput_Gbps', 
                               'total_data_MB', 'path_loss_dB', 'e_gain_dB', 'h_gain_dB',
-                              'ugv_x_m', 'ugv_y_m', 'ugv_z_m']
+                              'ugv_x_m', 'ugv_y_m', 'ugv_z_m', 'bs_x_m', 'bs_y_m', 'bs_z_m']
                 else: # Level 4
                     fields = ['time_s', 'vehicle_time_s', 'vehicle_name', 'has_link_grant', 'distance_m', 
                               'rssi_dBm', 'throughput_Gbps', 'total_data_MB', 'path_loss_dB', 'e_gain_dB', 
                               'h_gain_dB', 'comm_active', 'ugv_x_m', 'ugv_y_m', 'ugv_z_m', 
                               'bs_x_m', 'bs_y_m', 'bs_z_m', 'link_state']
                 
-                self.ts_writers[vn] = csv.DictWriter(f, fieldnames=fields)
+                self.ts_writers[vn] = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
                 self.ts_writers[vn].writeheader()
                 self._set_file_ownership(path)
 
@@ -179,6 +179,8 @@ class SimLoggerNode(Node):
             self._mission_status[vehicle_name] = True
             if all(self._mission_status.values()):
                 self.get_logger().info('=== ミッション完了。シミュレーションを終了します ===')
+                import time
+                time.sleep(0.5)
                 sys.exit(0)
 
     def _watchdog_tick(self) -> None:
@@ -219,9 +221,8 @@ class SimLoggerNode(Node):
         vehicle_elapsed = current_time - self._vehicle_start_times[vehicle_name]
         has_grant = self._link_grants.get(vehicle_name, False)
         
-        dt = 0.0
-        if self._last_time[vehicle_name] is not None:
-            dt = current_time - self._last_time[vehicle_name]
+        # 各comms_nodeのサンプリング周波数(100Hz)に合わせた決定論的な固定時間ステップを使用
+        dt = 0.01
         self._last_time[vehicle_name] = current_time
 
         # --- Level 1: サマリーの集計 ---

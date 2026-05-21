@@ -59,6 +59,9 @@ class LinkControllerNode(Node):
         self.declare_parameter('weight_angle', 0.3)
         self.declare_parameter('scheduling_rate_hz', 1000.0)
         self.declare_parameter('proactive_handover_score_threshold', -80.0)
+        self.declare_parameter('min_hold_time_s', 1.0)
+        self.declare_parameter('switch_margin_db', 2.0)
+        self.declare_parameter('proactive_grace_period_s', 0.5)
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -81,6 +84,15 @@ class LinkControllerNode(Node):
         )
         self.proactive_handover_score_threshold: float = float(
             self.get_parameter('proactive_handover_score_threshold').value
+        )
+        self.min_hold_time_s: float = float(
+            self.get_parameter('min_hold_time_s').value
+        )
+        self.switch_margin_db: float = float(
+            self.get_parameter('switch_margin_db').value
+        )
+        self.proactive_grace_period_s: float = float(
+            self.get_parameter('proactive_grace_period_s').value
         )
 
         # 車両名リストのパース
@@ -131,6 +143,9 @@ class LinkControllerNode(Node):
 
         # round_robin 用: 最後にスロットを切り替えた時刻
         self._last_slot_switch_time: Optional[float] = None
+
+        # 決定論的タイムスタンプ同期用バッファ
+        self._quality_buffer: Dict[tuple, Dict[str, object]] = {}
 
         # =====================================================================
         # サブスクライバ・パブリッシャの動的生成
@@ -195,23 +210,27 @@ class LinkControllerNode(Node):
         elif self.scheduling_policy == 'geometric_beam_priority':
             self.strategy = GeometricBeamPriorityStrategy(self.beam_gain_threshold)
         elif self.scheduling_policy == 'physical_score_priority':
-            self.strategy = PhysicalScorePriorityStrategy(self.beam_gain_threshold)
+            self.strategy = PhysicalScorePriorityStrategy(
+                self.beam_gain_threshold,
+                self.min_hold_time_s,
+                self.switch_margin_db,
+                self.proactive_handover_score_threshold
+            )
         elif self.scheduling_policy == 'geometric_weighted':
             self.strategy = GeometricWeightedStrategy(self.weight_distance, self.weight_angle)
         else:
             self.strategy = SequentialStrategy()
 
         # =====================================================================
-        # スケジューリングタイマー
+        # スケジューリングタイマー (決定論的動作のため、_on_comms_quality内で同期呼び出しされます)
         # =====================================================================
-        self.timer_cb_group = MutuallyExclusiveCallbackGroup()
-        
-        timer_period = 1.0 / self.scheduling_rate_hz if self.scheduling_rate_hz > 0 else 0.001
-        self._schedule_timer = self.create_timer(
-            timer_period, 
-            self._schedule_tick,
-            callback_group=self.timer_cb_group
-        )
+        # self.timer_cb_group = MutuallyExclusiveCallbackGroup()
+        # timer_period = 1.0 / self.scheduling_rate_hz if self.scheduling_rate_hz > 0 else 0.001
+        # self._schedule_timer = self.create_timer(
+        #     timer_period, 
+        #     self._schedule_tick,
+        #     callback_group=self.timer_cb_group
+        # )
 
         self.get_logger().info(
             f'LinkControllerNode 初期化完了\n'
@@ -230,16 +249,36 @@ class LinkControllerNode(Node):
         self._rssi[vehicle_name] = msg.data
 
     def _on_comms_quality(self, vehicle_name: str, msg: CommsQuality) -> None:
-        """各車両からの通信品質・幾何学情報を受信。"""
-        self._geometry_info[vehicle_name] = {
-            'distance': msg.distance,
-            'antenna_gain_e_plane': msg.antenna_gain_e_plane,
-            'antenna_gain_h_plane': msg.antenna_gain_h_plane,
-            'path_loss': msg.path_loss,
-            'comm_active': msg.comm_active,
-            'link_state': msg.link_state,
-            'rssi': msg.rssi
-        }
+        """各車両からの通信品質・幾何学情報を受信。タイムスタンプ同期バッファで管理。"""
+        stamp_key = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+        if stamp_key not in self._quality_buffer:
+            self._quality_buffer[stamp_key] = {}
+        
+        self._quality_buffer[stamp_key][vehicle_name] = msg
+        
+        # すべての車両データがこのタイムスタンプで揃ったか確認
+        if len(self._quality_buffer[stamp_key]) == len(self.vehicle_names):
+            # すべて揃ったので幾何情報を一括更新してスケジューリングを実行
+            for vn in self.vehicle_names:
+                m = self._quality_buffer[stamp_key][vn]
+                self._geometry_info[vn] = {
+                    'distance': m.distance,
+                    'antenna_gain_e_plane': m.antenna_gain_e_plane,
+                    'antenna_gain_h_plane': m.antenna_gain_h_plane,
+                    'path_loss': m.path_loss,
+                    'comm_active': m.comm_active,
+                    'link_state': m.link_state,
+                    'rssi': m.rssi
+                }
+            
+            # スケジュール処理を実行
+            current_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
+            self._schedule_tick(current_time)
+            
+            # メモリ節約のため、このスタンプとそれより古いスタンプを削除
+            keys_to_remove = [k for k in self._quality_buffer.keys() if k[0] < stamp_key[0] or (k[0] == stamp_key[0] and k[1] <= stamp_key[1])]
+            for k in keys_to_remove:
+                self._quality_buffer.pop(k, None)
 
     def _on_mission_complete(self, vehicle_name: str, msg: Bool) -> None:
         """各車両のミッション完了通知を受信。"""
@@ -255,7 +294,7 @@ class LinkControllerNode(Node):
     # スケジューリング
     # =========================================================================
 
-    def _schedule_tick(self) -> None:
+    def _schedule_tick(self, current_time: Optional[float] = None) -> None:
         """
         定期的にリンク権を決定し、各車両にブロードキャストする。
         
@@ -269,7 +308,8 @@ class LinkControllerNode(Node):
           実際には通信を確立できていない（DISCONNECTED）場合、通信可能な別の車両を
           探して強制的にリンク権を切り替える安全装置です。
         """
-        current_time = self.get_clock().now().nanoseconds / 1e9
+        if current_time is None:
+            current_time = self.get_clock().now().nanoseconds / 1e9
 
         # --- フェーズ1: 基本的なスケジューリング実行 ---
         new_idx, log_msg = self.strategy.determine_active_link(
@@ -294,9 +334,10 @@ class LinkControllerNode(Node):
         active_link_state = active_info.get('link_state', 'DISCONNECTED')
 
         # リンク権付与直後は状態が伝播・確立するまでの猶予期間（0.1秒）を設ける
-        grace_period_passed = (current_time - self._last_grant_change_time) > 0.1
+        grace_period_passed = (current_time - self._last_grant_change_time) > self.proactive_grace_period_s
+        hold_time_passed = (current_time - self._last_grant_change_time) >= self.min_hold_time_s
 
-        if active_link_state == 'DISCONNECTED' and active_info and grace_period_passed:
+        if active_link_state == 'DISCONNECTED' and active_info and grace_period_passed and hold_time_passed:
             best_score = float('-inf')
             best_idx = None
             for i, name in enumerate(self.vehicle_names):
@@ -327,7 +368,7 @@ class LinkControllerNode(Node):
                         f'リンク切り替え（接続制御）スキップ: best_score={best_score:.1f} < '
                         f'threshold={self.proactive_handover_score_threshold:.1f}'
                     )
-                elif best_score > active_score:
+                elif best_score > active_score + self.switch_margin_db:
                     old_name = active_name
                     self._active_idx = best_idx
                     active_name = self.vehicle_names[self._active_idx]

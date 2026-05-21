@@ -223,10 +223,10 @@ class UGVControllerNode(Node):
         )
 
         # =====================================================================
-        # 制御タイマー
+        # 制御タイマー (決定論的動作のため、odom_callback内で直接呼び出します)
         # =====================================================================
-        period = 1.0 / self.control_rate
-        self.control_timer = self.create_timer(period, self.control_loop)
+        # period = 1.0 / self.control_rate
+        # self.control_timer = self.create_timer(period, self.control_loop)
 
         self.get_logger().info(
             f'UGVControllerNode 初期化完了\n'
@@ -279,16 +279,27 @@ class UGVControllerNode(Node):
         self.odom_received = True
 
         # スポーン位置を使ってodom→ワールドオフセットを1回だけ計算
-        if (not self.odom_offset_set and isinstance(self.spawn_pose, (list, tuple))
-                and len(self.spawn_pose) >= 3):
-            self.odom_offset_x = float(self.spawn_pose[0]) - self.current_x
-            self.odom_offset_y = float(self.spawn_pose[1]) - self.current_y
-            self.odom_offset_z = float(self.spawn_pose[2]) - self.current_z
-            self.odom_offset_set = True
-            self.get_logger().info(
-                f'odomオフセット初回計算: '
-                f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
-            )
+        # 古いシミュレーションの残存メッセージを無視するため、スポーン位置付近（<= 10.0m）のメッセージのみ採用する
+        if not self.odom_offset_set:
+            if isinstance(self.spawn_pose, (list, tuple)) and len(self.spawn_pose) >= 3:
+                spawn_x = float(self.spawn_pose[0])
+                spawn_y = float(self.spawn_pose[1])
+                spawn_z = float(self.spawn_pose[2])
+                dist_to_spawn = math.sqrt((self.current_x - spawn_x)**2 + (self.current_y - spawn_y)**2 + (self.current_z - spawn_z)**2)
+                if dist_to_spawn > 10.0:
+                    self.get_logger().debug(
+                        f'古いシミュレーションの残存オドメトリデータを検出 (スポーン位置からの距離 {dist_to_spawn:.1f}m)。無視します。'
+                    )
+                    return
+
+                self.odom_offset_x = spawn_x - self.current_x
+                self.odom_offset_y = spawn_y - self.current_y
+                self.odom_offset_z = spawn_z - self.current_z
+                self.odom_offset_set = True
+                self.get_logger().info(
+                    f'odomオフセット初回計算: '
+                    f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
+                )
 
         self.world_x = self.current_x + self.odom_offset_x
         self.world_y = self.current_y + self.odom_offset_y
@@ -335,6 +346,9 @@ class UGVControllerNode(Node):
             position = np.array([self.world_x, self.world_y, self.world_z])
             self.position_callback(position)
 
+        # オドメトリ更新に同期して制御ループを実行
+        self.control_loop()
+
     def control_loop(self) -> None:
         """メイン制御ループ。"""
         if not self.odom_received:
@@ -344,6 +358,21 @@ class UGVControllerNode(Node):
         if not getattr(self, 'initial_position_verified', True):
             self.get_logger().debug('初期位置の検証・補正中...', throttle_duration_sec=2.0)
             return
+
+        # 同期起動プロトコル: sim_logger_node が mission_complete トピックにサブスクライブ
+        # するまで発車を待機する。これにより、ノード起動順序の壁時計タイミングによる
+        # 非決定的な初期状態を完全に排除する。
+        # (link_controller_node + sim_logger_node の2つが購読する)
+        if not getattr(self, '_logger_ready', False):
+            sub_count = self.count_subscribers(self.mission_complete_topic)
+            if sub_count < 2:
+                self.get_logger().info(
+                    f'ロガー起動待機中... (mission_complete 購読者数: {sub_count}/2)',
+                    throttle_duration_sec=2.0
+                )
+                return
+            self._logger_ready = True
+            self.get_logger().info('全ノード準備完了。車両移動を開始します。')
 
         if self.mission_complete:
             return

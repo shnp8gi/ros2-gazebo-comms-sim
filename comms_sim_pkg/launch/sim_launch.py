@@ -717,6 +717,15 @@ def launch_setup(context, *args, **kwargs):
                             'scheduling_policy': str(link_ctrl_params.get('scheduling_policy', 'sequential')),
                             'time_slot_duration_s': float(link_ctrl_params.get('time_slot_duration_s', 10.0)),
                             'rssi_threshold': float(link_ctrl_params.get('rssi_threshold', -75.0)),
+                            'beam_gain_threshold': float(link_ctrl_params.get('beam_gain_threshold', 5.0)),
+                            'weight_distance': float(link_ctrl_params.get('weight_distance', 0.7)),
+                            'weight_angle': float(link_ctrl_params.get('weight_angle', 0.3)),
+                            'proactive_handover_score_threshold': float(
+                                link_ctrl_params.get('proactive_handover_score_threshold', -80.0)
+                            ),
+                            'min_hold_time_s': float(link_ctrl_params.get('min_hold_time_s', 1.0)),
+                            'switch_margin_db': float(link_ctrl_params.get('switch_margin_db', 2.0)),
+                            'proactive_grace_period_s': float(link_ctrl_params.get('proactive_grace_period_s', 0.5)),
                             'use_sim_time': use_sim_time_bool
                         }
                     ]

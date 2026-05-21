@@ -32,8 +32,30 @@ except Exception:
     TOTAL_TASKS = len(Y_POSITIONS) * len(ANGLES_DEG)
 
 
-PROGRESS_LOG = "sweep_progress.log"
+PROGRESS_LOG_DEFAULT = "sweep/log/sweep_progress.log"
 SIM_RESULTS_DIR = "sim_results"
+
+def find_latest_progress_log():
+    """sweep/log/ 配下から最も新しいタイムスタンプフォルダ内の sweep_progress.log を探す"""
+    import glob
+    pattern = os.path.join("sweep", "log", "*", "sweep_progress.log")
+    logs = glob.glob(pattern)
+    if not logs:
+        # フォールバックとして sweep/log/sweep_progress.log や sweep_progress.log も探す
+        fallback_patterns = [
+            os.path.join("sweep", "log", "sweep_progress.log"),
+            "sweep_progress.log"
+        ]
+        for p in fallback_patterns:
+            if os.path.exists(p):
+                return p
+        return PROGRESS_LOG_DEFAULT
+    
+    # タイムスタンプ付きディレクトリをソートして最新のものを取得
+    logs.sort()
+    return logs[-1]
+
+PROGRESS_LOG = find_latest_progress_log()
 
 
 def parse_progress_log(log_path: str):

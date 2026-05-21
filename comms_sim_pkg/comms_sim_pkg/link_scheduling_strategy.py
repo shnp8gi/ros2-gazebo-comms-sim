@@ -192,9 +192,17 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
     仮想的な受信電力をスコア化し、電波物理的に最適な車両を選択する。
     
     物理スコア = E面ゲイン(θ_BS) + H面ゲイン(θ_V) - パスロス(距離)
+    
+    注意: rssi_dict（各comms_nodeから非同期に到着するRSSI）ではなく、
+    geometry_infoの幾何学情報を使用する。これにより、3つのcomms_nodeの
+    RSSI publish到着順序による非決定的なレースコンディションを排除する。
     """
-    def __init__(self, beam_gain_threshold: float):
+    def __init__(self, beam_gain_threshold: float, min_hold_time_s: float = 0.0, switch_margin_db: float = 0.0, score_threshold: float = -80.0):
         self.beam_gain_threshold = beam_gain_threshold
+        self.min_hold_time_s = float(min_hold_time_s)
+        self.switch_margin_db = float(switch_margin_db)
+        self.score_threshold = float(score_threshold)
+        self._last_switch_time: Optional[float] = None
 
     def determine_active_link(
         self, 
@@ -217,13 +225,13 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
             e_gain = info.get('antenna_gain_e_plane', -999.0)
             h_gain = info.get('antenna_gain_h_plane', -999.0)
             dist = info.get('distance', float('inf'))
-            rssi = rssi_dict.get(name, -999.0)
+            path_loss = info.get('path_loss', 999.0)
             
             if e_gain < self.beam_gain_threshold or h_gain < self.beam_gain_threshold:
                 continue
             
-            # 物理スコア: comms_nodeが計算した実際のRSSIを使用する
-            phys_score = rssi
+            # 物理スコア: geometry_infoの幾何学情報から算出（決定論的）
+            phys_score = e_gain + h_gain - path_loss
             
             candidates.append((name, phys_score, dist, e_gain, h_gain))
 
@@ -238,11 +246,32 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
 
         best_idx = vehicle_names.index(best_name)
         if best_idx != current_active_idx:
-            old_name = vehicle_names[current_active_idx]
+            # 最良候補の物理スコアが閾値未満なら、遠すぎて通信不可能と判断し、切替を行わない
+            if best_score < self.score_threshold:
+                return current_active_idx, None
+
+            if self._last_switch_time is not None:
+                elapsed = current_time - self._last_switch_time
+                if elapsed < self.min_hold_time_s:
+                    return current_active_idx, None
+
+            # 現在のアクティブ車両のスコアも幾何学情報から算出
+            current_name = vehicle_names[current_active_idx]
+            current_info = geometry_info.get(current_name, {})
+            current_score = (
+                current_info.get('antenna_gain_e_plane', -999.0) +
+                current_info.get('antenna_gain_h_plane', -999.0) -
+                current_info.get('path_loss', 999.0)
+            )
+            if best_score < current_score + self.switch_margin_db:
+                return current_active_idx, None
+
+            old_name = current_name
             msg = (
                 f'リンク切替: {old_name} → {best_name} '
                 f'(phys_score={best_score:.1f}, dist={best_dist:.1f}m)'
             )
+            self._last_switch_time = current_time
             return best_idx, msg
             
         return current_active_idx, None

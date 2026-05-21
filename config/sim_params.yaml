@@ -22,7 +22,7 @@ ros_gz_bridge:
 # シミュレーション設定
 # -----------------------------------------------------------------------------
 simulation:
-  summary_filename: "sweep_summary_20260518_204046_run1.csv"
+  summary_filename: "sweep_summary_20260519_031343_run1.csv"
   # ワールドファイルパス
   world_file: "/workspace/comms_sim_pkg/resource/minimal_world.sdf"
 
@@ -33,7 +33,7 @@ simulation:
   verbosity: 2
 
   # リアルタイム倍率 (1.0 = リアルタイム, >1.0 = 加速)
-  real_time_factor: 0.0
+  real_time_factor: 1.0
 
   # ヘッドレスモード (true: GUI無し, false: GUI有り)
   headless: true
@@ -160,11 +160,11 @@ link_controller_node:
     # -------------------------------------------------------------------------
     # 幾何学ベース制御用パラメータ (geometric_* ポリシー時に有効)
     # -------------------------------------------------------------------------
-    # [geometric_beam_priority 用] 
+    # [geometric_beam_priority 用]
     # 対象を絞り込むための最小アンテナゲイン閾値 [dBi]
     beam_gain_threshold: 5.0
 
-    # [geometric_weighted 用] 
+    # [geometric_weighted 用]
     # 距離の近さに対する重み係数 (0.0 ~ 1.0)
     weight_distance: 0.7
 
@@ -174,6 +174,15 @@ link_controller_node:
     # -------------------------------------------------------------------------
     # プロアクティブ・ハンドオーバー用パラメータ
     # -------------------------------------------------------------------------
+    # 切替後に最低限リンクを保持する時間 [s] (0.05s = 50ms)
+    min_hold_time_s: 0.05
+
+    # 切替マージン [dB] (1.0dB 以上を推奨)
+    switch_margin_db: 0.1
+
+    # リンク付与直後のフェーズ2猶予時間 [s] (50msを推奨)
+    proactive_grace_period_s: 0.05
+
     # 強制リンク切替（フェーズ2）を実行するための最低物理スコア閾値
     # 物理スコア = E面ゲイン + H面ゲイン - パスロス [dB]
     # best_score がこの値を下回る場合は強制切替を行わない
@@ -266,15 +275,15 @@ spawn_entities:
     model_uri: "models://antenna"
     name: "antenna"
     # ポーズ: [x, y, z, roll, pitch, yaw]
-    pose: [ 0.0, 1, 0.0, 0.0, 0.0, -1.5708 ]
+    pose: [0.0, 1, 0.0, 0.0, 0.0, -1.5708]
     static: true
     # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
     # （通信計算に使用: アンテナ位置 = pose + antenna_offset）
     # antenna.daeメッシュ基準: コリジョンシリンダ高さ3.0m、中心0.95m
-    antenna_offset: [ 0.0, 0.0, 1.00 ]
+    antenna_offset: [0.0, 0.0, 1.00]
     # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
     # フォーマット: [roll, pitch, yaw]
-    antenna_relative_rpy: [ 0.0, 0.0, -1.5708 ]
+    antenna_relative_rpy: [0.0, 0.0, -1.4312]
 
 # -------------------------------------------------------------------------------------------------------------------------------
 # 車両リスト（複数台対応）
@@ -305,17 +314,17 @@ spawn_entities:
 vehicles:
   - name: "shinkansen"
     model_uri: "models://Shinkansen"
-    pose: [ -1000, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+    pose: [-1000, 0.0, 0.0, 0.0, 0.0, 0.0]
     waypoints:
-      - [ -1000, 0.0, 0.0, 83.33 ]
-      - [ 100.0, 0.0, 0.0, 83.33 ]
+      - [-1000, 0.0, 0.0, 83.33]
+      - [100.0, 0.0, 0.0, 83.33]
     antennas:
       - name: "shinkansen_front"
-        offset: [ 1.0, 0.0, 1.0 ]
-        relative_rpy: [ 0.0, 0.0, 0.0000 ]
+        offset: [5.0, 0.0, 1.0]
+        relative_rpy: [0.0, 0.0, 0.1396]
       - name: "shinkansen_mid"
-        offset: [ 0.0, 0.0, 1.0 ]
-        relative_rpy: [ 0.0, 0.0, 0.0000 ]
+        offset: [0.0, 0.0, 1.0]
+        relative_rpy: [0.0, 0.0, 0.1396]
       - name: "shinkansen_rear"
-        offset: [ -1, 0.0, 1.0 ]
-        relative_rpy: [ 0.0, 0.0, 0.0000 ]
+        offset: [-5.0, 0.0, 1.0]
+        relative_rpy: [0.0, 0.0, 0.1396]
