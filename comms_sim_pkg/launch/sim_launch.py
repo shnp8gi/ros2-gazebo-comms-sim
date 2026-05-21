@@ -507,28 +507,60 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     # 基地局パラメータの抽出（通信ノード用）
     # =========================================================================
-    antenna_base_position = [0.0, 0.0, 0.0]
-    antenna_antenna_offset = [0.0, 0.0, 3.0]
-    antenna_relative_rpy = [0.0, 0.0, 0.0]
-    antenna_base_rpy = [0.0, 0.0, 0.0]
+    # 複数基地局の対応
+    bs_positions = []
+    bs_antenna_offsets = []
+    bs_rpys = []
+    bs_relative_rpys = []
 
     if isinstance(spawn_entities, dict):
-        antenna_cfg = spawn_entities.get('antenna') or spawn_entities.get('Antenna')
-        if isinstance(antenna_cfg, dict):
-            pose = antenna_cfg.get('pose')
-            if isinstance(pose, list) and len(pose) >= 3:
-                antenna_base_position = [float(pose[0]), float(pose[1]), float(pose[2])]
-            if isinstance(pose, list) and len(pose) >= 6:
-                antenna_base_rpy = [float(pose[3]), float(pose[4]), float(pose[5])]
-            antenna_offset_raw = antenna_cfg.get('antenna_offset')
-            if isinstance(antenna_offset_raw, list) and len(antenna_offset_raw) >= 3:
-                antenna_antenna_offset = [float(v) for v in antenna_offset_raw[:3]]
-            else:
-                h = float(antenna_cfg.get('antenna_height_offset', 3.0))
-                antenna_antenna_offset = [0.0, 0.0, h]
-            rpy = antenna_cfg.get('antenna_relative_rpy')
-            if isinstance(rpy, list) and len(rpy) >= 3:
-                antenna_relative_rpy = [float(r) for r in rpy[:3]]
+        # 鍵に "antenna" が含まれるものをソートして取得
+        antenna_keys = sorted([k for k in spawn_entities.keys() if 'antenna' in k.lower()])
+        for key in antenna_keys:
+            cfg = spawn_entities[key]
+            if isinstance(cfg, dict):
+                # position & rpy
+                pose = cfg.get('pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])
+                if isinstance(pose, list) and len(pose) >= 3:
+                    pos = [float(pose[0]), float(pose[1]), float(pose[2])]
+                else:
+                    pos = [0.0, 0.0, 0.0]
+                if isinstance(pose, list) and len(pose) >= 6:
+                    rpy = [float(pose[3]), float(pose[4]), float(pose[5])]
+                else:
+                    rpy = [0.0, 0.0, 0.0]
+                
+                # offset
+                offset_raw = cfg.get('antenna_offset')
+                if isinstance(offset_raw, list) and len(offset_raw) >= 3:
+                    offset = [float(v) for v in offset_raw[:3]]
+                else:
+                    h = float(cfg.get('antenna_height_offset', 3.0))
+                    offset = [0.0, 0.0, h]
+                
+                # relative_rpy
+                rel_rpy_raw = cfg.get('antenna_relative_rpy')
+                if isinstance(rel_rpy_raw, list) and len(rel_rpy_raw) >= 3:
+                    rel_rpy = [float(r) for r in rel_rpy_raw[:3]]
+                else:
+                    rel_rpy = [0.0, 0.0, 0.0]
+
+                bs_positions.extend(pos)
+                bs_antenna_offsets.extend(offset)
+                bs_rpys.extend(rpy)
+                bs_relative_rpys.extend(rel_rpy)
+
+    # 従来の単一パラメータ用（下位互換性のため、1番目のアンテナを設定）
+    if bs_positions:
+        antenna_base_position = bs_positions[:3]
+        antenna_antenna_offset = bs_antenna_offsets[:3]
+        antenna_relative_rpy = bs_relative_rpys[:3]
+        antenna_base_rpy = bs_rpys[:3]
+    else:
+        antenna_base_position = [0.0, 0.0, 0.0]
+        antenna_antenna_offset = [0.0, 0.0, 3.0]
+        antenna_relative_rpy = [0.0, 0.0, 0.0]
+        antenna_base_rpy = [0.0, 0.0, 0.0]
 
     # =========================================================================
     # 各車両ごとの通信ノード＆UGVコントローラノードの起動
@@ -602,6 +634,10 @@ def launch_setup(context, *args, **kwargs):
                                 'ugv_antenna_offset': v_antenna_offset,
                                 'base_station_antenna_relative_rpy': antenna_relative_rpy,
                                 'ugv_antenna_relative_rpy': v_antenna_relative_rpy,
+                                'base_station_positions': bs_positions,
+                                'base_station_antenna_offsets': bs_antenna_offsets,
+                                'base_station_rpys': bs_rpys,
+                                'base_station_antenna_relative_rpys': bs_relative_rpys,
                                 'odom_topic': f'/{v_name}/odom',
                                 'cmd_vel_topic': f'/{v_name}/cmd_vel',
                                 'mission_complete_topic': f'/{v_name}/mission_complete',

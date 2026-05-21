@@ -144,11 +144,11 @@ def main():
                 # real_time_factor を高速化 (sweep高速化)
                 content = re.sub(r'real_time_factor:\s*[\d\.]+', f'real_time_factor: {SWEEP_REAL_TIME_FACTOR}', content)
 
-                # 基地局Y座標の更新 (antenna の pose)
-                # pose: [ 0.0, 3.0, 0.0, 0.0, 0.0, -1.5708 ]
+                # 基地局Y座標の更新 (antenna_0 / antenna_1 の pose)
+                # pose: [ X, Y, Z, roll, pitch, yaw ]
                 content = re.sub(
-                    r'(antenna:\s*.*?pose:\s*\[\s*)[-\d\.]+,\s*[-\d\.]+(.*?\])', 
-                    rf'\g<1>0.0, {y}\g<2>', 
+                    r'(antenna\w*:\s*.*?pose:\s*\[\s*)([-\d\.]+),\s*[-\d\.]+(.*?\])', 
+                    rf'\g<1>\g<2>, {y}\g<3>', 
                     content, 
                     flags=re.DOTALL
                 )

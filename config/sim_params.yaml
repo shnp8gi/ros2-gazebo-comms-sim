@@ -46,7 +46,7 @@ simulation:
   # 2: サマリー + イベントログ
   # 3: サマリー + イベント + 時系列(CONNECTED時のみ)
   # 4: サマリー + イベント + 時系列(常時記録)
-  logging_level: 1
+  logging_level: 4
 
   # ノード起動タイミング設定
   # headless sweep 向けに短縮済み（GUIなし・RTF=10 なら高速起動可能）
@@ -270,12 +270,37 @@ link_controller_node:
 #
 # -----------------------------------------------------------------------------
 spawn_entities:
-  # 地上基地局 - 固定アンテナタワー
-  antenna:
+  antenna_0:
     model_uri: "models://antenna"
-    name: "antenna"
+    name: "antenna_0"
     # ポーズ: [x, y, z, roll, pitch, yaw]
-    pose: [0.0, 1, 0.0, 0.0, 0.0, -1.5708]
+    pose: [-5.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+    static: true
+    # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
+    # （通信計算に使用: アンテナ位置 = pose + antenna_offset）
+    # antenna.daeメッシュ基準: コリジョンシリンダ高さ3.0m、中心0.95m
+    antenna_offset: [0.0, 0.0, 1.00]
+    # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
+    # フォーマット: [roll, pitch, yaw]
+    antenna_relative_rpy: [0.0, 0.0, -1.4312]
+  antenna_1:
+    model_uri: "models://antenna"
+    name: "antenna_1"
+    # ポーズ: [x, y, z, roll, pitch, yaw]
+    pose: [0.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+    static: true
+    # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
+    # （通信計算に使用: アンテナ位置 = pose + antenna_offset）
+    # antenna.daeメッシュ基準: コリジョンシリンダ高さ3.0m、中心0.95m
+    antenna_offset: [0.0, 0.0, 1.00]
+    # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
+    # フォーマット: [roll, pitch, yaw]
+    antenna_relative_rpy: [0.0, 0.0, -1.4312]
+  antenna_2:
+    model_uri: "models://antenna"
+    name: "antenna_2"
+    # ポーズ: [x, y, z, roll, pitch, yaw]
+    pose: [5.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
     static: true
     # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
     # （通信計算に使用: アンテナ位置 = pose + antenna_offset）
@@ -320,11 +345,8 @@ vehicles:
       - [100.0, 0.0, 0.0, 83.33]
     antennas:
       - name: "shinkansen_front"
-        offset: [5.0, 0.0, 1.0]
-        relative_rpy: [0.0, 0.0, 0.1396]
-      - name: "shinkansen_mid"
-        offset: [0.0, 0.0, 1.0]
+        offset: [10.0, 0.0, 1.0]
         relative_rpy: [0.0, 0.0, 0.1396]
       - name: "shinkansen_rear"
-        offset: [-5.0, 0.0, 1.0]
+        offset: [-10.0, 0.0, 1.0]
         relative_rpy: [0.0, 0.0, 0.1396]

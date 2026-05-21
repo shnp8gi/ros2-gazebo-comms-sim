@@ -68,8 +68,11 @@ class SimLoggerNode(Node):
         try:
             with open('/workspace/config/sim_params.yaml', 'r') as f:
                 config = yaml.safe_load(f)
-                self.y_pos = float(config.get('spawn_entities', {}).get('antenna', {}).get('pose', [0,0,0,0,0,0])[1])
-                self.angle = float(config.get('spawn_entities', {}).get('antenna', {}).get('antenna_relative_rpy', [0,0,0])[2])
+                spawn_ent = config.get('spawn_entities', {})
+                antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
+                antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
+                self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
+                self.angle = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
         except Exception as e:
             self.get_logger().warn(f"Failed to read yaml for summary: {e}")
