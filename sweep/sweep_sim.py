@@ -12,9 +12,9 @@ PROGRESS_LOG = "sweep/log/sweep_progress.log"
 # 1タスクあたりの最大待機時間 [秒]
 TASK_TIMEOUT_SEC = 120
 # スイープ時の加速倍率 (ヘッドレス時のみ有効。1.0=リアルタイム)
-SWEEP_REAL_TIME_FACTOR = 1.0
+SWEEP_REAL_TIME_FACTOR = 5.0
 # パラメータスイープを繰り返す回数
-NUM_RUNS = 2
+NUM_RUNS = 10
 
 def log_progress(line: str):
     """進捗ログにタイムスタンプ付きで1行書き込む"""
@@ -25,8 +25,8 @@ def log_progress(line: str):
 # ---------------------------------------------------------
 # パラメータスイープ設定
 # ---------------------------------------------------------
-Y_POSITIONS = [1] # 基地局のY位置 (m)
-ANGLES_DEG = [i*0.2 for i in range(15, 40)]
+Y_POSITIONS = [1.0] # 基地局のY位置 (m)
+ANGLES_DEG = [round(0.2 * i, 2) for i in range(76)] # 0.0, 0.2, 0.4, ..., 15.0 (76 steps)
 
 
 CONFIG_PATH = "config/sim_params.yaml"
@@ -106,7 +106,7 @@ def main():
 
     for run_idx in range(1, NUM_RUNS + 1):
         summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}.csv"
-        summary_files.append(os.path.join("sim_results", summary_filename))
+        summary_files.append(os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv"))
 
         print(f"\n=======================================================")
         print(f"Starting Run {run_idx}/{NUM_RUNS}")
@@ -228,7 +228,7 @@ def main():
     # 平均化の処理を実行
     print("\nAveraging results across all runs...")
     try:
-        final_summary_file = f"sim_results/sweep_summary_{sweep_start_time}_averaged.csv"
+        final_summary_file = f"sim_results/sweep_{sweep_start_time}/sweep_summary.csv"
         average_summaries(summary_files, final_summary_file)
         print(f"Averaged summary successfully saved to: {final_summary_file}")
     except Exception as e:

@@ -42,6 +42,7 @@ class SimLoggerNode(Node):
         self.declare_parameter('base_vehicle_names', [''])
         self.declare_parameter('output_dir', '/workspace/sim_results/')
         self.declare_parameter('logging_level', 1)
+        self.declare_parameter('run_timestamp', '')
         
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         if isinstance(vehicle_names_raw, list):
@@ -57,9 +58,12 @@ class SimLoggerNode(Node):
             
         self.output_dir = self.get_parameter('output_dir').value
         self.logging_level = self.get_parameter('logging_level').value
+        self.run_timestamp = str(self.get_parameter('run_timestamp').value)
         
-        self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        os.makedirs(self.output_dir, exist_ok=True)
+        if self.run_timestamp:
+            self.timestamp = self.run_timestamp
+        else:
+            self.timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
         
         # YAMLからシミュレーション条件を読み込む（サマリー用）
         self.y_pos = 0.0
@@ -76,6 +80,36 @@ class SimLoggerNode(Node):
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
         except Exception as e:
             self.get_logger().warn(f"Failed to read yaml for summary: {e}")
+
+        # ディレクトリパスの解決
+        import re
+        import math
+        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)\.csv', self.summary_filename)
+        if match:
+            sweep_timestamp = match.group(1)
+            run_idx = int(match.group(2))
+            angle_deg = math.degrees(self.angle + 1.5708)
+            angle_deg = round(angle_deg, 2)
+            angle_str = f"{angle_deg:g}"
+            y_str = f"{round(self.y_pos, 2):g}"
+            self.run_dir = os.path.join(
+                self.output_dir,
+                f"sweep_{sweep_timestamp}",
+                "runs",
+                f"run_{run_idx:03d}_y{y_str}_a{angle_str}"
+            )
+        else:
+            self.run_dir = os.path.join(self.output_dir, f"run_{self.timestamp}")
+
+        # コムズ、コントロールのサブディレクトリ作成
+        comms_dir = os.path.join(self.run_dir, 'comms')
+        control_dir = os.path.join(self.run_dir, 'control')
+        
+        os.makedirs(comms_dir, exist_ok=True)
+        os.makedirs(control_dir, exist_ok=True)
+        self._set_file_ownership(self.run_dir)
+        self._set_file_ownership(comms_dir)
+        self._set_file_ownership(control_dir)
 
         # Level 1: サマリー用集計データ
         self.summary_stats = {
@@ -94,7 +128,7 @@ class SimLoggerNode(Node):
         self.event_file = None
         self.event_writer = None
         if self.logging_level >= 2:
-            event_path = os.path.join(self.output_dir, f'{self.timestamp}_events.csv')
+            event_path = os.path.join(control_dir, 'events.csv')
             self.event_file = open(event_path, 'w', newline='', encoding='utf-8')
             self.event_writer = csv.DictWriter(self.event_file, fieldnames=[
                 'time_s', 'vehicle_name', 'link_state', 'has_link_grant', 'rssi_dBm', 'distance_m'
@@ -108,7 +142,7 @@ class SimLoggerNode(Node):
         if self.logging_level >= 3:
             suffix = 'connected' if self.logging_level == 3 else 'full'
             for vn in self.vehicle_names:
-                path = os.path.join(self.output_dir, f'{self.timestamp}_{vn}_{suffix}.csv')
+                path = os.path.join(comms_dir, f'{vn}_{suffix}.csv')
                 f = open(path, 'w', newline='', encoding='utf-8')
                 self.ts_files[vn] = f
                 
@@ -278,7 +312,7 @@ class SimLoggerNode(Node):
                     'bs_y_m': msg.base_station_y,
                     'bs_z_m': msg.base_station_z
                 }
-                if self.logging_level == 4:
+                if self.logging_level >= 4:
                     row.update({
                         'vehicle_time_s': vehicle_elapsed,
                         'has_link_grant': has_grant,
@@ -298,7 +332,18 @@ class SimLoggerNode(Node):
         for f in self.ts_files.values():
             f.close()
 
-        summary_path = os.path.join(self.output_dir, self.summary_filename)
+        import re
+        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)\.csv', self.summary_filename)
+        if match:
+            sweep_timestamp = match.group(1)
+            run_idx = int(match.group(2))
+            summary_path = os.path.join(self.output_dir, f"sweep_{sweep_timestamp}", f"sweep_summary_run{run_idx}.csv")
+        else:
+            summary_path = os.path.join(self.output_dir, self.summary_filename)
+        
+        summary_dir = os.path.dirname(summary_path)
+        os.makedirs(summary_dir, exist_ok=True)
+        self._set_file_ownership(summary_dir)
         file_exists = os.path.isfile(summary_path)
         
         try:

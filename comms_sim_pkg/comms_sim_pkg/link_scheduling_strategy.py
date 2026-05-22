@@ -2,6 +2,7 @@
 # -*- coding: utf-8 -*-
 
 import abc
+import math
 from typing import Dict, List, Optional, Tuple
 
 class LinkSchedulingStrategy(abc.ABC):
@@ -336,3 +337,84 @@ class GeometricWeightedStrategy(LinkSchedulingStrategy):
             return best_idx, msg
             
         return current_active_idx, None
+
+class FeedforwardOptimalStrategy(LinkSchedulingStrategy):
+    """
+    feedforward_optimal ポリシー:
+    事前計算された3D位置-アンテナ選択ルックアップテーブル（LUT）に基づき、
+    現在の車両位置に最も近いサンプリング点における最適な車載アンテナを選択する。
+    """
+    def __init__(self, lut: List[Tuple[float, float, float, str, float]], center_antenna_name: str = 'shinkansen_mid'):
+        """
+        Args:
+            lut: (x, y, z, optimal_antenna_name, nominal_rssi) のリスト
+            center_antenna_name: 車両の中心位置を示す基準アンテナ名
+        """
+        self.lut = lut
+        self.center_antenna_name = center_antenna_name
+        self._last_idx = 0
+
+    def determine_active_link(
+        self, 
+        rssi_dict, 
+        mission_complete_dict,
+        geometry_info,
+        current_active_idx,
+        vehicle_names,
+        current_time
+    ):
+        if not self.lut or not geometry_info:
+            return current_active_idx, None
+
+        # 車両の中心位置を示すアンテナ情報から位置を取得することを最優先する
+        current_info = geometry_info.get(self.center_antenna_name, {})
+        
+        # もし指定された中心アンテナ情報に位置が含まれていなければ、他のアンテナから取得を試みる
+        if 'ugv_x' not in current_info:
+            for name in vehicle_names:
+                info = geometry_info.get(name, {})
+                if 'ugv_x' in info:
+                    current_info = info
+                    break
+
+        if 'ugv_x' not in current_info:
+            return current_active_idx, None
+
+        ux = current_info['ugv_x']
+        uy = current_info['ugv_y']
+        uz = current_info['ugv_z']
+
+        n_points = len(self.lut)
+        best_idx = self._last_idx
+        min_dist_sq = float('inf')
+
+        # 探索の高速化：前回のインデックスの前後100点（計200点）をまず探索する
+        search_range = range(max(0, self._last_idx - 100), min(n_points, self._last_idx + 100))
+        for idx in search_range:
+            pt = self.lut[idx]
+            dist_sq = (ux - pt[0])**2 + (uy - pt[1])**2 + (uz - pt[2])**2
+            if dist_sq < min_dist_sq:
+                min_dist_sq = dist_sq
+                best_idx = idx
+
+        # ウィンドウの境界に近い場合や、初回実行（last_idx == 0）の場合は全探索で安全に再確認する
+        if best_idx == max(0, self._last_idx - 100) or best_idx == min(n_points, self._last_idx + 100) - 1 or self._last_idx == 0:
+            for idx in range(n_points):
+                pt = self.lut[idx]
+                dist_sq = (ux - pt[0])**2 + (uy - pt[1])**2 + (uz - pt[2])**2
+                if dist_sq < min_dist_sq:
+                    min_dist_sq = dist_sq
+                    best_idx = idx
+
+        self._last_idx = best_idx
+        optimal_ant = self.lut[best_idx][3]
+
+        if optimal_ant in vehicle_names:
+            new_idx = vehicle_names.index(optimal_ant)
+            if new_idx != current_active_idx:
+                old_name = vehicle_names[current_active_idx]
+                msg = f'リンク切替: {old_name} → {optimal_ant} (feedforward_optimal: 最寄点 x={self.lut[best_idx][0]:.1f}, y={self.lut[best_idx][1]:.1f})'
+                return new_idx, msg
+
+        return current_active_idx, None
+

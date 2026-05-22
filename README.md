@@ -14,10 +14,10 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 - **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）
 - **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（Strategyパターンで差し替え可能）
 - **マルチ車両・高密度・マルチウェイポイント追従**: 複数台のUGVによる同期待機、区間速度制御（スリップ防止用加速度制御対応）、および自動経路追従
-- **集中スケジューリング**: 基地局側で通信権（Grant）を1台ずつ排他的に付与（RSSI優先に加え、アンテナアライメントに基づく幾何学スコアや推定受信電力ベースのポリシーを搭載）
+- **集中スケジューリング**: 基地局側で通信権（Grant）を1台ずつ排他的に付与。RSSI優先、アンテナアライメント（幾何学スコア）、推定受信電力ベースに加え、事前計算されたnominal RSSIヒートマップに基づくフィードフォワード制御ポリシー（`feedforward_optimal`）を搭載。
 - **プロアクティブハンドオーバーと自律的権限譲渡**: 通信データ上限到達時の自律的な譲渡のほか、リンク切断（DISCONNECTED）時に即座に最適な幾何学スコアを持つ後続車両へ通信権を強制切替する機能
 - **GPUアクセラレーション対応**: Docker Composeでの NVIDIA GPU リソース割り当てにより、GUIモードでの高速なGazeboレンダリングをサポート
-- **ミッション完了時の自動終了とCSV保存**: 全車両のミッション完了を検知して安全に自動シャットダウンし、統合CSV・個別CSVを生成
+- **ミッション完了時の自動終了とCSV保存**: 全車両のミッション完了を検知して安全に自動シャットダウン。ロギングレベル1〜5に対応し、3階層のフォルダ構造（`comms/`, `control/`, `heatmap/`）で結果を出力。
 
 ## 🛠️ 技術スタック
 
@@ -51,12 +51,12 @@ ros2-gazebo-comms-sim/
 │
 ├── comms_sim_pkg/                   # ROS 2パッケージ（ノード/launch）
 │   ├── comms_sim_pkg/              # Pythonモジュール
-│   │   ├── comms_node.py          # 通信シミュレータノード（/comms/quality publish, CSV保存）
+│   │   ├── comms_node.py          # 通信シミュレータノード（/comms/quality publish）
 │   │   ├── comms_calculator.py    # 通信品質計算（RSSI/Throughput）
 │   │   ├── antenna_parser.py      # アンテナパターン処理（E/H面CSV補間）
-│   │   ├── link_controller_node.py# 基地局側調停ノード（アクセス許可付与）
-│   │   ├── link_scheduling_strategy.py # スケジューリング戦略
-│   │   ├── sim_logger_node.py     # ログノード（ミッション監視とCSV出力）
+│   │   ├── link_controller_node.py# 基地局側調停ノード（アクセス許可付与、フィードフォワード制御、LUT事前計算）
+│   │   ├── link_scheduling_strategy.py # スケジューリング戦略（feedforward_optimal等）
+│   │   ├── sim_logger_node.py     # ログノード（ミッション監視、フォルダ分け保存、サマリー集計）
 │   │   └── ugv_controller_node.py # UGV制御ノード（/cmd_vel publish）
 │   ├── launch/
 │   │   └── sim_launch.py          # Gazebo起動/スポーン/ブリッジ/ノード起動
@@ -70,7 +70,14 @@ ros2-gazebo-comms-sim/
 │   └── msg/
 │       └── CommsQuality.msg
 │
-├── sim_results/                      # CSVログ出力ディレクトリ（comms_node.pyの出力先）
+├── sim_results/                      # ログ出力ディレクトリ
+│   └── sweep_<timestamp>/            # スイープ実行時の出力フォルダ
+│       ├── sweep_summary_run*.csv    # スイープ各回の要約CSV
+│       └── runs/                     # 各パラメータ実行別の出力フォルダ
+│           └── run_<run_idx>_y<Y>_a<ANGLE>/
+│               ├── comms/            # 通信品質の時系列CSVファイル ({vehicle_name}_connected.csv / {vehicle_name}_full.csv)
+│               ├── control/          # 制御・イベントのCSVファイル (events.csv, feedforward_log.csv)
+│               └── heatmap/          # アンテナ制御用事前計算ヒートマップ (rssi_heatmap.csv)
 │
 ├── docker-compose.yml
 ├── docker-compose.gpu.yml            # GPU設定オーバーライド
@@ -242,13 +249,27 @@ ros2 launch comms_sim_pkg sim_launch.py headless:=true
 
 主要なパラメータは `config/sim_params.yaml` で設定します。ランチファイル `comms_sim_pkg/launch/sim_launch.py` がこのYAMLを読み込み、Gazebo起動、モデルスポーン、ros_gz_bridge、各ノード起動に反映します。
 
+#### 全体シミュレーションパラメータ
+
+```yaml
+simulation:
+  logging_level: value        # ログ記録レベル (1〜5) (default: 5)
+                              # 1: サマリーのみ
+                              # 2: サマリー + イベントログ
+                              # 3: サマリー + イベント + 時系列 (CONNECTED時のみ)
+                              # 4: サマリー + イベント + 時系列 (常時記録)
+                              # 5: サマリー + イベント + 時系列 (常時記録) + アンテナ制御ログ + ヒートマップ
+  headless: value             # ヘッドレスモード (true: GUIなし, false: GUIあり) (default: true)
+  real_time_factor: value     # リアルタイム倍率 (default: 5.0)
+```
+
 #### 通信シミュレーションパラメータ
 
 ```yaml
 comms_simulator_node:
   ros__parameters:
-    sampling_rate: value # 計算頻度 [Hz] (default: 1000.0)
-    noise_variance: value # AWGN分散 [dB] (default: 1.0)
+    sampling_rate: value # 計算頻度 [Hz] (default: 100.0)
+    noise_variance: value # AWGN分散 [dB] (default: 0.0)
     e_plane_path: value # E面アンテナCSV (default: "/workspace/config/e_plane.csv")
     h_plane_path: value # H面アンテナCSV (default: "/workspace/config/h_plane.csv")
     mcs_table_path: value # MCSテーブル (default: "/workspace/config/MCStable.csv")
@@ -270,7 +291,8 @@ comms_simulator_node:
 ```yaml
 link_controller_node:
   ros__parameters:
-    scheduling_policy: value # スケジューリングポリシー (例: physical_score_priority, geometric_beam_priority, rssi_priority)
+    scheduling_policy: value # スケジューリングポリシー (例: sequential, round_robin, rssi_priority, geometric_beam_priority, physical_score_priority, geometric_weighted, feedforward_optimal)
+    heatmap_resolution_m: value # 軌道上の事前計算サンプリング解像度 [m] (feedforward_optimal または logging_level >= 5 で有効) (default: 0.2)
     time_slot_duration_s: value # round_robin時のスロット長 [s] (default: 10.0)
     rssi_threshold: value # rssi_priority時の閾値 [dBm] (default: -75)
     beam_gain_threshold: value # geometric_beam_priority用の最小ゲイン閾値 [dBi] (default: 5.0)
@@ -324,40 +346,84 @@ spawn_entities:
 - 出力先: `sim_results/`（`/workspace/sim_results/` に保存）
 - 保存タイミング: **ミッション完了通知受信時**（全ウェイポイント到達時）およびノード終了時
 
-### ファイル命名規則
+### 出力ディレクトリおよびファイル構造
 
-- **統合CSV** (全車両): `YYYYMMDD_HHMMSS_combined_results.csv`
-- **車両個別CSV**: `YYYYMMDD_HHMMSS_{vehicle_name}_results.csv`
+ロギングレベルおよび実行モード（スイープ等）に応じて、以下の3階層構造で出力されます。
+個々のCSVファイル名からタイムスタンプの重複を排除し、フォルダ階層によって結果をカプセル化（可視化・分類）しています。
 
-（例: `20260420_143052_combined_results.csv`）
+```
+sim_results/
+└── sweep_<sweep_timestamp>/                 # スイープ全体の実行ログフォルダ（単一実行時は run_<run_timestamp>）
+    ├── sweep_summary_run<run_idx>.csv       # スイープ実行各回の要約結果サマリー
+    └── runs/                                # 各個別シミュレーションランの結果
+        └── run_<run_idx>_y<Y>_a<ANGLE>/     # 個別ランのパラメータフォルダ
+            ├── comms/                       # 通信品質関連の時系列データ
+            │   ├── {vehicle_name}_connected.csv  # 接続時（CONNECTED状態）のみ記録 (logging_level: 3)
+            │   └── {vehicle_name}_full.csv       # 未接続時含む全期間記録 (logging_level: 4以上)
+            ├── control/                     # 制御およびハンドオーバーイベントデータ
+            │   ├── events.csv               # リンク状態やGrant権限の変更イベントログ (logging_level: 2以上)
+            │   └── feedforward_log.csv      # フィードフォワード制御のリアルタイム決定ログ (logging_level: 5のみ)
+            └── heatmap/                     # 事前計算ヒートマップデータ (logging_level: 5のみ)
+                └── rssi_heatmap.csv         # 軌道上の各座標における nominal RSSI 事前計算値
+```
 
-### CSV出力項目
+### 各ファイルの項目定義
 
-各座標列の座標参照先:
+#### 1. サマリーCSV (`sweep_summary_run*.csv` / `sweep_summary.csv`)
+各車両の通信総量、接続率等を要約したデータです。
+- `run_id`: シミュレーション実行タイムスタンプ
+- `y_position`: 基地局のY軸配置位置 [m]
+- `antenna_angle`: 基地局アンテナの方向（Yaw） [rad]
+- `vehicle_name`: 車両（または車載アンテナ）名、もしくは `shinkansen_total`
+- `total_data_MB`: 累積送信データ量 [MB]
+- `connected_time_s`: 接続確立（CONNECTED）の総時間 [s]
+- `average_throughput_Gbps`: 接続状態における平均スループット [Gbps]
+- `average_rssi_dBm`: 接続状態における平均受信信号強度 [dBm]
+- `handover_count`: ハンドオーバー（接続再確立）回数
 
-- **`ugv_body`**: UGV車体モデル原点（ホイールベース中央・地面レベル）
-- **`ugv_antenna`**: UGVアンテナ位置（= ugv_body + antenna_offset）
-- **`bs_origin`**: 基地局モデル原点
-- **`bs_antenna`**: 基地局アンテナ位置（= bs_origin + antenna_offset）
-- **`distance`**: ugv_antenna と bs_antenna 間の3D距離
+#### 2. 通信品質時系列CSV (`comms/{vehicle_name}_connected.csv` または `_full.csv`)
+車両ごとの時系列通信パラメータを記録します。
+※ `vehicle_time_s`, `has_link_grant`, `comm_active`, `link_state` は `logging_level: 4` 以上（`_full.csv`）でのみ記録されます。
+- `time_s`: 最初の車両が走行を開始した時点を0とした経過時間 [s]
+- `vehicle_time_s`: 対象車両が走行を開始した時点を0とした経過時間 [s]
+- `vehicle_name`: 車両（または車載アンテナ）名
+- `has_link_grant`: 基地局からの通信権（Grant）付与フラグ
+- `distance_m`: アンテナ間3D距離 [m]
+- `rssi_dBm`: 受信信号強度 [dBm]
+- `throughput_Gbps`: 瞬時スループット [Gbps]
+- `total_data_MB`: 累積送信データ量 [MB]
+- `path_loss_dB`: パスロス [dB]
+- `e_gain_dB`: E面アンテナゲイン [dBi]
+- `h_gain_dB`: H面アンテナゲイン [dBi]
+- `comm_active`: 通信可否フラグ
+- `ugv_x_m`, `ugv_y_m`, `ugv_z_m`: UGVアンテナ位置座標 [m]
+- `bs_x_m`, `bs_y_m`, `bs_z_m`: 基地局アンテナ位置座標 [m]
+- `link_state`: リンク状態 (`DISCONNECTED` / `ESTABLISHING` / `CONNECTED`)
 
-| 項目                                              | 単位 | 説明                                                 |
-| ------------------------------------------------- | ---- | ---------------------------------------------------- |
-| `time_s`                                          | s    | シミュレーション時間 (最初に移動指令が出た瞬間を起点)|
-| `vehicle_time_s`                                  | s    | その車両単体が移動指令を受けてからの時間             |
-| `vehicle_name`                                    | -    | 出力元の車両名 (例: suv_0)                           |
-| `has_link_grant`                                  | bool | 基地局から通信権が与えられているか                   |
-| `ugv_body_x`, `ugv_body_y`, `ugv_body_z`          | m    | UGV車体原点座標                                      |
-| `ugv_antenna_x`, `ugv_antenna_y`, `ugv_antenna_z` | m    | UGVアンテナ位置座標                                  |
-| `bs_origin_x`, `bs_origin_y`, `bs_origin_z`       | m    | 基地局モデル原点座標                                 |
-| `bs_antenna_x`, `bs_antenna_y`, `bs_antenna_z`    | m    | 基地局アンテナ位置座標                               |
-| `distance`                                        | m    | UGVアンテナ-基地局アンテナ間3D距離                   |
-| `rssi`                                            | dBm  | 受信信号強度                                         |
-| `throughput`                                      | Gbps | 瞬時スループット（リンク状態・通信上限を考慮後の値） |
-| `total_data_mb`                                   | Mb   | 累積送信データ量                                     |
-| `path_loss`                                       | dB   | パスロス                                             |
-| `e_gain`, `h_gain`                                | dBi  | 受信側（UGV）アンテナゲイン（E/H面）                 |
-| `link_state`                                      | -    | `DISCONNECTED` / `ESTABLISHING` / `CONNECTED`        |
+#### 3. イベントCSV (`control/events.csv`)
+リンク権や通信状態の変化があった瞬間を記録します。
+- `time_s`: 経過時間 [s]
+- `vehicle_name`: 対象車両の名前
+- `link_state`: 新しいリンク状態
+- `has_link_grant`: 通信権付与フラグ
+- `rssi_dBm`: イベント発生時の受信信号強度 [dBm]
+- `distance_m`: イベント発生時のアンテナ間距離 [m]
+
+#### 4. nominal RSSI ヒートマップ (`heatmap/rssi_heatmap.csv`)
+シミュレーション起動時に、車両軌道上のサンプル座標ごとに基地局と各車載アンテナの組み合わせで計算される nominal RSSI の分布図です。
+- `x_m`, `y_m`, `z_m`: 軌道上のサンプル座標 [m]
+- `yaw_rad`: サンプル座標における車両の進行方向（Yaw） [rad]
+- `rssi_{bs_name}_{antenna_name}`: 基地局アンテナと車載アンテナの各ペアにおける nominal RSSI [dBm]
+- `optimal_antenna`: 最大の RSSI を示す車載アンテナ名
+- `max_rssi`: その座標における最大 RSSI [dBm]
+
+#### 5. フィードフォワード制御ログ (`control/feedforward_log.csv`)
+`feedforward_optimal` ポリシー稼働中の、リアルタイムなアンテナ選択決定の履歴です。
+- `time_s`: 経過時間 [s]
+- `ugv_x_m`, `ugv_y_m`, `ugv_z_m`: 現在の UGV アンテナ位置座標 [m]
+- `rssi_{antenna_name}`: 各車載アンテナの現在の実測 RSSI [dBm]
+- `selected_antenna`: 現在選択（Grant付与）されている車載アンテナ名
+- `rssi_optimal_dBm`: 現在位置に対応するヒートマップ上（LUT）の nominal optimal RSSI [dBm]
 
 ## 🔌 ROSインターフェース
 

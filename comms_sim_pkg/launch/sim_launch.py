@@ -737,6 +737,10 @@ def launch_setup(context, *args, **kwargs):
             vehicle_names.append(base_name)
     link_ctrl_params = config.get('link_controller_node', {}).get('ros__parameters', {})
     
+    # 実行時のタイムスタンプを生成して同期
+    import datetime
+    run_timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+
     if len(vehicle_names) > 0:
         link_controller_node = TimerAction(
             period=comms_node_delay,
@@ -762,6 +766,9 @@ def launch_setup(context, *args, **kwargs):
                             'min_hold_time_s': float(link_ctrl_params.get('min_hold_time_s', 1.0)),
                             'switch_margin_db': float(link_ctrl_params.get('switch_margin_db', 2.0)),
                             'proactive_grace_period_s': float(link_ctrl_params.get('proactive_grace_period_s', 0.5)),
+                            'logging_level': int(sim_config.get('logging_level', 1)),
+                            'heatmap_resolution_m': float(link_ctrl_params.get('heatmap_resolution_m', 0.2)),
+                            'run_timestamp': run_timestamp,
                             'use_sim_time': use_sim_time_bool
                         }
                     ]
@@ -781,6 +788,7 @@ def launch_setup(context, *args, **kwargs):
                     'base_vehicle_names': base_vehicle_names,
                     'output_dir': '/workspace/sim_results/',
                     'logging_level': int(sim_config.get('logging_level', 1)),
+                    'run_timestamp': run_timestamp,
                     'use_sim_time': use_sim_time_bool
                 }
             ]

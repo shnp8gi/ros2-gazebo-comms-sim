@@ -26,15 +26,87 @@
     - time_slot_duration_s: round_robin 時のスロット長 [s]
 """
 
-from typing import Dict, List, Optional
+import csv
+import datetime
+import math
+import os
+import re
+from typing import Dict, List, Optional, Tuple
 
+import numpy as np
 import rclpy
+import yaml
 from rclpy.node import Node
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from std_msgs.msg import Bool, Float64
 
 from comms_sim_msgs.msg import CommsQuality
+
+# ros2 launch経由で実行可能なように絶対インポートを優先
+try:
+    from comms_sim_pkg.antenna_parser import AntennaPatternParser
+    from comms_sim_pkg.comms_calculator import (
+        CommsCalculator,
+        LogDistancePathLossModel,
+        TwoRayGroundModel,
+    )
+except ImportError:
+    from .antenna_parser import AntennaPatternParser  # type: ignore
+    from .comms_calculator import (  # type: ignore
+        CommsCalculator,
+        LogDistancePathLossModel,
+        TwoRayGroundModel,
+    )
+
+def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float) -> str:
+    match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)\.csv', summary_filename)
+    if match:
+        sweep_timestamp = match.group(1)
+        run_idx = int(match.group(2))
+        angle_deg = math.degrees(antenna_yaw + 1.5708)
+        angle_deg = round(angle_deg, 2)
+        angle_str = f"{angle_deg:g}"
+        y_str = f"{round(y_pos, 2):g}"
+        run_dir = os.path.join(
+            output_dir,
+            f"sweep_{sweep_timestamp}",
+            "runs",
+            f"run_{run_idx:03d}_y{y_str}_a{angle_str}"
+        )
+    else:
+        run_dir = os.path.join(output_dir, f"run_{run_timestamp}")
+    return run_dir
+
+def sample_trajectory(polyline_points: List[np.ndarray], resolution: float) -> List[Tuple[np.ndarray, float]]:
+    samples = []
+    if not polyline_points:
+        return samples
+    
+    current_pos = polyline_points[0]
+    dist_to_next = 0.0
+    
+    for i in range(len(polyline_points) - 1):
+        pt_a = polyline_points[i]
+        pt_b = polyline_points[i+1]
+        
+        dir_vec = pt_b - pt_a
+        length = np.linalg.norm(dir_vec)
+        if length < 1e-6:
+            continue
+        
+        unit_dir = dir_vec / length
+        yaw = math.atan2(dir_vec[1], dir_vec[0])
+        
+        t = dist_to_next
+        while t <= length:
+            pt = pt_a + t * unit_dir
+            samples.append((pt, yaw))
+            t += resolution
+            
+        dist_to_next = t - length
+        
+    return samples
 
 
 class LinkControllerNode(Node):
@@ -62,6 +134,9 @@ class LinkControllerNode(Node):
         self.declare_parameter('min_hold_time_s', 1.0)
         self.declare_parameter('switch_margin_db', 2.0)
         self.declare_parameter('proactive_grace_period_s', 0.5)
+        self.declare_parameter('logging_level', 1)
+        self.declare_parameter('heatmap_resolution_m', 0.2)
+        self.declare_parameter('run_timestamp', '')
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -94,6 +169,15 @@ class LinkControllerNode(Node):
         self.proactive_grace_period_s: float = float(
             self.get_parameter('proactive_grace_period_s').value
         )
+        self.logging_level: int = int(
+            self.get_parameter('logging_level').value
+        )
+        self.heatmap_resolution_m: float = float(
+            self.get_parameter('heatmap_resolution_m').value
+        )
+        self.run_timestamp: str = str(
+            self.get_parameter('run_timestamp').value
+        )
 
         # 車両名リストのパース
         if isinstance(vehicle_names_raw, list):
@@ -110,7 +194,8 @@ class LinkControllerNode(Node):
         # ポリシー検証
         valid_policies = (
             'sequential', 'round_robin', 'rssi_priority',
-            'geometric_beam_priority', 'physical_score_priority', 'geometric_weighted'
+            'geometric_beam_priority', 'physical_score_priority', 'geometric_weighted',
+            'feedforward_optimal'
         )
         if self.scheduling_policy not in valid_policies:
             self.get_logger().warn(
@@ -187,18 +272,219 @@ class LinkControllerNode(Node):
             )
             self._mission_subs.append(sub_mc)
 
+        # Load run parameters and precalculate nominal RSSI LUT if feedforward_optimal or level >= 5
+        self.y_pos = 0.0
+        self.angle = 0.0
+        self.summary_filename = 'sweep_summary.csv'
+        self.center_antenna_name = 'shinkansen_mid'
+        try:
+            with open('/workspace/config/sim_params.yaml', 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+                spawn_ent = config.get('spawn_entities', {})
+                antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
+                antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
+                self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
+                self.angle = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
+                self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
+                
+                # 車両アンテナから中心アンテナを動的に特定
+                vehicles_cfg = config.get('vehicles', [])
+                if vehicles_cfg:
+                    vehicle = vehicles_cfg[0]
+                    vehicle_antennas = vehicle.get('antennas', [])
+                    min_x_offset = float('inf')
+                    for va in vehicle_antennas:
+                        offset = va.get('offset', [0.0, 0.0, 0.0])
+                        x_off = abs(float(offset[0]))
+                        if x_off < min_x_offset:
+                            min_x_offset = x_off
+                            self.center_antenna_name = va['name']
+                    self.get_logger().info(f"車両中心の基準アンテナとして {self.center_antenna_name} を検出しました (x_offset: {min_x_offset}m)")
+        except Exception as e:
+            self.get_logger().warn(f"Failed to read yaml for summary / center antenna: {e}")
+
+        # Set run directory
+        self.run_dir = get_run_dir('/workspace/sim_results/', self.summary_filename, self.run_timestamp, self.y_pos, self.angle)
+
+        self.lut = []
+        self.ff_file = None
+        self.ff_writer = None
+        self._start_time = None
+
+        if self.scheduling_policy == 'feedforward_optimal' or self.logging_level >= 5:
+            self.get_logger().info('フィードフォワード用 nominal RSSI ヒートマップの事前計算を開始します。')
+            try:
+                with open('/workspace/config/sim_params.yaml', 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                
+                spawn_ent = config.get('spawn_entities', {})
+                base_stations = []
+                for k, v in spawn_ent.items():
+                    if k.startswith('antenna_'):
+                        pos = np.array(v.get('pose', [0, 0, 0, 0, 0, 0])[:3], dtype=float)
+                        offset = np.array(v.get('antenna_offset', [0, 0, 0]), dtype=float)
+                        rpy = np.array(v.get('pose', [0, 0, 0, 0, 0, 0])[3:6], dtype=float)
+                        rel_rpy = np.array(v.get('antenna_relative_rpy', [0, 0, 0]), dtype=float)
+                        base_stations.append({
+                            'name': k,
+                            'position': pos,
+                            'antenna_offset': offset,
+                            'rpy': rpy,
+                            'antenna_relative_rpy': rel_rpy
+                        })
+                
+                vehicles_cfg = config.get('vehicles', [])
+                if not vehicles_cfg:
+                    raise ValueError("No vehicles found in config.")
+                vehicle = vehicles_cfg[0]
+                vehicle_spawn_pose = vehicle.get('pose', [0, 0, 0, 0, 0, 0])
+                vehicle_waypoints = vehicle.get('waypoints', [])
+                vehicle_antennas = vehicle.get('antennas', [])
+                
+                polyline_points = [np.array(vehicle_spawn_pose[:3], dtype=float)]
+                for wp in vehicle_waypoints:
+                    polyline_points.append(np.array(wp[:3], dtype=float))
+                
+                samples = sample_trajectory(polyline_points, self.heatmap_resolution_m)
+                self.get_logger().info(f'軌道をサンプリングしました: {len(samples)} 点 (解像度: {self.heatmap_resolution_m} m)')
+                
+                comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
+                e_plane_path = comms_params.get('e_plane_path', '/workspace/config/e_plane.csv')
+                h_plane_path = comms_params.get('h_plane_path', '/workspace/config/h_plane.csv')
+                max_att = float(comms_params.get('max_antenna_attenuation', 30.0))
+                
+                parser = AntennaPatternParser(
+                    e_plane_path=e_plane_path,
+                    h_plane_path=h_plane_path,
+                    max_antenna_attenuation=max_att
+                )
+                
+                pl_params = comms_params.get('path_loss', {})
+                c = float(pl_params.get('c', 299792458.0))
+                frequency = float(pl_params.get('frequency', 6.0e10))
+                exponent = float(pl_params.get('exponent', 2.0))
+                d0 = float(pl_params.get('d0', 1.0))
+                pl_d0 = float(pl_params.get('pl_d0', -1.0))
+                
+                propagation_model = LogDistancePathLossModel(
+                    c=c, frequency=frequency, exponent=exponent, d0=d0, pl_d0=pl_d0
+                )
+                
+                tx_power = float(comms_params.get('tx_power', -7.0))
+                noise_variance = float(comms_params.get('noise_variance', 0.0))
+                mcs_table_path = comms_params.get('mcs_table_path', '/workspace/config/MCStable.csv')
+                
+                calculator = CommsCalculator(
+                    propagation_model=propagation_model,
+                    tx_power_dbm=tx_power,
+                    noise_variance=noise_variance,
+                    mcs_table_path=mcs_table_path
+                )
+                
+                heatmap_rows = []
+                for pt, yaw in samples:
+                    ugv_orientation = np.array([0.0, 0.0, yaw])
+                    
+                    max_rssi = float('-inf')
+                    optimal_antenna = None
+                    row = {
+                        'x_m': round(pt[0], 4),
+                        'y_m': round(pt[1], 4),
+                        'z_m': round(pt[2], 4),
+                        'yaw_rad': round(yaw, 4)
+                    }
+                    
+                    for bs in base_stations:
+                        bs_antenna_pos = bs['position'] + bs['antenna_offset']
+                        bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
+                        
+                        for va in vehicle_antennas:
+                            ugv_antenna_pos = pt + np.asarray(va['offset'], dtype=float)
+                            ugv_ant_rpy = ugv_orientation + np.asarray(va['relative_rpy'], dtype=float)
+                            
+                            tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = parser.get_tx_rx_gains(
+                                tx_pos_world=bs_antenna_pos,
+                                tx_rpy_world=bs_ant_rpy,
+                                rx_pos_world=ugv_antenna_pos,
+                                rx_rpy_world=ugv_ant_rpy,
+                            )
+                            antenna_gain_db = float(tx_total + rx_total)
+                            
+                            metrics = calculator.calculate_all(
+                                ugv_antenna_pos,
+                                bs_antenna_pos,
+                                antenna_gain_db=antenna_gain_db,
+                                add_noise=False
+                            )
+                            rssi = metrics['rssi']
+                            col_name = f"rssi_{bs['name']}_{va['name']}"
+                            row[col_name] = round(rssi, 2)
+                            
+                            if rssi > max_rssi:
+                                max_rssi = rssi
+                                optimal_antenna = va['name']
+                                
+                    row['optimal_antenna'] = optimal_antenna
+                    row['max_rssi'] = round(max_rssi, 2)
+                    heatmap_rows.append(row)
+                    
+                    self.lut.append((pt[0], pt[1], pt[2], optimal_antenna, max_rssi))
+                
+                if self.logging_level >= 5:
+                    heatmap_dir = os.path.join(self.run_dir, 'heatmap')
+                    os.makedirs(heatmap_dir, exist_ok=True)
+                    heatmap_path = os.path.join(heatmap_dir, 'rssi_heatmap.csv')
+                    
+                    with open(heatmap_path, 'w', newline='', encoding='utf-8') as csvfile:
+                        fieldnames = ['x_m', 'y_m', 'z_m', 'yaw_rad']
+                        for bs in base_stations:
+                            for va in vehicle_antennas:
+                                fieldnames.append(f"rssi_{bs['name']}_{va['name']}")
+                        fieldnames.extend(['optimal_antenna', 'max_rssi'])
+                        
+                        writer = csv.DictWriter(csvfile, fieldnames=fieldnames)
+                        writer.writeheader()
+                        for r in heatmap_rows:
+                            writer.writerow(r)
+                            
+                    self._set_file_ownership(heatmap_path)
+                    self.get_logger().info(f'nominal RSSI ヒートマップを保存しました: {heatmap_path}')
+                    
+            except Exception as e:
+                self.get_logger().error(f'事前計算中にエラーが発生しました: {e}')
+                import traceback
+                self.get_logger().error(traceback.format_exc())
+
+        if self.logging_level >= 5:
+            try:
+                control_dir = os.path.join(self.run_dir, 'control')
+                os.makedirs(control_dir, exist_ok=True)
+                ff_path = os.path.join(control_dir, 'feedforward_log.csv')
+                
+                fieldnames = ['time_s', 'ugv_x_m', 'ugv_y_m', 'ugv_z_m']
+                for name in self.vehicle_names:
+                    fieldnames.append(f"rssi_{name}")
+                fieldnames.extend(['selected_antenna', 'rssi_optimal_dBm'])
+                
+                self.ff_file = open(ff_path, 'w', newline='', encoding='utf-8')
+                self.ff_writer = csv.DictWriter(self.ff_file, fieldnames=fieldnames)
+                self.ff_writer.writeheader()
+                self._set_file_ownership(ff_path)
+            except Exception as e:
+                self.get_logger().error(f'フィードフォワードログファイルオープンに失敗しました: {e}')
+
         # ストラテジーの初期化
         try:
             from .link_scheduling_strategy import (
                 SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy,
                 GeometricBeamPriorityStrategy, GeometricWeightedStrategy,
-                PhysicalScorePriorityStrategy
+                PhysicalScorePriorityStrategy, FeedforwardOptimalStrategy
             )
         except ImportError:
             from link_scheduling_strategy import (
                 SequentialStrategy, RoundRobinStrategy, RssiPriorityStrategy,
                 GeometricBeamPriorityStrategy, GeometricWeightedStrategy,
-                PhysicalScorePriorityStrategy
+                PhysicalScorePriorityStrategy, FeedforwardOptimalStrategy
             )
 
         if self.scheduling_policy == 'sequential':
@@ -218,6 +504,8 @@ class LinkControllerNode(Node):
             )
         elif self.scheduling_policy == 'geometric_weighted':
             self.strategy = GeometricWeightedStrategy(self.weight_distance, self.weight_angle)
+        elif self.scheduling_policy == 'feedforward_optimal':
+            self.strategy = FeedforwardOptimalStrategy(self.lut, self.center_antenna_name)
         else:
             self.strategy = SequentialStrategy()
 
@@ -268,7 +556,10 @@ class LinkControllerNode(Node):
                     'path_loss': m.path_loss,
                     'comm_active': m.comm_active,
                     'link_state': m.link_state,
-                    'rssi': m.rssi
+                    'rssi': m.rssi,
+                    'ugv_x': m.ugv_x,
+                    'ugv_y': m.ugv_y,
+                    'ugv_z': m.ugv_z
                 }
             
             # スケジュール処理を実行
@@ -384,6 +675,57 @@ class LinkControllerNode(Node):
             has_grant = (name == active_name)
             msg.data = has_grant
             pub.publish(msg)
+
+        # Feedforward log
+        if self.logging_level >= 5 and self.ff_writer is not None:
+            if self._start_time is None:
+                self._start_time = current_time
+            elapsed = current_time - self._start_time
+            
+            ux, uy, uz = 0.0, 0.0, 0.0
+            for name in self.vehicle_names:
+                info = self._geometry_info.get(name, {})
+                if 'ugv_x' in info:
+                    ux = info['ugv_x']
+                    uy = info['ugv_y']
+                    uz = info['ugv_z']
+                    break
+            
+            nominal_rssi = float('-inf')
+            if hasattr(self.strategy, 'lut') and self.strategy.lut and hasattr(self.strategy, '_last_idx'):
+                last_idx = getattr(self.strategy, '_last_idx', 0)
+                if 0 <= last_idx < len(self.strategy.lut):
+                    nominal_rssi = self.strategy.lut[last_idx][4]
+            
+            row = {
+                'time_s': round(elapsed, 4),
+                'ugv_x_m': round(ux, 4),
+                'ugv_y_m': round(uy, 4),
+                'ugv_z_m': round(uz, 4)
+            }
+            for name in self.vehicle_names:
+                row[f"rssi_{name}"] = round(self._rssi.get(name, float('-inf')), 2)
+            row['selected_antenna'] = self.vehicle_names[self._active_idx]
+            row['rssi_optimal_dBm'] = round(nominal_rssi, 2)
+            
+            try:
+                self.ff_writer.writerow(row)
+                self.ff_file.flush()
+            except Exception as e:
+                self.get_logger().error(f"Failed to write feedforward log: {e}")
+
+    def _set_file_ownership(self, filepath):
+        try:
+            ws_stat = os.stat('/workspace')
+            os.chown(filepath, ws_stat.st_uid, ws_stat.st_gid)
+        except Exception:
+            pass
+
+    def destroy_node(self):
+        if hasattr(self, 'ff_file') and self.ff_file and not self.ff_file.closed:
+            self.ff_file.close()
+            self.ff_file = None
+        super().destroy_node()
 
 
 def main(args=None):
