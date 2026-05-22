@@ -34,16 +34,78 @@ _MISSION_QOS = QoSProfile(
 # RTF=10（固定）なら 3s壁時計 = 30s シミュレーション時間
 _WATCHDOG_STOP_TIMEOUT_SEC = 3.0
 
+def get_workspace_root() -> str:
+    if os.path.exists('/workspace'):
+        return '/workspace'
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    temp_dir = current_dir
+    while True:
+        if os.path.exists(os.path.join(temp_dir, '.git')) or os.path.exists(os.path.join(temp_dir, 'src')):
+            return temp_dir
+        parent = os.path.dirname(temp_dir)
+        if parent == temp_dir:
+            break
+        temp_dir = parent
+    return os.getcwd()
+
+
+def resolve_path(raw_path: str) -> str:
+    if not raw_path:
+        return raw_path
+    
+    normalized = raw_path.replace('\\', '/')
+    if os.path.isabs(raw_path) and os.path.exists(raw_path):
+        return raw_path
+
+    ws_root = get_workspace_root()
+    if '/workspace/' in normalized or normalized.startswith('workspace/'):
+        parts = normalized.split('/workspace/', 1)
+        if len(parts) < 2:
+            parts = normalized.split('workspace/', 1)
+        rel_path = parts[1]
+        
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            pkg_share = get_package_share_directory('comms_sim_pkg')
+            if rel_path.startswith('config/'):
+                basename = os.path.basename(rel_path)
+                resolved = os.path.join(pkg_share, 'config', basename)
+                if os.path.exists(resolved):
+                    return resolved
+            elif rel_path.startswith('models/'):
+                resolved = os.path.join(pkg_share, rel_path)
+                if os.path.exists(resolved):
+                    return resolved
+        except Exception:
+            pass
+
+        if rel_path.startswith('config/'):
+            basename = os.path.basename(rel_path)
+            resolved = os.path.join(ws_root, 'src', 'comms_sim_pkg', 'config', basename)
+            if os.path.exists(resolved):
+                return resolved
+        elif rel_path.startswith('models/'):
+            resolved = os.path.join(ws_root, 'src', 'comms_sim_pkg', 'models', rel_path.split('models/', 1)[1])
+            if os.path.exists(resolved):
+                return resolved
+
+        resolved = os.path.join(ws_root, rel_path)
+        return resolved
+
+    return raw_path
+
+
 class SimLoggerNode(Node):
     def __init__(self):
         super().__init__('sim_logger_node')
         
         self.declare_parameter('vehicle_names', [''])
         self.declare_parameter('base_vehicle_names', [''])
-        self.declare_parameter('output_dir', '/workspace/sim_results/')
+        ws_root = get_workspace_root()
+        self.declare_parameter('output_dir', os.path.join(ws_root, 'sim_results', ''))
         self.declare_parameter('logging_level', 1)
         self.declare_parameter('run_timestamp', '')
-        self.declare_parameter('config_file_path', '/workspace/config/sim_params.yaml')
+        self.declare_parameter('config_file_path', resolve_path('/workspace/config/sim_params.yaml'))
         
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         if isinstance(vehicle_names_raw, list):
@@ -205,7 +267,7 @@ class SimLoggerNode(Node):
 
     def _set_file_ownership(self, filepath):
         try:
-            ws_stat = os.stat('/workspace')
+            ws_stat = os.stat(get_workspace_root())
             os.chown(filepath, ws_stat.st_uid, ws_stat.st_gid)
         except Exception:
             pass

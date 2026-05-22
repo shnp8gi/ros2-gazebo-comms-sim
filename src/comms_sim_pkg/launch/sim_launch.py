@@ -33,6 +33,78 @@ import re
 import yaml
 import tempfile
 from ament_index_python.packages import get_package_share_directory
+
+
+def get_workspace_root() -> str:
+    """
+    シミュレーションのワークスペースルートを動的に特定する。
+    """
+    if os.path.exists('/workspace'):
+        return '/workspace'
+    
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    temp_dir = current_dir
+    while True:
+        if os.path.exists(os.path.join(temp_dir, '.git')) or os.path.exists(os.path.join(temp_dir, 'src')):
+            return temp_dir
+        parent = os.path.dirname(temp_dir)
+        if parent == temp_dir:
+            break
+        temp_dir = parent
+    return os.getcwd()
+
+
+def resolve_path(raw_path: str, pkg_share: str) -> str:
+    """
+    パスパラメータ内の /workspace/ 等の絶対パスを、実行環境の package share や
+    ローカルワークスペース内の適切な相対パスに動的にマッピング・解決する。
+    """
+    if not raw_path:
+        return raw_path
+
+    normalized = raw_path.replace('\\', '/')
+
+    if '/workspace/' in normalized or normalized.startswith('workspace/'):
+        parts = normalized.split('/workspace/', 1)
+        if len(parts) < 2:
+            parts = normalized.split('workspace/', 1)
+        rel_path = parts[1]
+
+        # config/ ディレクトリの解決
+        if rel_path.startswith('config/'):
+            basename = os.path.basename(rel_path)
+            resolved = os.path.join(pkg_share, 'config', basename)
+            if os.path.exists(resolved):
+                return resolved
+
+        # models/ ディレクトリの解決
+        if rel_path.startswith('models/') or rel_path == 'models':
+            resolved = os.path.join(pkg_share, rel_path)
+            if os.path.exists(resolved):
+                return resolved
+            return os.path.join(pkg_share, 'models')
+
+        # worlds/ または resource/ ワールドファイルの解決
+        if 'minimal_world.sdf' in rel_path:
+            resolved = os.path.join(pkg_share, 'worlds', 'minimal_world.sdf')
+            if os.path.exists(resolved):
+                return resolved
+
+        if rel_path.startswith('comms_sim_pkg/resource/'):
+            sub_path = rel_path.replace('comms_sim_pkg/resource/', 'worlds/', 1)
+            resolved = os.path.join(pkg_share, sub_path)
+            if os.path.exists(resolved):
+                return resolved
+
+    if os.path.isabs(raw_path) and os.path.exists(raw_path):
+        return raw_path
+
+    pkg_relative = os.path.join(pkg_share, raw_path)
+    if os.path.exists(pkg_relative):
+        return pkg_relative
+
+    return raw_path
+
 from launch import LaunchDescription
 from launch.actions import (
     DeclareLaunchArgument,
@@ -218,25 +290,20 @@ def launch_setup(context, *args, **kwargs):
     config = load_yaml_config(config_path)
 
     # YAMLからシミュレーション設定を取得
-    default_world_path = os.path.join(pkg_share, 'resource', 'minimal_world.sdf')
+    default_world_path = os.path.join(pkg_share, 'worlds', 'minimal_world.sdf')
     sim_config = config.get('simulation', {})
-    world_file = sim_config.get('world_file', default_world_path)
+    world_file = resolve_path(sim_config.get('world_file', default_world_path), pkg_share)
 
     if not os.path.exists(world_file):
-        alt_world_file = os.path.join('/workspace', world_file)
-        if os.path.exists(alt_world_file):
-            world_file = alt_world_file
-        else:
-            raise FileNotFoundError(
-                f"\n{'='*70}\n"
-                f"エラー: ワールドファイルが見つかりません\n"
-                f"{'='*70}\n"
-                f"検索パス:\n"
-                f"  1. {world_file}\n"
-                f"  2. {alt_world_file}\n"
-                f"sim_params.yaml の 'simulation.world_file' を確認してください。\n"
-                f"{'='*70}\n"
-            )
+        raise FileNotFoundError(
+            f"\n{'='*70}\n"
+            f"エラー: ワールドファイルが見つかりません\n"
+            f"{'='*70}\n"
+            f"検索パス:\n"
+            f"  - {world_file}\n"
+            f"sim_params.yaml の 'simulation.world_file' を確認してください。\n"
+            f"{'='*70}\n"
+        )
     world_name = sim_config.get('world_name', 'comms_sim_world')
     verbosity = sim_config.get('verbosity', 3)
     headless = sim_config.get('headless', False)
@@ -257,7 +324,7 @@ def launch_setup(context, *args, **kwargs):
             else:
                 print(f"[sim_launch] DISPLAY={display_env} が設定されています。GUIモードで起動します")
                 headless = False
-    model_prefix = sim_config.get('model_path_prefix', '/workspace/models')
+    model_prefix = resolve_path(sim_config.get('model_path_prefix', '/workspace/models'), pkg_share)
 
     # YAMLからタイミング設定を取得
     timing = sim_config.get('timing', {})
@@ -315,7 +382,7 @@ def launch_setup(context, *args, **kwargs):
 
     # 基本の環境変数（GPU/CPU 共通）
     gz_env = {
-        'GZ_SIM_RESOURCE_PATH': '/workspace/models',
+        'GZ_SIM_RESOURCE_PATH': model_prefix,
     }
 
     if headless:
@@ -614,9 +681,9 @@ def launch_setup(context, *args, **kwargs):
                                 'vehicle_name': ant_name,
                                 'sampling_rate': float(comms_params.get('sampling_rate', 1.0)),
                                 'noise_variance': float(comms_params.get('noise_variance', 2.0)),
-                                'e_plane_path': comms_params.get('e_plane_path', ''),
-                                'h_plane_path': comms_params.get('h_plane_path', ''),
-                                'mcs_table_path': comms_params.get('mcs_table_path', ''),
+                                'e_plane_path': resolve_path(comms_params.get('e_plane_path', ''), pkg_share),
+                                'h_plane_path': resolve_path(comms_params.get('h_plane_path', ''), pkg_share),
+                                'mcs_table_path': resolve_path(comms_params.get('mcs_table_path', ''), pkg_share),
                                 'link_establishment_time_ms': float(comms_params.get('link_establishment_time_ms', comms_params.get('link_establishment_time', 2.0))),
                                 'comm_data_limit_mb': float(comms_params.get('comm_data_limit_mb', comms_params.get('comm_data_limit', 100.0))),
                                 'path_loss.c': float(comms_params.get('path_loss', {}).get('c', 299792458)),
@@ -787,7 +854,7 @@ def launch_setup(context, *args, **kwargs):
                 {
                     'vehicle_names': vehicle_names,
                     'base_vehicle_names': base_vehicle_names,
-                    'output_dir': '/workspace/sim_results/',
+                    'output_dir': os.path.join(get_workspace_root(), 'sim_results', ''),
                     'logging_level': int(sim_config.get('logging_level', 1)),
                     'run_timestamp': run_timestamp,
                     'use_sim_time': use_sim_time_bool,
@@ -830,9 +897,19 @@ def generate_launch_description():
         description='Gazeboをヘッドレスモードで起動するかどうか (true/false/auto: yamlに従う)'
     )
 
+    ws_root = get_workspace_root()
+    ws_config = os.path.join(ws_root, 'src', 'comms_sim_pkg', 'config', 'sim_params.yaml')
+    if os.path.exists(ws_config):
+        default_config = ws_config
+    else:
+        try:
+            default_config = os.path.join(get_package_share_directory('comms_sim_pkg'), 'config', 'sim_params.yaml')
+        except Exception:
+            default_config = ws_config
+
     declare_config_file = DeclareLaunchArgument(
         'config_file',
-        default_value=os.path.join('/workspace', 'config', 'sim_params.yaml'),
+        default_value=default_config,
         description='シミュレーション設定ファイルのパス'
     )
 

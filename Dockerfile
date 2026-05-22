@@ -47,7 +47,7 @@ ENV NVIDIA_VISIBLE_DEVICES=all
 ENV NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility,display
 
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
-ENV GZ_SIM_RESOURCE_PATH=/workspace/models
+ENV GZ_SIM_RESOURCE_PATH=/workspace/src/comms_sim_pkg/models
 WORKDIR /workspace
 
 COPY ./entrypoint.sh /entrypoint.sh

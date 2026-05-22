@@ -127,18 +127,19 @@ sim_results/*
 !sim_results/.gitkeep
 
 # Keep sweep logs directory structure but ignore log files
-sweep/log/*
-!sweep/log/.gitkeep
+tools/log/*
+!tools/log/.gitkeep
 
 # -----------------------------------------------------------------------------
 # Temporary Files
 # -----------------------------------------------------------------------------
-sweep/test_regex.py
+tools/test_regex.py
 *.tmp
 *.temp
 *.bak
 *.backup
-sweep/sweep_build/
+tools/sweep_build/
+core.*
 
 # -----------------------------------------------------------------------------
 # Custom Exclusions

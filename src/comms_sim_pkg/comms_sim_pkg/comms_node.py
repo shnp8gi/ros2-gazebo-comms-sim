@@ -368,7 +368,30 @@ class CommsSimulatorNode(Node):
         self.waypoints: List[List[float]] = []
         try:
             import yaml
-            yaml_path = "/workspace/config/sim_params.yaml"
+            from ament_index_python.packages import get_package_share_directory
+            def get_workspace_root() -> str:
+                if os.path.exists('/workspace'):
+                    return '/workspace'
+                current_dir = os.path.abspath(os.path.dirname(__file__))
+                temp_dir = current_dir
+                while True:
+                    if os.path.exists(os.path.join(temp_dir, '.git')) or os.path.exists(os.path.join(temp_dir, 'src')):
+                        return temp_dir
+                    parent = os.path.dirname(temp_dir)
+                    if parent == temp_dir:
+                        break
+                    temp_dir = parent
+                return os.getcwd()
+
+            yaml_path = ''
+            try:
+                pkg_share = get_package_share_directory('comms_sim_pkg')
+                yaml_path = os.path.join(pkg_share, 'config', 'sim_params.yaml')
+            except Exception:
+                pass
+
+            if not yaml_path or not os.path.exists(yaml_path):
+                yaml_path = os.path.join(get_workspace_root(), 'src', 'comms_sim_pkg', 'config', 'sim_params.yaml')
             if os.path.exists(yaml_path):
                 with open(yaml_path, 'r', encoding='utf-8') as f:
                     config = yaml.safe_load(f)

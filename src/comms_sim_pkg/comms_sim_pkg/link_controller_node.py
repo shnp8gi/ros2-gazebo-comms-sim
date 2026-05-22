@@ -109,6 +109,67 @@ def sample_trajectory(polyline_points: List[np.ndarray], resolution: float) -> L
     return samples
 
 
+def get_workspace_root() -> str:
+    if os.path.exists('/workspace'):
+        return '/workspace'
+    current_dir = os.path.abspath(os.path.dirname(__file__))
+    temp_dir = current_dir
+    while True:
+        if os.path.exists(os.path.join(temp_dir, '.git')) or os.path.exists(os.path.join(temp_dir, 'src')):
+            return temp_dir
+        parent = os.path.dirname(temp_dir)
+        if parent == temp_dir:
+            break
+        temp_dir = parent
+    return os.getcwd()
+
+
+def resolve_path(raw_path: str) -> str:
+    if not raw_path:
+        return raw_path
+    
+    normalized = raw_path.replace('\\', '/')
+    if os.path.isabs(raw_path) and os.path.exists(raw_path):
+        return raw_path
+
+    ws_root = get_workspace_root()
+    if '/workspace/' in normalized or normalized.startswith('workspace/'):
+        parts = normalized.split('/workspace/', 1)
+        if len(parts) < 2:
+            parts = normalized.split('workspace/', 1)
+        rel_path = parts[1]
+        
+        try:
+            from ament_index_python.packages import get_package_share_directory
+            pkg_share = get_package_share_directory('comms_sim_pkg')
+            if rel_path.startswith('config/'):
+                basename = os.path.basename(rel_path)
+                resolved = os.path.join(pkg_share, 'config', basename)
+                if os.path.exists(resolved):
+                    return resolved
+            elif rel_path.startswith('models/'):
+                resolved = os.path.join(pkg_share, rel_path)
+                if os.path.exists(resolved):
+                    return resolved
+        except Exception:
+            pass
+
+        if rel_path.startswith('config/'):
+            basename = os.path.basename(rel_path)
+            resolved = os.path.join(ws_root, 'src', 'comms_sim_pkg', 'config', basename)
+            if os.path.exists(resolved):
+                return resolved
+        elif rel_path.startswith('models/'):
+            resolved = os.path.join(ws_root, 'src', 'comms_sim_pkg', 'models', rel_path.split('models/', 1)[1])
+            if os.path.exists(resolved):
+                return resolved
+
+        resolved = os.path.join(ws_root, rel_path)
+        return resolved
+
+    return raw_path
+
+
 class LinkControllerNode(Node):
     """
     基地局の一対一通信を管理するリンク制御ノード。
@@ -278,7 +339,7 @@ class LinkControllerNode(Node):
         self.summary_filename = 'sweep_summary.csv'
         self.center_antenna_name = 'shinkansen_mid'
         try:
-            with open('/workspace/config/sim_params.yaml', 'r', encoding='utf-8') as f:
+            with open(resolve_path('/workspace/config/sim_params.yaml'), 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
                 spawn_ent = config.get('spawn_entities', {})
                 antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
@@ -304,7 +365,7 @@ class LinkControllerNode(Node):
             self.get_logger().warn(f"Failed to read yaml for summary / center antenna: {e}")
 
         # Set run directory
-        self.run_dir = get_run_dir('/workspace/sim_results/', self.summary_filename, self.run_timestamp, self.y_pos, self.angle)
+        self.run_dir = get_run_dir(resolve_path('/workspace/sim_results/'), self.summary_filename, self.run_timestamp, self.y_pos, self.angle)
 
         self.lut = []
         self.ff_file = None
@@ -314,7 +375,7 @@ class LinkControllerNode(Node):
         if self.scheduling_policy == 'feedforward_optimal' or self.logging_level >= 5:
             self.get_logger().info('フィードフォワード用 nominal RSSI ヒートマップの事前計算を開始します。')
             try:
-                with open('/workspace/config/sim_params.yaml', 'r', encoding='utf-8') as f:
+                with open(resolve_path('/workspace/config/sim_params.yaml'), 'r', encoding='utf-8') as f:
                     config = yaml.safe_load(f)
                 
                 spawn_ent = config.get('spawn_entities', {})
@@ -349,8 +410,8 @@ class LinkControllerNode(Node):
                 self.get_logger().info(f'軌道をサンプリングしました: {len(samples)} 点 (解像度: {self.heatmap_resolution_m} m)')
                 
                 comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
-                e_plane_path = comms_params.get('e_plane_path', '/workspace/config/e_plane.csv')
-                h_plane_path = comms_params.get('h_plane_path', '/workspace/config/h_plane.csv')
+                e_plane_path = resolve_path(comms_params.get('e_plane_path', '/workspace/config/e_plane.csv'))
+                h_plane_path = resolve_path(comms_params.get('h_plane_path', '/workspace/config/h_plane.csv'))
                 max_att = float(comms_params.get('max_antenna_attenuation', 30.0))
                 
                 parser = AntennaPatternParser(
@@ -372,7 +433,7 @@ class LinkControllerNode(Node):
                 
                 tx_power = float(comms_params.get('tx_power', -7.0))
                 noise_variance = float(comms_params.get('noise_variance', 0.0))
-                mcs_table_path = comms_params.get('mcs_table_path', '/workspace/config/MCStable.csv')
+                mcs_table_path = resolve_path(comms_params.get('mcs_table_path', '/workspace/config/MCStable.csv'))
                 
                 calculator = CommsCalculator(
                     propagation_model=propagation_model,
@@ -716,7 +777,7 @@ class LinkControllerNode(Node):
 
     def _set_file_ownership(self, filepath):
         try:
-            ws_stat = os.stat('/workspace')
+            ws_stat = os.stat(get_workspace_root())
             os.chown(filepath, ws_stat.st_uid, ws_stat.st_gid)
         except Exception:
             pass

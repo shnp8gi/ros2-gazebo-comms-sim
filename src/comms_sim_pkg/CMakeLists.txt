@@ -39,11 +39,9 @@ install(PROGRAMS
 # =============================================================================
 install(DIRECTORY
   launch
-  DESTINATION share/${PROJECT_NAME}
-)
-
-install(DIRECTORY
-  resource
+  config
+  models
+  worlds
   DESTINATION share/${PROJECT_NAME}
 )
 

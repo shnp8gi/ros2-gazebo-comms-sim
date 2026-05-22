@@ -37,7 +37,7 @@ except Exception:
     ANGLES_DEG  = [round(0.2 * i, 2) for i in range(76)]
     TOTAL_TASKS = len(Y_POSITIONS) * len(ANGLES_DEG) * 10
 
-PROGRESS_LOG_DEFAULT = "sweep/log/sweep_progress.log"
+PROGRESS_LOG_DEFAULT = "tools/log/sweep_progress.log"
 SIM_RESULTS_DIR = "sim_results"
 
 # システムリソース検出ライブラリのロード試行
@@ -49,12 +49,12 @@ except ImportError:
 
 def find_latest_progress_log():
     """sweep/log/ 配下から最も新しいタイムスタンプフォルダ内の sweep_progress.log を探す"""
-    pattern = os.path.join("sweep", "log", "*", "sweep_progress.log")
+    pattern = os.path.join("tools", "log", "*", "sweep_progress.log")
     logs = glob.glob(pattern)
     if not logs:
-        # フォールバックとして sweep/log/sweep_progress.log や sweep_progress.log も探す
+        # フォールバックとして tools/log/sweep_progress.log や sweep_progress.log も探す
         fallback_patterns = [
-            os.path.join("sweep", "log", "sweep_progress.log"),
+            os.path.join("tools", "log", "sweep_progress.log"),
             "sweep_progress.log"
         ]
         for p in fallback_patterns:

@@ -12,10 +12,10 @@ import threading
 import queue
 import argparse
 
-PROGRESS_LOG = "sweep/log/sweep_progress.log"
+PROGRESS_LOG = "tools/log/sweep_progress.log"
 # 1タスクあたりの最大待機時間 [秒]
 TASK_TIMEOUT_SEC = 120
-# スイープ時の加速倍率 (ヘッドレス時のみ有効。1.0=リアルタイム)
+# スイープ時の加速倍率 (ヘッドレス時のみ有効.1.0=リアルタイム)
 SWEEP_REAL_TIME_FACTOR = 5.0
 # パラメータスイープを繰り返す回数
 NUM_RUNS = 10
@@ -112,8 +112,8 @@ def log_progress(line: str):
 Y_POSITIONS = [1.0] # 基地局のY位置 (m)
 ANGLES_DEG = [round(0.2 * i, 2) for i in range(76)]
 
-CONFIG_PATH = "config/sim_params.yaml"
-BACKUP_PATH = "sweep/sweep_build/sim_params.yaml.bak"
+CONFIG_PATH = "src/comms_sim_pkg/config/sim_params.yaml"
+BACKUP_PATH = "tools/sweep_build/sim_params.yaml.bak"
 
 def average_summaries(summary_files, output_file):
     """各ランのCSVファイルを読み込んで平均値を集計・保存する"""
@@ -170,7 +170,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     antenna_yaw = -1.5708 + angle_rad
 
     summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_w{worker_id}.csv"
-    tmp_config_path = f"sweep/sweep_build/sim_params_tmp_{worker_id}.yaml"
+    tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
 
     pct = (overall_task_no - 1) / total_runs_tasks * 100
     print(f"\n=======================================================")
@@ -235,7 +235,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                f"export ROS_DOMAIN_ID={ros_domain_id} && "
                f"export GZ_PARTITION={gz_partition} && "
                f"export GZ_PORT={gz_port} && "
-               f"export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/config/fastdds_no_shm.xml && "
+               f"export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/src/comms_sim_pkg/config/fastdds_no_shm.xml && "
                f"source /opt/ros/humble/setup.bash && source install/setup.bash && "
                f"ros2 launch comms_sim_pkg sim_launch.py config_file:=/workspace/{tmp_config_path}"]
     else:
@@ -243,7 +243,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                f"export ROS_DOMAIN_ID={ros_domain_id} && "
                f"export GZ_PARTITION={gz_partition} && "
                f"export GZ_PORT={gz_port} && "
-               f"export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/config/fastdds_no_shm.xml && "
+               f"export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/src/comms_sim_pkg/config/fastdds_no_shm.xml && "
                f"source /opt/ros/humble/setup.bash && source install/setup.bash && "
                f"ros2 launch comms_sim_pkg sim_launch.py config_file:=/workspace/{tmp_config_path}"]
 
@@ -300,8 +300,8 @@ def main():
     if concurrency <= 0:
         concurrency = get_optimal_concurrency()
 
-    # sweep/sweep_build ディレクトリの作成
-    os.makedirs("sweep/sweep_build", exist_ok=True)
+    # tools/sweep_build ディレクトリの作成
+    os.makedirs("tools/sweep_build", exist_ok=True)
 
     # 常に実行時の最新設定ファイルをバックアップする
     if os.path.exists(BACKUP_PATH):
@@ -310,7 +310,7 @@ def main():
 
     # クリーンアップ
     import glob
-    for f in glob.glob("sweep/sweep_build/sim_params_tmp_*.yaml"):
+    for f in glob.glob("tools/sweep_build/sim_params_tmp_*.yaml"):
         try:
             os.remove(f)
         except Exception as e:
@@ -320,7 +320,7 @@ def main():
 
     # 進捗ログの保存先を実行時のタイムスタンプサブディレクトリ配下に動的決定
     global PROGRESS_LOG
-    PROGRESS_LOG = f"sweep/log/{sweep_start_time}/sweep_progress.log"
+    PROGRESS_LOG = f"tools/log/{sweep_start_time}/sweep_progress.log"
     os.makedirs(os.path.dirname(PROGRESS_LOG), exist_ok=True)
 
     total_tasks_per_run = len(Y_POSITIONS) * len(ANGLES_DEG)

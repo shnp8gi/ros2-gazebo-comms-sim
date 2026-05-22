@@ -11,7 +11,7 @@ services:
     
     environment:
       - DISPLAY=${DISPLAY}
-      - GZ_SIM_RESOURCE_PATH=/workspace/models
+      - GZ_SIM_RESOURCE_PATH=/workspace/src/comms_sim_pkg/models
       - ROS_DOMAIN_ID=0
 
     volumes:
