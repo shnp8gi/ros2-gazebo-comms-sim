@@ -21,78 +21,129 @@ SWEEP_REAL_TIME_FACTOR = 5.0
 NUM_RUNS = 10
 
 def get_optimal_concurrency() -> int:
-    """CPUコア数と利用可能なメモリ容量から最適な並列度を決定する"""
-    # 1. CPU制限の計算 (物理コア of 75%)
+    """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する"""
+    # 1. CPU制限の計算 (物理コア数および現在のロードアベレージに基づく)
     try:
         cpu_count = os.cpu_count()
     except Exception:
         cpu_count = 4
     if cpu_count is None:
         cpu_count = 4
-    max_by_cpu = max(1, int(cpu_count * 0.75))
 
-    # 2. メモリ制限の取得
-    mem_limit = None
+    # 1分間のロードアベレージを取得して、利用可能な空きコア数を算出する
+    load_1min = 0.0
+    loadavg_path = "/proc/loadavg"
+    if os.path.exists(loadavg_path):
+        try:
+            with open(loadavg_path, "r") as f:
+                load_1min = float(f.read().split()[0])
+        except Exception:
+            pass
+
+    # 空きコア数 = 物理コア数 - 1分間ロードアベレージ
+    # (ロードアベレージがコア数を超えている場合は、他のプロセスで完全に飽和しているため空きは 0 になる)
+    cpu_available = max(0.0, cpu_count - load_1min)
+    
+    # 負荷が高い場合でも最低 1 並列は確保する。空きコア数の 75% を最大並列度とする。
+    # ただし、物理コア数の 75% も上限値として設ける（負荷がない場合でも全コアを使い切らないようにするため）
+    max_by_cpu = min(
+        max(1, int(cpu_available * 0.75)),
+        max(1, int(cpu_count * 0.75))
+    )
+
+    # 2. 空きメモリ容量の取得
+    cgroup_available = None
 
     # (a) cgroup v2
-    cgroup2_path = "/sys/fs/cgroup/memory.max"
-    if os.path.exists(cgroup2_path):
+    cgroup2_max = "/sys/fs/cgroup/memory.max"
+    cgroup2_current = "/sys/fs/cgroup/memory.current"
+    if os.path.exists(cgroup2_max) and os.path.exists(cgroup2_current):
         try:
-            with open(cgroup2_path, "r") as f:
-                val = f.read().strip()
-                if val != "max":
-                    mem_limit = int(val)
+            with open(cgroup2_max, "r") as f:
+                limit_val = f.read().strip()
+            with open(cgroup2_current, "r") as f:
+                current_val = f.read().strip()
+            if limit_val != "max":
+                cgroup_available = int(limit_val) - int(current_val)
         except Exception:
             pass
 
     # (b) cgroup v1 (フォールバック)
-    if mem_limit is None:
-        cgroup1_path = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
-        if os.path.exists(cgroup1_path):
+    if cgroup_available is None:
+        cgroup1_limit = "/sys/fs/cgroup/memory/memory.limit_in_bytes"
+        cgroup1_usage = "/sys/fs/cgroup/memory/memory.usage_in_bytes"
+        if os.path.exists(cgroup1_limit) and os.path.exists(cgroup1_usage):
             try:
-                with open(cgroup1_path, "r") as f:
-                    val = f.read().strip()
-                    limit = int(val)
-                    if limit < 9223372036854771712:
-                        mem_limit = limit
+                with open(cgroup1_limit, "r") as f:
+                    limit_val = int(f.read().strip())
+                with open(cgroup1_usage, "r") as f:
+                    usage_val = int(f.read().strip())
+                if limit_val < 9223372036854771712:
+                    cgroup_available = limit_val - usage_val
             except Exception:
                 pass
 
-    # (c) /proc/meminfo (フォールバック)
-    if mem_limit is None:
-        meminfo_path = "/proc/meminfo"
-        if os.path.exists(meminfo_path):
+    # (c) /proc/meminfo から MemAvailable を取得 (システム全体の空きメモリ)
+    system_available = None
+    meminfo_path = "/proc/meminfo"
+    if os.path.exists(meminfo_path):
+        try:
+            with open(meminfo_path, "r") as f:
+                for line in f:
+                    if line.startswith("MemAvailable:"):
+                        parts = line.split()
+                        if len(parts) >= 2:
+                            system_available = int(parts[1]) * 1024  # KiB to bytes
+                        break
+        except Exception:
+            pass
+
+        # MemAvailable が見つからない場合は MemFree + Buffers + Cached でフォールバック
+        if system_available is None:
             try:
+                mem_free = 0
+                buffers = 0
+                cached = 0
                 with open(meminfo_path, "r") as f:
                     for line in f:
-                        if line.startswith("MemTotal:"):
-                            parts = line.split()
-                            if len(parts) >= 2:
-                                kb = int(parts[1])
-                                mem_limit = kb * 1024
-                            break
+                        if line.startswith("MemFree:"):
+                            mem_free = int(line.split()[1]) * 1024
+                        elif line.startswith("Buffers:"):
+                            buffers = int(line.split()[1]) * 1024
+                        elif line.startswith("Cached:"):
+                            cached = int(line.split()[1]) * 1024
+                system_available = mem_free + buffers + cached
             except Exception:
                 pass
 
-    # (d) os.sysconf (最終フォールバック)
-    if mem_limit is None:
+    # cgroup制限とシステム全体の空きメモリの最小値を「利用可能な空きメモリ」として採用
+    mem_available = None
+    if cgroup_available is not None and system_available is not None:
+        mem_available = min(cgroup_available, system_available)
+    elif cgroup_available is not None:
+        mem_available = cgroup_available
+    elif system_available is not None:
+        mem_available = system_available
+    else:
+        # (d) 最終フォールバック (総メモリの 50% を空きと仮定)
         try:
-            mem_limit = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+            total = os.sysconf('SC_PAGE_SIZE') * os.sysconf('SC_PHYS_PAGES')
+            mem_available = total // 2
         except Exception:
-            mem_limit = 4 * 1024 * 1024 * 1024  # 4 GiB fallback
+            mem_available = 4 * 1024 * 1024 * 1024  # 4 GiB fallback
 
     # 3. メモリに基づく最大並列度の計算
     safety_margin = 2.0 * 1024 * 1024 * 1024  # 2.0 GiB
     instance_memory = 700 * 1024 * 1024       # 700 MiB
 
-    max_by_mem = int((mem_limit - safety_margin) / instance_memory)
+    max_by_mem = int((mem_available - safety_margin) / instance_memory)
     max_by_mem = max(1, max_by_mem)
 
     # 4. 最適な並列度の決定
     optimal = min(max_by_cpu, max_by_mem)
     
-    print(f"[Auto-detect] CPU Count: {cpu_count} -> Max by CPU: {max_by_cpu}")
-    print(f"[Auto-detect] Memory Limit: {mem_limit / (1024**3):.2f} GiB -> Max by Mem: {max_by_mem}")
+    print(f"[Auto-detect] CPU Count: {cpu_count}, Load 1min: {load_1min:.2f} -> Max by CPU: {max_by_cpu}")
+    print(f"[Auto-detect] Available Memory: {mem_available / (1024**3):.2f} GiB -> Max by Mem: {max_by_mem}")
     print(f"[Auto-detect] Optimal Concurrency: {optimal}")
     
     return optimal
