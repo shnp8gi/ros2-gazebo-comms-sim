@@ -157,6 +157,70 @@ def log_progress(line: str):
             lf.write(line + "\n")
             lf.flush()
 
+def launch_progress_monitor():
+    """sweep_progress.py --watch を別ターミナル（または別プロセス）で自動起動する。
+    優先順位:
+      1. tmux セッション内であれば新規ウィンドウで起動
+      2. gnome-terminal / xterm が使えれば新規ウィンドウで起動
+      3. どちらも使えない場合はバックグラウンドサブプロセスとして起動
+    """
+    script_dir = os.path.dirname(os.path.abspath(__file__))
+    progress_script = os.path.join(script_dir, "sweep_progress.py")
+    if not os.path.exists(progress_script):
+        print("[Progress Monitor] sweep_progress.py が見つからないためスキップします。")
+        return
+
+    cmd_str = f"python3 {progress_script} --watch"
+
+    # --- 1. tmux セッション内かどうか確認 ---
+    if os.environ.get("TMUX"):
+        try:
+            subprocess.Popen(
+                ["tmux", "new-window", "-n", "sweep-progress", cmd_str]
+            )
+            print("[Progress Monitor] tmux の新規ウィンドウで sweep_progress.py を起動しました。")
+            print("                  (Ctrl+B → 数字キーでウィンドウ切替)")
+            return
+        except Exception as e:
+            print(f"[Progress Monitor] tmux 起動失敗: {e}")
+
+    # --- 2. gnome-terminal ---
+    if shutil.which("gnome-terminal"):
+        try:
+            subprocess.Popen(
+                ["gnome-terminal", "--", "bash", "-c", f"{cmd_str}; exec bash"]
+            )
+            print("[Progress Monitor] gnome-terminal で sweep_progress.py を起動しました。")
+            return
+        except Exception as e:
+            print(f"[Progress Monitor] gnome-terminal 起動失敗: {e}")
+
+    # --- 3. xterm ---
+    if shutil.which("xterm"):
+        try:
+            subprocess.Popen(
+                ["xterm", "-title", "Sweep Progress", "-e", cmd_str]
+            )
+            print("[Progress Monitor] xterm で sweep_progress.py を起動しました。")
+            return
+        except Exception as e:
+            print(f"[Progress Monitor] xterm 起動失敗: {e}")
+
+    # --- 4. バックグラウンドサブプロセス（フォールバック） ---
+    try:
+        subprocess.Popen(
+            ["python3", progress_script, "--watch"],
+            stdout=subprocess.DEVNULL,
+            stderr=subprocess.DEVNULL
+        )
+        print("[Progress Monitor] バックグラウンドで sweep_progress.py を起動しました。")
+        print("                  (別ターミナルで 'python3 tools/sweep_progress.py --watch' を実行すると進捗が見えます)")
+    except Exception as e:
+        print(f"[Progress Monitor] 起動失敗: {e}")
+        print("                  手動で 'python3 tools/sweep_progress.py --watch' を別ターミナルで実行してください。")
+
+
+
 # ---------------------------------------------------------
 # パラメータスイープ設定
 # ---------------------------------------------------------
@@ -382,10 +446,14 @@ def main():
         os.remove(PROGRESS_LOG)
     log_progress(f"START {datetime.datetime.now().isoformat()} TOTAL={total_runs_tasks} CONCURRENCY={concurrency}")
 
+    # 進捗監視スクリプトを別ターミナル（または別プロセス）で自動起動
+    launch_progress_monitor()
+
     print(f"Starting parameter sweep: Y_POSITIONS={Y_POSITIONS}, ANGLES_DEG={ANGLES_DEG}")
     print(f"Number of runs per task: {NUM_RUNS}")
     print(f"Total tasks across all runs: {total_runs_tasks}")
     print(f"Concurrency level: {concurrency}")
+
 
     # タスクリストの作成
     tasks_list = []
