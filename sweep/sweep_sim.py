@@ -305,6 +305,14 @@ def main():
         os.remove(BACKUP_PATH)
     shutil.copy2(CONFIG_PATH, BACKUP_PATH)
 
+    # 過去の異常終了などで残ってしまった一時設定ファイル（sim_params_tmp_*.yaml）をクリア
+    import glob
+    for f in glob.glob("config/sim_params_tmp_*.yaml"):
+        try:
+            os.remove(f)
+        except Exception as e:
+            print(f"Warning: Failed to clean up leftover config file {f}: {e}")
+
     sweep_start_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 
     # 進捗ログの保存先を実行時のタイムスタンプサブディレクトリ配下に動的決定
