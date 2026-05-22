@@ -170,7 +170,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     antenna_yaw = -1.5708 + angle_rad
 
     summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_w{worker_id}.csv"
-    tmp_config_path = f"sweep_build/sim_params_tmp_{worker_id}.yaml"
+    tmp_config_path = f"sweep/sweep_build/sim_params_tmp_{worker_id}.yaml"
 
     pct = (overall_task_no - 1) / total_runs_tasks * 100
     print(f"\n=======================================================")
@@ -305,10 +305,10 @@ def main():
         os.remove(BACKUP_PATH)
     shutil.copy2(CONFIG_PATH, BACKUP_PATH)
 
-    # sweep_build ディレクトリの作成とクリーンアップ
-    os.makedirs("sweep_build", exist_ok=True)
+    # sweep/sweep_build ディレクトリの作成とクリーンアップ
+    os.makedirs("sweep/sweep_build", exist_ok=True)
     import glob
-    for f in glob.glob("sweep_build/sim_params_tmp_*.yaml"):
+    for f in glob.glob("sweep/sweep_build/sim_params_tmp_*.yaml"):
         try:
             os.remove(f)
         except Exception as e:

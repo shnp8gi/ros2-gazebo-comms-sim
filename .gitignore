@@ -138,7 +138,7 @@ sweep/test_regex.py
 *.temp
 *.bak
 *.backup
-sweep_build/
+sweep/sweep_build/
 
 # -----------------------------------------------------------------------------
 # Custom Exclusions
