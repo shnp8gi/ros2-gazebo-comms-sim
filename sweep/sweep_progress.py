@@ -144,7 +144,9 @@ def parse_progress_log(log_path: str):
 
 def count_csv_rows():
     """sim_results/ 内の最新 CSV から完了した run_id 数を数える"""
-    csvs = sorted(glob.glob(os.path.join(SIM_RESULTS_DIR, "sweep_summary_*.csv")))
+    csvs = sorted(glob.glob(os.path.join(SIM_RESULTS_DIR, "sweep_*", "sweep_summary_run*.csv")))
+    if not csvs:
+        csvs = sorted(glob.glob(os.path.join(SIM_RESULTS_DIR, "sweep_summary_*.csv")))
     if not csvs:
         return 0, None
     latest = csvs[-1]

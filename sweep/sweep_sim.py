@@ -113,7 +113,7 @@ Y_POSITIONS = [1.0] # 基地局のY位置 (m)
 ANGLES_DEG = [round(0.2 * i, 2) for i in range(76)]
 
 CONFIG_PATH = "config/sim_params.yaml"
-BACKUP_PATH = "config/sim_params.yaml.bak"
+BACKUP_PATH = "sweep/sweep_build/sim_params.yaml.bak"
 
 def average_summaries(summary_files, output_file):
     """各ランのCSVファイルを読み込んで平均値を集計・保存する"""
@@ -300,13 +300,15 @@ def main():
     if concurrency <= 0:
         concurrency = get_optimal_concurrency()
 
+    # sweep/sweep_build ディレクトリの作成
+    os.makedirs("sweep/sweep_build", exist_ok=True)
+
     # 常に実行時の最新設定ファイルをバックアップする
     if os.path.exists(BACKUP_PATH):
         os.remove(BACKUP_PATH)
     shutil.copy2(CONFIG_PATH, BACKUP_PATH)
 
-    # sweep/sweep_build ディレクトリの作成とクリーンアップ
-    os.makedirs("sweep/sweep_build", exist_ok=True)
+    # クリーンアップ
     import glob
     for f in glob.glob("sweep/sweep_build/sim_params_tmp_*.yaml"):
         try:
