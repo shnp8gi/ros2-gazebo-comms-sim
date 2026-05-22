@@ -125,6 +125,7 @@ $RECYCLE.BIN/
 # Keep simulation results directory structure but ignore data contents
 sim_results/*
 !sim_results/.gitkeep
+!sim_results/COLCON_IGNORE
 
 # Keep sweep logs directory structure but ignore log files
 tools/log/*

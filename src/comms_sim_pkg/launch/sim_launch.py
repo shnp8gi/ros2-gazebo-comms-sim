@@ -293,6 +293,7 @@ def launch_setup(context, *args, **kwargs):
     default_world_path = os.path.join(pkg_share, 'worlds', 'minimal_world.sdf')
     sim_config = config.get('simulation', {})
     world_file = resolve_path(sim_config.get('world_file', default_world_path), pkg_share)
+    output_subdir = str(sim_config.get('output_subdir', ''))
 
     if not os.path.exists(world_file):
         raise FileNotFoundError(
@@ -837,7 +838,9 @@ def launch_setup(context, *args, **kwargs):
                             'logging_level': int(sim_config.get('logging_level', 1)),
                             'heatmap_resolution_m': float(link_ctrl_params.get('heatmap_resolution_m', 0.2)),
                             'run_timestamp': run_timestamp,
-                            'use_sim_time': use_sim_time_bool
+                            'use_sim_time': use_sim_time_bool,
+                            'config_file_path': config_path,
+                            'output_subdir': output_subdir
                         }
                     ]
                 )
@@ -858,7 +861,8 @@ def launch_setup(context, *args, **kwargs):
                     'logging_level': int(sim_config.get('logging_level', 1)),
                     'run_timestamp': run_timestamp,
                     'use_sim_time': use_sim_time_bool,
-                    'config_file_path': config_path
+                    'config_file_path': config_path,
+                    'output_subdir': output_subdir
                 }
             ]
         )

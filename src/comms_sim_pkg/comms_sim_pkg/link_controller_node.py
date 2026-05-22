@@ -59,23 +59,43 @@ except ImportError:
         TwoRayGroundModel,
     )
 
-def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float) -> str:
-    match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', summary_filename)
-    if match:
-        sweep_timestamp = match.group(1)
-        run_idx = int(match.group(2))
+def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float, output_subdir: str = '') -> str:
+    if output_subdir:
+        import re
+        run_idx = None
+        match_run = re.search(r'run(\d+)', summary_filename)
+        if match_run:
+            run_idx = int(match_run.group(1))
+            
         angle_deg = math.degrees(antenna_yaw + 1.5708)
         angle_deg = round(angle_deg, 2)
         angle_str = f"{angle_deg:g}"
         y_str = f"{round(y_pos, 2):g}"
+        
+        run_name = f"run_{run_idx:03d}_y{y_str}_a{angle_str}" if run_idx is not None else f"run_{run_timestamp}"
         run_dir = os.path.join(
             output_dir,
-            f"sweep_{sweep_timestamp}",
+            output_subdir,
             "runs",
-            f"run_{run_idx:03d}_y{y_str}_a{angle_str}"
+            run_name
         )
     else:
-        run_dir = os.path.join(output_dir, f"run_{run_timestamp}")
+        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', summary_filename)
+        if match:
+            sweep_timestamp = match.group(1)
+            run_idx = int(match.group(2))
+            angle_deg = math.degrees(antenna_yaw + 1.5708)
+            angle_deg = round(angle_deg, 2)
+            angle_str = f"{angle_deg:g}"
+            y_str = f"{round(y_pos, 2):g}"
+            run_dir = os.path.join(
+                output_dir,
+                f"sweep_{sweep_timestamp}",
+                "runs",
+                f"run_{run_idx:03d}_y{y_str}_a{angle_str}"
+            )
+        else:
+            run_dir = os.path.join(output_dir, f"run_{run_timestamp}")
     return run_dir
 
 def sample_trajectory(polyline_points: List[np.ndarray], resolution: float) -> List[Tuple[np.ndarray, float]]:
@@ -198,6 +218,8 @@ class LinkControllerNode(Node):
         self.declare_parameter('logging_level', 1)
         self.declare_parameter('heatmap_resolution_m', 0.2)
         self.declare_parameter('run_timestamp', '')
+        self.declare_parameter('config_file_path', resolve_path('/workspace/config/sim_params.yaml'))
+        self.declare_parameter('output_subdir', '')
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -238,6 +260,12 @@ class LinkControllerNode(Node):
         )
         self.run_timestamp: str = str(
             self.get_parameter('run_timestamp').value
+        )
+        self.config_file_path: str = str(
+            self.get_parameter('config_file_path').value
+        )
+        self.output_subdir: str = str(
+            self.get_parameter('output_subdir').value
         )
 
         # 車両名リストのパース
@@ -339,7 +367,7 @@ class LinkControllerNode(Node):
         self.summary_filename = 'sweep_summary.csv'
         self.center_antenna_name = 'shinkansen_mid'
         try:
-            with open(resolve_path('/workspace/config/sim_params.yaml'), 'r', encoding='utf-8') as f:
+            with open(self.config_file_path, 'r', encoding='utf-8') as f:
                 config = yaml.safe_load(f)
                 spawn_ent = config.get('spawn_entities', {})
                 antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
@@ -365,7 +393,7 @@ class LinkControllerNode(Node):
             self.get_logger().warn(f"Failed to read yaml for summary / center antenna: {e}")
 
         # Set run directory
-        self.run_dir = get_run_dir(resolve_path('/workspace/sim_results/'), self.summary_filename, self.run_timestamp, self.y_pos, self.angle)
+        self.run_dir = get_run_dir(resolve_path('/workspace/sim_results/'), self.summary_filename, self.run_timestamp, self.y_pos, self.angle, self.output_subdir)
 
         self.lut = []
         self.ff_file = None
@@ -375,7 +403,7 @@ class LinkControllerNode(Node):
         if self.scheduling_policy == 'feedforward_optimal' or self.logging_level >= 5:
             self.get_logger().info('フィードフォワード用 nominal RSSI ヒートマップの事前計算を開始します。')
             try:
-                with open(resolve_path('/workspace/config/sim_params.yaml'), 'r', encoding='utf-8') as f:
+                with open(self.config_file_path, 'r', encoding='utf-8') as f:
                     config = yaml.safe_load(f)
                 
                 spawn_ent = config.get('spawn_entities', {})

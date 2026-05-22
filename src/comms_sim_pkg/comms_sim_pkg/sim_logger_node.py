@@ -103,6 +103,7 @@ class SimLoggerNode(Node):
         self.declare_parameter('base_vehicle_names', [''])
         ws_root = get_workspace_root()
         self.declare_parameter('output_dir', os.path.join(ws_root, 'sim_results', ''))
+        self.declare_parameter('output_subdir', '')
         self.declare_parameter('logging_level', 1)
         self.declare_parameter('run_timestamp', '')
         self.declare_parameter('config_file_path', resolve_path('/workspace/config/sim_params.yaml'))
@@ -120,6 +121,7 @@ class SimLoggerNode(Node):
             self.base_vehicle_names = self.vehicle_names.copy()
             
         self.output_dir = self.get_parameter('output_dir').value
+        self.output_subdir = str(self.get_parameter('output_subdir').value)
         self.logging_level = self.get_parameter('logging_level').value
         self.run_timestamp = str(self.get_parameter('run_timestamp').value)
         self.config_file_path = str(self.get_parameter('config_file_path').value)
@@ -142,28 +144,53 @@ class SimLoggerNode(Node):
                 self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
                 self.angle = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
+                # YAML内でも output_subdir が定義されているかチェック（フォールバック）
+                if not self.output_subdir:
+                    self.output_subdir = config.get('simulation', {}).get('output_subdir', '')
         except Exception as e:
             self.get_logger().warn(f"Failed to read yaml for summary ({self.config_file_path}): {e}")
 
         # ディレクトリパスの解決
         import re
         import math
-        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
-        if match:
-            sweep_timestamp = match.group(1)
-            run_idx = int(match.group(2))
+
+        if self.output_subdir:
+            # output_subdir が指定されている場合、正規表現でのパース不要。直接ディレクトリ構成を決定
+            run_idx = None
+            match_run = re.search(r'run(\d+)', self.summary_filename)
+            if match_run:
+                run_idx = int(match_run.group(1))
+
             angle_deg = math.degrees(self.angle + 1.5708)
             angle_deg = round(angle_deg, 2)
             angle_str = f"{angle_deg:g}"
             y_str = f"{round(self.y_pos, 2):g}"
+            
+            run_name = f"run_{run_idx:03d}_y{y_str}_a{angle_str}" if run_idx is not None else f"run_{self.timestamp}"
             self.run_dir = os.path.join(
                 self.output_dir,
-                f"sweep_{sweep_timestamp}",
+                self.output_subdir,
                 "runs",
-                f"run_{run_idx:03d}_y{y_str}_a{angle_str}"
+                run_name
             )
         else:
-            self.run_dir = os.path.join(self.output_dir, f"run_{self.timestamp}")
+            # 従来通りのフォールバック
+            match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
+            if match:
+                sweep_timestamp = match.group(1)
+                run_idx = int(match.group(2))
+                angle_deg = math.degrees(self.angle + 1.5708)
+                angle_deg = round(angle_deg, 2)
+                angle_str = f"{angle_deg:g}"
+                y_str = f"{round(self.y_pos, 2):g}"
+                self.run_dir = os.path.join(
+                    self.output_dir,
+                    f"sweep_{sweep_timestamp}",
+                    "runs",
+                    f"run_{run_idx:03d}_y{y_str}_a{angle_str}"
+                )
+            else:
+                self.run_dir = os.path.join(self.output_dir, f"run_{self.timestamp}")
 
         # コムズ、コントロールのサブディレクトリ作成
         comms_dir = os.path.join(self.run_dir, 'comms')
@@ -396,13 +423,16 @@ class SimLoggerNode(Node):
         for f in self.ts_files.values():
             f.close()
 
-        import re
-        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
-        if match:
-            sweep_timestamp = match.group(1)
-            summary_path = os.path.join(self.output_dir, f"sweep_{sweep_timestamp}", self.summary_filename)
+        if self.output_subdir:
+            summary_path = os.path.join(self.output_dir, self.output_subdir, self.summary_filename)
         else:
-            summary_path = os.path.join(self.output_dir, self.summary_filename)
+            import re
+            match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
+            if match:
+                sweep_timestamp = match.group(1)
+                summary_path = os.path.join(self.output_dir, f"sweep_{sweep_timestamp}", self.summary_filename)
+            else:
+                summary_path = os.path.join(self.output_dir, self.summary_filename)
         
         summary_dir = os.path.dirname(summary_path)
         os.makedirs(summary_dir, exist_ok=True)

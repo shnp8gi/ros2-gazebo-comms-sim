@@ -298,9 +298,14 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             content = f.read()
 
-        # summary_filenameの更新
-        content = re.sub(r'\n\s*summary_filename:\s*".*?"', '', content)
-        content = re.sub(r'(simulation:)', rf'\1\n  summary_filename: "{summary_filename}"', content)
+        # summary_filenameとoutput_subdirの更新
+        content = re.sub(r'\n\s*summary_filename:\s*["\']?[^"\']*["\']?', '', content)
+        content = re.sub(r'\n\s*output_subdir:\s*["\']?[^"\']*["\']?', '', content)
+        content = re.sub(
+            r'(simulation:)', 
+            rf'\1\n  summary_filename: "{summary_filename}"\n  output_subdir: "sweep_{sweep_start_time}"', 
+            content
+        )
 
         # headless: false -> true
         content = re.sub(r'headless:\s*false', 'headless: true', content)
