@@ -8,6 +8,7 @@
 import atexit
 import csv
 import os
+import re
 from datetime import datetime
 from typing import Dict, List
 import sys
@@ -151,7 +152,6 @@ class SimLoggerNode(Node):
             self.get_logger().warn(f"Failed to read yaml for summary ({self.config_file_path}): {e}")
 
         # ディレクトリパスの解決
-        import re
         import math
 
         if self.output_subdir:
@@ -426,7 +426,6 @@ class SimLoggerNode(Node):
         if self.output_subdir:
             summary_path = os.path.join(self.output_dir, self.output_subdir, self.summary_filename)
         else:
-            import re
             match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
             if match:
                 sweep_timestamp = match.group(1)

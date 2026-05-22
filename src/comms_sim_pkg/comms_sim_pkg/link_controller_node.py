@@ -61,7 +61,6 @@ except ImportError:
 
 def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float, output_subdir: str = '') -> str:
     if output_subdir:
-        import re
         run_idx = None
         match_run = re.search(r'run(\d+)', summary_filename)
         if match_run:
