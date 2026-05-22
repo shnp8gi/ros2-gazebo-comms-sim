@@ -206,12 +206,13 @@ def launch_setup(context, *args, **kwargs):
     # launch引数の取得
     use_sim_time = LaunchConfiguration('use_sim_time').perform(context)
     headless_arg = LaunchConfiguration('headless').perform(context)
+    config_file_arg = LaunchConfiguration('config_file').perform(context)
     use_sim_time_bool = (str(use_sim_time).lower() == 'true')
     headless_arg_bool = (str(headless_arg).lower() == 'true')
 
     # パス設定
     pkg_share = get_package_share_directory('comms_sim_pkg')
-    config_path = os.path.join('/workspace', 'config', 'sim_params.yaml')
+    config_path = config_file_arg
 
     # コンフィグ読み込み
     config = load_yaml_config(config_path)
@@ -789,7 +790,8 @@ def launch_setup(context, *args, **kwargs):
                     'output_dir': '/workspace/sim_results/',
                     'logging_level': int(sim_config.get('logging_level', 1)),
                     'run_timestamp': run_timestamp,
-                    'use_sim_time': use_sim_time_bool
+                    'use_sim_time': use_sim_time_bool,
+                    'config_file_path': config_path
                 }
             ]
         )
@@ -828,8 +830,15 @@ def generate_launch_description():
         description='Gazeboをヘッドレスモードで起動するかどうか (true/false/auto: yamlに従う)'
     )
 
+    declare_config_file = DeclareLaunchArgument(
+        'config_file',
+        default_value=os.path.join('/workspace', 'config', 'sim_params.yaml'),
+        description='シミュレーション設定ファイルのパス'
+    )
+
     return LaunchDescription([
         declare_use_sim_time,
         declare_headless,
+        declare_config_file,
         OpaqueFunction(function=launch_setup),
     ])

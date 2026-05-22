@@ -60,7 +60,7 @@ except ImportError:
     )
 
 def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float) -> str:
-    match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)\.csv', summary_filename)
+    match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', summary_filename)
     if match:
         sweep_timestamp = match.group(1)
         run_idx = int(match.group(2))

@@ -43,6 +43,7 @@ class SimLoggerNode(Node):
         self.declare_parameter('output_dir', '/workspace/sim_results/')
         self.declare_parameter('logging_level', 1)
         self.declare_parameter('run_timestamp', '')
+        self.declare_parameter('config_file_path', '/workspace/config/sim_params.yaml')
         
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         if isinstance(vehicle_names_raw, list):
@@ -59,6 +60,7 @@ class SimLoggerNode(Node):
         self.output_dir = self.get_parameter('output_dir').value
         self.logging_level = self.get_parameter('logging_level').value
         self.run_timestamp = str(self.get_parameter('run_timestamp').value)
+        self.config_file_path = str(self.get_parameter('config_file_path').value)
         
         if self.run_timestamp:
             self.timestamp = self.run_timestamp
@@ -70,7 +72,7 @@ class SimLoggerNode(Node):
         self.angle = 0.0
         self.summary_filename = 'sweep_summary.csv'
         try:
-            with open('/workspace/config/sim_params.yaml', 'r') as f:
+            with open(self.config_file_path, 'r') as f:
                 config = yaml.safe_load(f)
                 spawn_ent = config.get('spawn_entities', {})
                 antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
@@ -79,12 +81,12 @@ class SimLoggerNode(Node):
                 self.angle = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
         except Exception as e:
-            self.get_logger().warn(f"Failed to read yaml for summary: {e}")
+            self.get_logger().warn(f"Failed to read yaml for summary ({self.config_file_path}): {e}")
 
         # ディレクトリパスの解決
         import re
         import math
-        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)\.csv', self.summary_filename)
+        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
         if match:
             sweep_timestamp = match.group(1)
             run_idx = int(match.group(2))
@@ -333,11 +335,10 @@ class SimLoggerNode(Node):
             f.close()
 
         import re
-        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)\.csv', self.summary_filename)
+        match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
         if match:
             sweep_timestamp = match.group(1)
-            run_idx = int(match.group(2))
-            summary_path = os.path.join(self.output_dir, f"sweep_{sweep_timestamp}", f"sweep_summary_run{run_idx}.csv")
+            summary_path = os.path.join(self.output_dir, f"sweep_{sweep_timestamp}", self.summary_filename)
         else:
             summary_path = os.path.join(self.output_dir, self.summary_filename)
         

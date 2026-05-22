@@ -22,7 +22,7 @@ ros_gz_bridge:
 # シミュレーション設定
 # -----------------------------------------------------------------------------
 simulation:
-  summary_filename: "sweep_summary_20260519_031343_run1.csv"
+  summary_filename: "sweep_summary_20260522_105809_run1.csv"
   # ワールドファイルパス
   world_file: "/workspace/comms_sim_pkg/resource/minimal_world.sdf"
 
@@ -33,7 +33,7 @@ simulation:
   verbosity: 2
 
   # リアルタイム倍率 (1.0 = リアルタイム, >1.0 = 加速)
-  real_time_factor: 1.0
+  real_time_factor: 5.0
 
   # ヘッドレスモード (true: GUI無し, false: GUI有り)
   headless: true
@@ -41,12 +41,13 @@ simulation:
   # エンティティスポーン用のモデルパスプレフィックス
   model_path_prefix: "/workspace/models"
 
-  # ロギングレベル設定 (1〜4)
+  # ロギングレベル設定 (1〜5)
   # 1: サマリーのみ
   # 2: サマリー + イベントログ
   # 3: サマリー + イベント + 時系列(CONNECTED時のみ)
   # 4: サマリー + イベント + 時系列(常時記録)
-  logging_level: 4
+  # 5: サマリー + イベント + 時系列(常時記録) + アンテナ制御ログ + ヒートマップ
+  logging_level: 5
 
   # ノード起動タイミング設定
   # headless sweep 向けに短縮済み（GUIなし・RTF=10 なら高速起動可能）
@@ -149,7 +150,11 @@ link_controller_node:
     #   geometric_beam_priority: 角度ベースで最もアライメント（min(e_gain, h_gain)）が良い車両を優先
     #   physical_score_priority: 基地局で推定した受信電力（e_gain + h_gain - path_loss）が最高の車両を優先
     #   geometric_weighted: 距離とアンテナゲインの正規化スコアを重み付け加算して評価
-    scheduling_policy: "physical_score_priority"
+    #   feedforward_optimal: 事前計算された nominal RSSI LUT に基づくフィードフォワード制御
+    scheduling_policy: "feedforward_optimal"
+
+    # 軌道上の事前計算サンプリング解像度 [m]
+    heatmap_resolution_m: 0.2
 
     # タイムスロット長 [s] (round_robin ポリシー時のみ有効)
     time_slot_duration_s: 10.0
@@ -282,7 +287,7 @@ spawn_entities:
     antenna_offset: [0.0, 0.0, 1.00]
     # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
     # フォーマット: [roll, pitch, yaw]
-    antenna_relative_rpy: [0.0, 0.0, -1.4312]
+    antenna_relative_rpy: [0.0, 0.0, -1.5115]
   antenna_1:
     model_uri: "models://antenna"
     name: "antenna_1"
@@ -295,7 +300,7 @@ spawn_entities:
     antenna_offset: [0.0, 0.0, 1.00]
     # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
     # フォーマット: [roll, pitch, yaw]
-    antenna_relative_rpy: [0.0, 0.0, -1.4312]
+    antenna_relative_rpy: [0.0, 0.0, -1.5115]
   antenna_2:
     model_uri: "models://antenna"
     name: "antenna_2"
@@ -308,7 +313,7 @@ spawn_entities:
     antenna_offset: [0.0, 0.0, 1.00]
     # エンティティ姿勢に対するアンテナの相対姿勢 [rad]
     # フォーマット: [roll, pitch, yaw]
-    antenna_relative_rpy: [0.0, 0.0, -1.4312]
+    antenna_relative_rpy: [0.0, 0.0, -1.5115]
 
 # -------------------------------------------------------------------------------------------------------------------------------
 # 車両リスト（複数台対応）
@@ -332,7 +337,7 @@ spawn_entities:
 # vehicles:
 #   - name: "my_vehicle"
 #     model_uri: "models://SUV"
-#     pose: [ 0.0, 0.0, 0.0, 0.0, 0.0, 0.0 ]
+#     pose: [ 0.0, 1.0, 0.0, 0.0, 0.0, 0.0 ]
 #     waypoints:
 #       - [ 100.0, 0.0, 0.0, 10.0 ]
 # --------------------------------------------------------------------------------------------------------------------------------
@@ -345,8 +350,11 @@ vehicles:
       - [100.0, 0.0, 0.0, 83.33]
     antennas:
       - name: "shinkansen_front"
-        offset: [10.0, 0.0, 1.0]
-        relative_rpy: [0.0, 0.0, 0.1396]
+        offset: [10.0, 1.7, 1.0]
+        relative_rpy: [0.0, 0.0, 0.0593]
+      - name: "shinkansen_mid"
+        offset: [0.0, 1.7, 1.0]
+        relative_rpy: [0.0, 0.0, 0.0593]
       - name: "shinkansen_rear"
-        offset: [-10.0, 0.0, 1.0]
-        relative_rpy: [0.0, 0.0, 0.1396]
+        offset: [-10.0, 1.7, 1.0]
+        relative_rpy: [0.0, 0.0, 0.0593]
