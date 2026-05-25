@@ -66,8 +66,8 @@ def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_po
         if match_run:
             run_idx = int(match_run.group(1))
             
-        angle_deg = math.degrees(antenna_yaw + 1.5708)
-        angle_deg = round(angle_deg, 2)
+        angle_deg = (270.0 - math.degrees(antenna_yaw)) % 360.0
+        angle_deg = round(angle_deg, 1)
         angle_str = f"{angle_deg:g}"
         y_str = f"{round(y_pos, 2):g}"
         
@@ -83,8 +83,8 @@ def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_po
         if match:
             sweep_timestamp = match.group(1)
             run_idx = int(match.group(2))
-            angle_deg = math.degrees(antenna_yaw + 1.5708)
-            angle_deg = round(angle_deg, 2)
+            angle_deg = (270.0 - math.degrees(antenna_yaw)) % 360.0
+            angle_deg = round(angle_deg, 1)
             angle_str = f"{angle_deg:g}"
             y_str = f"{round(y_pos, 2):g}"
             run_dir = os.path.join(
@@ -626,17 +626,29 @@ class LinkControllerNode(Node):
 
     def _on_comms_quality(self, vehicle_name: str, msg: CommsQuality) -> None:
         """各車両からの通信品質・幾何学情報を受信。タイムスタンプ同期バッファで管理。"""
-        stamp_key = (msg.header.stamp.sec, msg.header.stamp.nanosec)
-        if stamp_key not in self._quality_buffer:
-            self._quality_buffer[stamp_key] = {}
+        current_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         
-        self._quality_buffer[stamp_key][vehicle_name] = msg
+        # 許容誤差範囲内 (5ms) の既存スタンプを探す
+        tolerance = 0.005
+        matched_stamp_key = None
+        for stamp_key in self._quality_buffer:
+            stamp_time = stamp_key[0] + stamp_key[1] * 1e-9
+            if abs(current_time - stamp_time) < tolerance:
+                matched_stamp_key = stamp_key
+                break
+        
+        if matched_stamp_key is None:
+            stamp_key = (msg.header.stamp.sec, msg.header.stamp.nanosec)
+            self._quality_buffer[stamp_key] = {}
+            matched_stamp_key = stamp_key
+        
+        self._quality_buffer[matched_stamp_key][vehicle_name] = msg
         
         # すべての車両データがこのタイムスタンプで揃ったか確認
-        if len(self._quality_buffer[stamp_key]) == len(self.vehicle_names):
+        if len(self._quality_buffer[matched_stamp_key]) == len(self.vehicle_names):
             # すべて揃ったので幾何情報を一括更新してスケジューリングを実行
             for vn in self.vehicle_names:
-                m = self._quality_buffer[stamp_key][vn]
+                m = self._quality_buffer[matched_stamp_key][vn]
                 self._geometry_info[vn] = {
                     'distance': m.distance,
                     'antenna_gain_e_plane': m.antenna_gain_e_plane,
@@ -651,11 +663,15 @@ class LinkControllerNode(Node):
                 }
             
             # スケジュール処理を実行
-            current_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
-            self._schedule_tick(current_time)
+            trigger_time = matched_stamp_key[0] + matched_stamp_key[1] * 1e-9
+            self._schedule_tick(trigger_time)
             
             # メモリ節約のため、このスタンプとそれより古いスタンプを削除
-            keys_to_remove = [k for k in self._quality_buffer.keys() if k[0] < stamp_key[0] or (k[0] == stamp_key[0] and k[1] <= stamp_key[1])]
+            keys_to_remove = []
+            for k in list(self._quality_buffer.keys()):
+                k_time = k[0] + k[1] * 1e-9
+                if k_time <= trigger_time + 1e-9:
+                    keys_to_remove.append(k)
             for k in keys_to_remove:
                 self._quality_buffer.pop(k, None)
 

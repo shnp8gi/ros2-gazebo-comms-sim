@@ -9,6 +9,7 @@ import atexit
 import csv
 import os
 import re
+import math
 from datetime import datetime
 from typing import Dict, List
 import sys
@@ -143,7 +144,8 @@ class SimLoggerNode(Node):
                 antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
                 antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
                 self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
-                self.angle = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
+                raw_yaw = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
+                self.angle = round((270.0 - math.degrees(raw_yaw)) % 360.0, 1)
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
                 # YAML内でも output_subdir が定義されているかチェック（フォールバック）
                 if not self.output_subdir:
@@ -152,7 +154,6 @@ class SimLoggerNode(Node):
             self.get_logger().warn(f"Failed to read yaml for summary ({self.config_file_path}): {e}")
 
         # ディレクトリパスの解決
-        import math
 
         if self.output_subdir:
             # output_subdir が指定されている場合、正規表現でのパース不要。直接ディレクトリ構成を決定
@@ -161,8 +162,7 @@ class SimLoggerNode(Node):
             if match_run:
                 run_idx = int(match_run.group(1))
 
-            angle_deg = math.degrees(self.angle + 1.5708)
-            angle_deg = round(angle_deg, 2)
+            angle_deg = self.angle
             angle_str = f"{angle_deg:g}"
             y_str = f"{round(self.y_pos, 2):g}"
             
@@ -179,8 +179,7 @@ class SimLoggerNode(Node):
             if match:
                 sweep_timestamp = match.group(1)
                 run_idx = int(match.group(2))
-                angle_deg = math.degrees(self.angle + 1.5708)
-                angle_deg = round(angle_deg, 2)
+                angle_deg = self.angle
                 angle_str = f"{angle_deg:g}"
                 y_str = f"{round(self.y_pos, 2):g}"
                 self.run_dir = os.path.join(

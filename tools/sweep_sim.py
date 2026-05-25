@@ -225,7 +225,7 @@ def launch_progress_monitor():
 # パラメータスイープ設定
 # ---------------------------------------------------------
 Y_POSITIONS = [1.0] # 基地局のY位置 (m)
-ANGLES_DEG = [round(0.2 * i, 2) for i in range(76)]
+ANGLES_DEG = [round(75.0 + 0.1 * i, 1) for i in range(301)]
 
 CONFIG_PATH = "src/comms_sim_pkg/config/sim_params.yaml"
 BACKUP_PATH = "tools/sweep_build/sim_params.yaml.bak"
@@ -277,12 +277,12 @@ def average_summaries(summary_files, output_file):
 
 def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker):
     run_idx, y, angle_deg, overall_task_no = task_info
-    angle_rad = math.radians(angle_deg)
+    angle_rad = math.radians(180.0 - angle_deg)
     
-    # 基地局は -y 方向(yaw=-1.5708)を向いており、アンテナはそこから -90度(yaw=-1.5708) で -x を向く
-    # それに angle_rad を足してスイープする
-    base_yaw = -1.5708
-    antenna_yaw = -1.5708 + angle_rad
+    # 基地局の向き(world yaw)が 180 - angle_deg になるようにアンテナの相対角度を設定する
+    # 基地局 entity yaw は -1.5708 rad ($-90^\circ$, south)
+    # relative_yaw = world_yaw - entity_yaw = angle_rad - (-1.5708) = 1.5708 + angle_rad
+    antenna_yaw = 1.5708 + angle_rad
 
     summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_w{worker_id}.csv"
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
@@ -329,10 +329,11 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         )
 
         # 新幹線のアンテナ角度の更新
+        # UGVアンテナのworld yawを基地局に対面させるため、angle_rad - pi に設定する
         for ant_name in ["shinkansen_front", "shinkansen_mid", "shinkansen_rear"]:
             content = re.sub(
                 rf'(name:\s*"{ant_name}".*?relative_rpy:\s*\[\s*[-\d\.]+,\s*[-\d\.]+,\s*)[-\d\.]+(\s*\])',
-                rf'\g<1>{angle_rad:.4f}\g<2>',
+                rf'\g<1>{angle_rad - math.pi:.4f}\g<2>',
                 content,
                 flags=re.DOTALL
             )
