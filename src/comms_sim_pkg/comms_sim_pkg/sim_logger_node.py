@@ -307,8 +307,8 @@ class SimLoggerNode(Node):
         if msg.data and not self._mission_status[vehicle_name]:
             self._mission_status[vehicle_name] = True
             if all(self._mission_status.values()):
-                self.get_logger().info('=== ミッション完了。すべてのデータを受信するため 10 秒後にシミュレーションを終了します ===')
-                self._exit_timer = self.create_timer(10.0, self._exit_now)
+                self.get_logger().info('=== ミッション完了。すべてのデータを受信するため 3 秒後にシミュレーションを終了します ===')
+                self._exit_timer = self.create_timer(3.0, self._exit_now)
 
     def _exit_now(self):
         self.get_logger().info('=== 終了タイマー満了。シミュレーションを終了します ===')
