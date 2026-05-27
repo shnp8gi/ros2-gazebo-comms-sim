@@ -738,6 +738,11 @@ def launch_setup(context, *args, **kwargs):
             tempfile.gettempdir(), f'ugv_controller_{v_name}.params.yaml'
         )
 
+        antennas = vehicle_cfg.get('antennas', [])
+        expected_subs = 1 + len(antennas)
+        if any(ant.get('name') == v_name for ant in antennas):
+            expected_subs += 1
+
         ugv_param_yaml = {
             f'ugv_controller_{v_name}': {
                 'ros__parameters': {
@@ -751,6 +756,7 @@ def launch_setup(context, *args, **kwargs):
                     'odom_topic': f'/{v_name}/odom',
                     'cmd_vel_topic': f'/{v_name}/cmd_vel',
                     'mission_complete_topic': f'/{v_name}/mission_complete',
+                    'expected_subscribers': expected_subs,
                     'use_sim_time': use_sim_time == 'true',
                 }
             }

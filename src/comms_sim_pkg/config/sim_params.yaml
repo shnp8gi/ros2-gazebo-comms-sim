@@ -65,7 +65,7 @@ simulation:
 comms_simulator_node:
   ros__parameters:
     # 通信品質計算のサンプリングレート [Hz]
-    sampling_rate: 100.0
+    sampling_rate: 2000.0
 
     # AWGN分散 [dB]
     noise_variance: 0.0
@@ -78,7 +78,7 @@ comms_simulator_node:
     mcs_table_path: "/workspace/config/MCStable.csv"
 
     # リンク確立（Association）時間 [ms]
-    # RSSIが閾値を超えた後、通信リンクの確立に要する時間
+    # RSSIが閾値を超えた後、通信リンクの確立に要する時間(平均的なIEEE 802.15.3eをオフセットとして付与)
     link_establishment_time_ms: 2.0
 
     # 通信データ上限 [MB] (-1.0 で無制限)
@@ -193,7 +193,7 @@ link_controller_node:
     # best_score がこの値を下回る場合は強制切替を行わない
     # （geometry_info 未到達時など、信頼できないデータによる誤切替を防ぐ）
     # 目安: -80.0 ≒ 通信限界付近のRSSI相当
-    proactive_handover_score_threshold: -80
+    proactive_handover_score_threshold: -130
 
 # -----------------------------------------------------------------------------
 # スポーンエンティティ設定 (基地局等の静的エンティティ)
@@ -279,7 +279,7 @@ spawn_entities:
     model_uri: "models://antenna"
     name: "antenna_0"
     # ポーズ: [x, y, z, roll, pitch, yaw]
-    pose: [-5.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+    pose: [-5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
     static: true
     # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
     # （通信計算に使用: アンテナ位置 = pose + antenna_offset）
@@ -350,11 +350,11 @@ vehicles:
       - [100.0, 0.0, 0.0, 83.33]
     antennas:
       - name: "shinkansen_front"
-        offset: [10.0, 1.7, 1.0]
+        offset: [10.0, 1.5, 1.0]
         relative_rpy: [0.0, 0.0, 0.0593]
       - name: "shinkansen_mid"
-        offset: [0.0, 1.7, 1.0]
+        offset: [0.0, 1.5, 1.0]
         relative_rpy: [0.0, 0.0, 0.0593]
       - name: "shinkansen_rear"
-        offset: [-10.0, 1.7, 1.0]
+        offset: [-10.0, 1.5, 1.0]
         relative_rpy: [0.0, 0.0, 0.0593]

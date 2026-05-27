@@ -395,19 +395,20 @@ def main():
     args = parser.parse_args()
 
     log_file = args.log_file
-    if not log_file:
-        log_file = find_latest_progress_log()
 
     if args.watch:
         try:
             while True:
-                render(log_file)
+                # 明示的なログファイル指定がない場合、ループ毎に最新のログファイルを再スキャンする
+                current_log = log_file or find_latest_progress_log()
+                render(current_log)
                 print(f"  (Ctrl+C で終了。{args.interval}秒ごとに更新)")
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             print("\n進捗監視を終了します。")
     else:
-        render(log_file)
+        current_log = log_file or find_latest_progress_log()
+        render(current_log)
 
 if __name__ == "__main__":
     main()

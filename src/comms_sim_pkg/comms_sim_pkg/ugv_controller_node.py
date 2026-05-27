@@ -109,6 +109,7 @@ class UGVControllerNode(Node):
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('mission_complete_topic', '/mission_complete')
+        self.declare_parameter('expected_subscribers', 2)
 
         # パラメータ取得
         waypoints_raw = self.get_parameter('waypoints').value
@@ -121,6 +122,7 @@ class UGVControllerNode(Node):
         self.odom_topic = self.get_parameter('odom_topic').value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
         self.mission_complete_topic = self.get_parameter('mission_complete_topic').value
+        self.expected_subscribers = self.get_parameter('expected_subscribers').value
         self.is_shinkansen = 'shinkansen' in self.odom_topic
 
         # ウェイポイント解析
@@ -359,15 +361,12 @@ class UGVControllerNode(Node):
             self.get_logger().debug('初期位置の検証・補正中...', throttle_duration_sec=2.0)
             return
 
-        # 同期起動プロトコル: sim_logger_node が mission_complete トピックにサブスクライブ
-        # するまで発車を待機する。これにより、ノード起動順序の壁時計タイミングによる
-        # 非決定的な初期状態を完全に排除する。
-        # (link_controller_node + sim_logger_node の2つが購読する)
+        # (link_controller_node + sim_logger_node + comms_nodes が購読する)
         if not getattr(self, '_logger_ready', False):
             sub_count = self.count_subscribers(self.mission_complete_topic)
-            if sub_count < 2:
+            if sub_count < self.expected_subscribers:
                 self.get_logger().info(
-                    f'ロガー起動待機中... (mission_complete 購読者数: {sub_count}/2)',
+                    f'ロガー起動待機中... (mission_complete 購読者数: {sub_count}/{self.expected_subscribers})',
                     throttle_duration_sec=2.0
                 )
                 return

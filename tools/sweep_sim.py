@@ -12,13 +12,39 @@ import threading
 import queue
 import argparse
 
-PROGRESS_LOG = "tools/log/sweep_progress.log"
+# =========================================================================
+# パラメータスイープ設定 (シミュレーションパラメータ)
+# =========================================================================
+# 基地局のY位置リスト (m)
+Y_POSITIONS = [3.0]
+
+# 基地局自体の向き (ヨー角) (deg)
+BASE_STATION_YAW_DEG = -90.0
+
+# 角度スイープの設定 (下限, 上限, 刻み幅)
+START_ANGLE = 80.0   # 下限 (deg)
+END_ANGLE = 100.0    # 上限 (deg)
+STEP_ANGLE = 0.5     # 刻み幅 (deg)
+
+# パラメータスイープを繰り返す回数 (ラン数)
+NUM_RUNS = 1
+
 # 1タスクあたりの最大待機時間 [秒]
 TASK_TIMEOUT_SEC = 120
+
 # スイープ時の加速倍率 (ヘッドレス時のみ有効.1.0=リアルタイム)
-SWEEP_REAL_TIME_FACTOR = 5.0
-# パラメータスイープを繰り返す回数
-NUM_RUNS = 10
+SWEEP_REAL_TIME_FACTOR = 3.0
+
+# =========================================================================
+# 設定値から自動生成されるパラメータ・内部変数
+# =========================================================================
+PROGRESS_LOG = "tools/log/sweep_progress.log"
+
+ANGLES_DEG = []
+_curr_ang = START_ANGLE
+while _curr_ang <= END_ANGLE + 1e-5:
+    ANGLES_DEG.append(round(_curr_ang, 1))
+    _curr_ang += STEP_ANGLE
 
 def get_optimal_concurrency() -> int:
     """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する"""
@@ -40,15 +66,14 @@ def get_optimal_concurrency() -> int:
         except Exception:
             pass
 
-    # 空きコア数 = 物理コア数 - 1分間ロードアベレージ
-    # (ロードアベレージがコア数を超えている場合は、他のプロセスで完全に飽和しているため空きは 0 になる)
-    cpu_available = max(0.0, cpu_count - load_1min)
+    # 一時的なロードアベレージのスパイクによって並列度が極小化（1並列）するのを防ぐため、
+    # ロードアベレージの影響を半分に抑え、最低でも物理コア数の 25% (または2並列) を下限値として確保する。
+    cpu_available = max(2.0, cpu_count - 0.5 * load_1min)
     
-    # 負荷が高い場合でも最低 1 並列は確保する。空きコア数の 75% を最大並列度とする。
-    # ただし、物理コア数の 75% も上限値として設ける（負荷がない場合でも全コアを使い切らないようにするため）
+    min_concurrency = max(2, int(cpu_count * 0.25))
     max_by_cpu = min(
-        max(1, int(cpu_available * 0.75)),
-        max(1, int(cpu_count * 0.75))
+        max(min_concurrency, int(cpu_available * 0.75)),
+        max(min_concurrency, int(cpu_count * 0.75))
     )
 
     # 2. 空きメモリ容量の取得
@@ -221,17 +246,63 @@ def launch_progress_monitor():
 
 
 
-# ---------------------------------------------------------
-# パラメータスイープ設定
-# ---------------------------------------------------------
-Y_POSITIONS = [1.0] # 基地局のY位置 (m)
-ANGLES_DEG = [round(75.0 + 0.1 * i, 1) for i in range(301)]
-
 CONFIG_PATH = "src/comms_sim_pkg/config/sim_params.yaml"
 BACKUP_PATH = "tools/sweep_build/sim_params.yaml.bak"
 
 def average_summaries(summary_files, output_file):
     """各ランのCSVファイルを読み込んで平均値を集計・保存する"""
+    is_docker = os.path.exists('/.dockerenv')
+    if not is_docker:
+        import subprocess
+        ws_summary_files = [f"/workspace/{f}" if not f.startswith('/') else f for f in summary_files]
+        ws_output_file = f"/workspace/{output_file}" if not output_file.startswith('/') else output_file
+        
+        script = f"""
+import sys
+import pandas as pd
+import os
+
+summary_files = {ws_summary_files}
+output_file = "{ws_output_file}"
+
+dfs = []
+for f in summary_files:
+    if os.path.exists(f):
+        try:
+            dfs.append(pd.read_csv(f))
+        except Exception as e:
+            print(f"Warning: Failed to read {{f}}: {{e}}")
+if not dfs:
+    print("No successful sweep summary files found to average.")
+    sys.exit(0)
+
+combined = pd.concat(dfs, ignore_index=True)
+agg_rules = {{
+    'total_data_MB': 'mean',
+    'connected_time_s': 'mean',
+    'average_throughput_Gbps': 'mean',
+    'average_rssi_dBm': 'mean',
+    'handover_count': 'mean'
+}}
+averaged = combined.groupby(['y_position', 'antenna_angle', 'vehicle_name'], as_index=False).agg(agg_rules)
+averaged['total_data_MB'] = averaged['total_data_MB'].round(3)
+averaged['connected_time_s'] = averaged['connected_time_s'].round(3)
+averaged['average_throughput_Gbps'] = averaged['average_throughput_Gbps'].round(3)
+averaged['average_rssi_dBm'] = averaged['average_rssi_dBm'].round(3)
+averaged['handover_count'] = averaged['handover_count'].round(1)
+averaged.insert(0, 'run_id', 'AVERAGE')
+averaged = averaged.sort_values(by=['y_position', 'antenna_angle', 'vehicle_name'])
+os.makedirs(os.path.dirname(output_file), exist_ok=True)
+averaged.to_csv(output_file, index=False)
+"""
+        cmd = ["docker", "compose", "exec", "-T", "sim", "python3", "-c", script]
+        try:
+            subprocess.run(cmd, check=True)
+        except Exception:
+            cmd = ["docker", "exec", "comms_sim", "python3", "-c", script]
+            subprocess.run(cmd, check=True)
+        return
+
     import pandas as pd
     dfs = []
     for f in summary_files:
@@ -275,29 +346,33 @@ def average_summaries(summary_files, output_file):
     os.makedirs(os.path.dirname(output_file), exist_ok=True)
     averaged.to_csv(output_file, index=False)
 
-def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker):
+def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, base_station_yaw_deg=-90.0):
     run_idx, y, angle_deg, overall_task_no = task_info
-    angle_rad = math.radians(180.0 - angle_deg)
     
-    # 基地局の向き(world yaw)が 180 - angle_deg になるようにアンテナの相対角度を設定する
-    # 基地局 entity yaw は -1.5708 rad ($-90^\circ$, south)
-    # relative_yaw = world_yaw - entity_yaw = angle_rad - (-1.5708) = 1.5708 + angle_rad
-    antenna_yaw = 1.5708 + angle_rad
-
+    # ユーザー定義の角度変換:
+    #   angle_deg=0   → -X方向 (world_yaw=-pi)  ← 西
+    #   angle_deg=90  → -Y方向 (world_yaw=-pi/2) ← 南
+    #   angle_deg=180 → +X方向 (world_yaw=0)     ← 東
+    world_yaw = math.radians(angle_deg) - math.pi
+    
+    # 基地局エンティティの向き (ヨー角)
+    entity_yaw = math.radians(base_station_yaw_deg)
+    antenna_yaw = world_yaw - entity_yaw
+ 
     summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_w{worker_id}.csv"
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
-
+ 
     pct = (overall_task_no - 1) / total_runs_tasks * 100
     print(f"\n=======================================================")
     print(f"[Worker {worker_id}] [Run {run_idx}/{NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) Y = {y} m, Angle = {angle_deg} deg")
     print(f"=======================================================")
     log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()}")
-
+ 
     # YAMLファイルを文字列として読み込み、一時設定ファイルを生成
     try:
         with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
             content = f.read()
-
+ 
         # summary_filenameとoutput_subdirの更新
         content = re.sub(r'\n\s*summary_filename:\s*["\']?[^"\']*["\']?', '', content)
         content = re.sub(r'\n\s*output_subdir:\s*["\']?[^"\']*["\']?', '', content)
@@ -306,18 +381,19 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             rf'\1\n  summary_filename: "{summary_filename}"\n  output_subdir: "sweep_{sweep_start_time}"', 
             content
         )
-
+ 
         # headless: false -> true
         content = re.sub(r'headless:\s*false', 'headless: true', content)
-
+ 
         # real_time_factor を高速化
-        content = re.sub(r'real_time_factor:\s*[\d\.]+', f'real_time_factor: {SWEEP_REAL_TIME_FACTOR}', content)
-
-        # 基地局Y座標の更新 (antenna_0 / antenna_1 の pose)
+        content = re.sub(r'real_time_factor:\s*[\d\.]+', f'real_time_factor: {rtf}', content)
+ 
+        # 基地局Y座標と向きの更新 (antenna_0 / antenna_1 / antenna_2 の pose)
+        # pose: [x, y, z, roll, pitch, yaw]
         content = re.sub(
-            r'(antenna\w*:\s*.*?pose:\s*\[\s*)([-\d\.]+),\s*[-\d\.]+(.*?\])', 
-            rf'\g<1>\g<2>, {y}\g<3>', 
-            content, 
+            r'(antenna\w*:\s*.*?pose:\s*\[\s*)([-\d\.]+),\s*[-\d\.]+,\s*([-\d\.]+),\s*([-\d\.]+),\s*([-\d\.]+),\s*([-\d\.]+)(\s*\])',
+            rf'\g<1>\g<2>, {y}, \g<3>, \g<4>, \g<5>, {entity_yaw:.4f}\g<7>',
+            content,
             flags=re.DOTALL
         )
 
@@ -329,14 +405,18 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         )
 
         # 新幹線のアンテナ角度の更新
-        # UGVアンテナのworld yawを基地局に対面させるため、angle_rad - pi に設定する
+        # UGVアンテナは、基地局に対向（対面）させるため、
+        # 基地局アンテナの方向 (world_yaw) と逆方向 (world_yaw - pi) を向かせる。
+        ugv_antenna_yaw = world_yaw - math.pi
         for ant_name in ["shinkansen_front", "shinkansen_mid", "shinkansen_rear"]:
             content = re.sub(
                 rf'(name:\s*"{ant_name}".*?relative_rpy:\s*\[\s*[-\d\.]+,\s*[-\d\.]+,\s*)[-\d\.]+(\s*\])',
-                rf'\g<1>{angle_rad - math.pi:.4f}\g<2>',
+                rf'\g<1>{ugv_antenna_yaw:.4f}\g<2>',
                 content,
                 flags=re.DOTALL
             )
+
+
 
         with open(tmp_config_path, 'w', encoding='utf-8') as f:
             f.write(content)
@@ -375,10 +455,10 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     
     timed_out = False
     try:
-        proc.wait(timeout=TASK_TIMEOUT_SEC)
+        proc.wait(timeout=timeout)
     except subprocess.TimeoutExpired:
         timed_out = True
-        print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation TIMEOUT ({TASK_TIMEOUT_SEC}s): Y={y}, Angle={angle_deg}")
+        print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation TIMEOUT ({timeout}s): Y={y}, Angle={angle_deg}")
         log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=TIMEOUT ts={datetime.datetime.now().isoformat()}")
     finally:
         # プロセスグループ全体を強制終了
@@ -413,13 +493,87 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             return False
     return False
 
+def get_completed_tasks(sweep_dir, run_idx):
+    import csv
+    import glob
+    completed = set()
+    
+    # 1. 未マージのワーカー個別 CSV から読み込み
+    pattern = os.path.join(sweep_dir, f"sweep_summary_*_run{run_idx}_w*.csv")
+    for csv_file in glob.glob(pattern):
+        try:
+            with open(csv_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        y_val = float(row['y_position'])
+                        ang_val = float(row['antenna_angle'])
+                        completed.add((y_val, ang_val))
+                    except (ValueError, KeyError):
+                        continue
+        except Exception:
+            continue
+            
+    # 2. すでにマージ済みの CSV があればそこからも読み込み
+    merged_file = os.path.join(sweep_dir, f"sweep_summary_run{run_idx}.csv")
+    if os.path.exists(merged_file):
+        try:
+            with open(merged_file, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    try:
+                        y_val = float(row['y_position'])
+                        ang_val = float(row['antenna_angle'])
+                        completed.add((y_val, ang_val))
+                    except (ValueError, KeyError):
+                        continue
+        except Exception:
+            pass
+            
+    return completed
+
 def main():
     parser = argparse.ArgumentParser(description="Parallel Parameter Sweep Simulation")
     parser.add_argument("-j", "--concurrency", type=int, default=0, help="Number of parallel workers (0 for auto)")
+    parser.add_argument("--start-angle", type=float, default=None, help=f"Start angle of sweep in degrees (default from script: {min(ANGLES_DEG)})")
+    parser.add_argument("--end-angle", type=float, default=None, help=f"End angle of sweep in degrees (default from script: {max(ANGLES_DEG)})")
+    parser.add_argument("--step-angle", type=float, default=None, help="Angle step in degrees (default from script: 0.2)")
+    parser.add_argument("--num-runs", type=int, default=None, help=f"Number of runs per task (default from script: {NUM_RUNS})")
+    parser.add_argument("--y-positions", type=str, default=None, help=f"Comma-separated Y positions of base stations (default from script: '{','.join(map(str, Y_POSITIONS))}')")
+    parser.add_argument("--base-station-yaw", type=float, default=None, help=f"Yaw angle of base station entity in degrees (default from script: {BASE_STATION_YAW_DEG})")
+    parser.add_argument("--rtf", "--real-time-factor", type=float, default=None, help=f"Acceleration factor (default from script: {SWEEP_REAL_TIME_FACTOR})")
+    parser.add_argument("--timeout", type=int, default=None, help=f"Timeout in seconds per task (default from script: {TASK_TIMEOUT_SEC})")
+    parser.add_argument("--resume", type=str, default=None, help="Resume a previous sweep using its timestamp or directory path")
+    
     args, unknown = parser.parse_known_args()
     concurrency = args.concurrency
     if concurrency <= 0:
         concurrency = get_optimal_concurrency()
+
+    # Extract parameters from arguments or fallback to global variables
+    num_runs = args.num_runs if args.num_runs is not None else NUM_RUNS
+    rtf = args.rtf if args.rtf is not None else SWEEP_REAL_TIME_FACTOR
+    timeout = args.timeout if args.timeout is not None else TASK_TIMEOUT_SEC
+    base_station_yaw_deg = args.base_station_yaw if args.base_station_yaw is not None else BASE_STATION_YAW_DEG
+
+    if args.y_positions is not None:
+        y_positions = [float(y.strip()) for y in args.y_positions.split(',') if y.strip()]
+    else:
+        y_positions = Y_POSITIONS
+        
+    # Generate angles range or fallback to global variables
+    if args.start_angle is not None or args.end_angle is not None or args.step_angle is not None:
+        start_angle = args.start_angle if args.start_angle is not None else min(ANGLES_DEG)
+        end_angle = args.end_angle if args.end_angle is not None else max(ANGLES_DEG)
+        step_angle = args.step_angle if args.step_angle is not None else 0.2
+        
+        angles_deg = []
+        curr_angle = start_angle
+        while curr_angle <= end_angle + 1e-5:
+            angles_deg.append(round(curr_angle, 1))
+            curr_angle += step_angle
+    else:
+        angles_deg = ANGLES_DEG
 
     # tools/sweep_build ディレクトリの作成
     os.makedirs("tools/sweep_build", exist_ok=True)
@@ -437,38 +591,74 @@ def main():
         except Exception as e:
             print(f"Warning: Failed to clean up leftover config file {f}: {e}")
 
-    sweep_start_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+    # タイムスタンプおよび出力ディレクトリの決定
+    if args.resume:
+        resume_input = args.resume.strip()
+        import sys
+        if '/' in resume_input or '\\' in resume_input:
+            sweep_dir = resume_input
+            sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
+        else:
+            sweep_start_time = resume_input
+            sweep_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
+            
+        if not os.path.exists(sweep_dir):
+            print(f"Error: Resume directory {sweep_dir} does not exist.")
+            sys.exit(1)
+        print(f"Resuming parameter sweep from existing directory: {sweep_dir}")
+    else:
+        sweep_start_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+        sweep_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
 
     # 進捗ログの保存先を実行時のタイムスタンプサブディレクトリ配下に動的決定
     global PROGRESS_LOG
     PROGRESS_LOG = f"tools/log/{sweep_start_time}/sweep_progress.log"
     os.makedirs(os.path.dirname(PROGRESS_LOG), exist_ok=True)
 
-    total_tasks_per_run = len(Y_POSITIONS) * len(ANGLES_DEG)
-    total_runs_tasks = total_tasks_per_run * NUM_RUNS
-
-    # 進捗ログを初期化
-    if os.path.exists(PROGRESS_LOG):
+    # 新規実行の場合は既存ログを削除、レジュームの場合は追記
+    if not args.resume and os.path.exists(PROGRESS_LOG):
         os.remove(PROGRESS_LOG)
+
+    # タスクリストの作成と既完了タスクの除外
+    tasks_list = []
+    overall_task_no = 1
+    skipped_count = 0
+    
+    for run_idx in range(1, num_runs + 1):
+        completed_set = set()
+        if args.resume:
+            completed_set = get_completed_tasks(sweep_dir, run_idx)
+            
+        for y in y_positions:
+            for angle_deg in angles_deg:
+                # 既完了か判定
+                is_completed = False
+                for cy, cang in completed_set:
+                    if abs(cy - y) < 0.01 and abs(cang - angle_deg) < 0.05:
+                        is_completed = True
+                        break
+                
+                if is_completed:
+                    skipped_count += 1
+                else:
+                    tasks_list.append((run_idx, y, angle_deg, overall_task_no))
+                overall_task_no += 1
+
+    total_tasks_per_run = len(y_positions) * len(angles_deg)
+    total_runs_tasks = total_tasks_per_run * num_runs
+
     log_progress(f"START {datetime.datetime.now().isoformat()} TOTAL={total_runs_tasks} CONCURRENCY={concurrency}")
 
     # 進捗監視スクリプトを別ターミナル（または別プロセス）で自動起動
     launch_progress_monitor()
 
-    print(f"Starting parameter sweep: Y_POSITIONS={Y_POSITIONS}, ANGLES_DEG={ANGLES_DEG}")
-    print(f"Number of runs per task: {NUM_RUNS}")
+    print(f"Starting parameter sweep: Y_POSITIONS={y_positions}, ANGLES_DEG={angles_deg}")
+    print(f"Base Station Yaw: {base_station_yaw_deg} deg")
+    print(f"Number of runs per task: {num_runs}")
     print(f"Total tasks across all runs: {total_runs_tasks}")
+    if skipped_count > 0:
+        print(f"Resuming: Skipped {skipped_count} already completed tasks. {len(tasks_list)} tasks remaining.")
     print(f"Concurrency level: {concurrency}")
-
-
-    # タスクリストの作成
-    tasks_list = []
-    overall_task_no = 1
-    for run_idx in range(1, NUM_RUNS + 1):
-        for y in Y_POSITIONS:
-            for angle_deg in ANGLES_DEG:
-                tasks_list.append((run_idx, y, angle_deg, overall_task_no))
-                overall_task_no += 1
 
     # ワーカーID管理キュー
     worker_queue = queue.Queue()
@@ -480,7 +670,7 @@ def main():
     def worker_thread_fn(task_info):
         worker_id = worker_queue.get()
         try:
-            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker)
+            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=rtf, timeout=timeout, base_station_yaw_deg=base_station_yaw_deg)
             return success
         finally:
             worker_queue.put(worker_id)
@@ -495,35 +685,55 @@ def main():
     # 各ワーカーが書き出した CSV ファイルを run_idx ごとに結合する
     # ---------------------------------------------------------
     print("\nMerging worker results...")
-    for run_idx in range(1, NUM_RUNS + 1):
+    for run_idx in range(1, num_runs + 1):
         merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv")
         os.makedirs(os.path.dirname(merged_summary_file), exist_ok=True)
         
-        header_written = False
-        with open(merged_summary_file, 'w', encoding='utf-8') as outfile:
-            for w_id in range(concurrency):
-                worker_csv = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_{sweep_start_time}_run{run_idx}_w{w_id}.csv")
-                if os.path.exists(worker_csv):
+        # 既存のマージファイルがある場合は行を読み込む
+        merged_rows = []
+        header = None
+        if os.path.exists(merged_summary_file):
+            try:
+                with open(merged_summary_file, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                    if lines:
+                        header = lines[0]
+                        merged_rows.extend(lines[1:])
+            except Exception:
+                pass
+
+        # ワイルドカードでその run_idx に対するすべてのワーカーCSVファイルを探す
+        import glob
+        pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_{sweep_start_time}_run{run_idx}_w*.csv")
+        worker_csvs = glob.glob(pattern)
+        
+        for worker_csv in sorted(worker_csvs):
+            if os.path.exists(worker_csv):
+                try:
                     with open(worker_csv, 'r', encoding='utf-8') as infile:
                         lines = infile.readlines()
-                        if not lines:
-                            continue
-                        if not header_written:
-                            outfile.writelines(lines)
-                            header_written = True
-                        else:
-                            outfile.writelines(lines[1:])
-                    # クリーンアップ
-                    try:
-                        os.remove(worker_csv)
-                    except Exception as e:
-                        print(f"Warning: Failed to delete worker csv {worker_csv}: {e}")
+                        if lines:
+                            if not header:
+                                header = lines[0]
+                            merged_rows.extend(lines[1:])
+                except Exception as e:
+                    print(f"Warning: Failed to read worker csv {worker_csv}: {e}")
+                
+                try:
+                    os.remove(worker_csv)
+                except Exception as e:
+                    print(f"Warning: Failed to delete worker csv {worker_csv}: {e}")
+        
+        if header and merged_rows:
+            with open(merged_summary_file, 'w', encoding='utf-8') as outfile:
+                outfile.write(header)
+                outfile.writelines(merged_rows)
 
     # 平均化の処理を実行
     print("\nAveraging results across all runs...")
     try:
         final_summary_file = f"sim_results/sweep_{sweep_start_time}/sweep_summary.csv"
-        summary_files = [os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv") for run_idx in range(1, NUM_RUNS + 1)]
+        summary_files = [os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv") for run_idx in range(1, num_runs + 1)]
         average_summaries(summary_files, final_summary_file)
         print(f"Averaged summary successfully saved to: {final_summary_file}")
     except Exception as e:

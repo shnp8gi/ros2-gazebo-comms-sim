@@ -33,8 +33,8 @@ _MISSION_QOS = QoSProfile(
 )
 
 # 車両停止を検知してから強制シャットダウンするまでの猶予時間 [壁時計秒]
-# RTF=10（固定）なら 3s壁時計 = 30s シミュレーション時間
-_WATCHDOG_STOP_TIMEOUT_SEC = 3.0
+# RTF=10（固定）なら 30s壁時計 = 300s シミュレーション時間
+_WATCHDOG_STOP_TIMEOUT_SEC = 30.0
 
 def get_workspace_root() -> str:
     if os.path.exists('/workspace'):
@@ -145,7 +145,9 @@ class SimLoggerNode(Node):
                 antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
                 self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
                 raw_yaw = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
-                self.angle = round((270.0 - math.degrees(raw_yaw)) % 360.0, 1)
+                entity_yaw = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[5])
+                entity_yaw_deg = math.degrees(entity_yaw)
+                self.angle = round((math.degrees(raw_yaw) + entity_yaw_deg + 180.0) % 360.0, 1)
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
                 # YAML内でも output_subdir が定義されているかチェック（フォールバック）
                 if not self.output_subdir:
@@ -305,10 +307,13 @@ class SimLoggerNode(Node):
         if msg.data and not self._mission_status[vehicle_name]:
             self._mission_status[vehicle_name] = True
             if all(self._mission_status.values()):
-                self.get_logger().info('=== ミッション完了。シミュレーションを終了します ===')
-                import time
-                time.sleep(0.5)
-                sys.exit(0)
+                self.get_logger().info('=== ミッション完了。すべてのデータを受信するため 10 秒後にシミュレーションを終了します ===')
+                self._exit_timer = self.create_timer(10.0, self._exit_now)
+
+    def _exit_now(self):
+        self.get_logger().info('=== 終了タイマー満了。シミュレーションを終了します ===')
+        self._exit_timer.cancel()
+        sys.exit(0)
 
     def _watchdog_tick(self) -> None:
         """車両が停止してから _WATCHDOG_STOP_TIMEOUT_SEC 秒後に強制シャットダウン。"""

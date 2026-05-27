@@ -59,14 +59,15 @@ except ImportError:
         TwoRayGroundModel,
     )
 
-def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float, output_subdir: str = '') -> str:
+def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float, output_subdir: str = '', entity_yaw: float = -1.5708) -> str:
     if output_subdir:
         run_idx = None
         match_run = re.search(r'run(\d+)', summary_filename)
         if match_run:
             run_idx = int(match_run.group(1))
             
-        angle_deg = (270.0 - math.degrees(antenna_yaw)) % 360.0
+        entity_yaw_deg = math.degrees(entity_yaw)
+        angle_deg = (math.degrees(antenna_yaw) + entity_yaw_deg + 180.0) % 360.0
         angle_deg = round(angle_deg, 1)
         angle_str = f"{angle_deg:g}"
         y_str = f"{round(y_pos, 2):g}"
@@ -83,7 +84,8 @@ def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_po
         if match:
             sweep_timestamp = match.group(1)
             run_idx = int(match.group(2))
-            angle_deg = (270.0 - math.degrees(antenna_yaw)) % 360.0
+            entity_yaw_deg = math.degrees(entity_yaw)
+            angle_deg = (math.degrees(antenna_yaw) + entity_yaw_deg + 180.0) % 360.0
             angle_deg = round(angle_deg, 1)
             angle_str = f"{angle_deg:g}"
             y_str = f"{round(y_pos, 2):g}"
@@ -363,6 +365,7 @@ class LinkControllerNode(Node):
         # Load run parameters and precalculate nominal RSSI LUT if feedforward_optimal or level >= 5
         self.y_pos = 0.0
         self.angle = 0.0
+        self.entity_yaw = -1.5708
         self.summary_filename = 'sweep_summary.csv'
         self.center_antenna_name = 'shinkansen_mid'
         try:
@@ -373,6 +376,7 @@ class LinkControllerNode(Node):
                 antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
                 self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
                 self.angle = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
+                self.entity_yaw = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[5])
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
                 
                 # 車両アンテナから中心アンテナを動的に特定
@@ -392,7 +396,7 @@ class LinkControllerNode(Node):
             self.get_logger().warn(f"Failed to read yaml for summary / center antenna: {e}")
 
         # Set run directory
-        self.run_dir = get_run_dir(resolve_path('/workspace/sim_results/'), self.summary_filename, self.run_timestamp, self.y_pos, self.angle, self.output_subdir)
+        self.run_dir = get_run_dir(resolve_path('/workspace/sim_results/'), self.summary_filename, self.run_timestamp, self.y_pos, self.angle, self.output_subdir, self.entity_yaw)
 
         self.lut = []
         self.ff_file = None
@@ -434,7 +438,18 @@ class LinkControllerNode(Node):
                     polyline_points.append(np.array(wp[:3], dtype=float))
                 
                 samples = sample_trajectory(polyline_points, self.heatmap_resolution_m)
-                self.get_logger().info(f'軌道をサンプリングしました: {len(samples)} 点 (解像度: {self.heatmap_resolution_m} m)')
+                if base_stations:
+                    filtered_samples = []
+                    for pt, yaw in samples:
+                        near_bs = False
+                        for bs in base_stations:
+                            if np.linalg.norm(pt[:2] - bs['position'][:2]) < 100.0:
+                                near_bs = True
+                                break
+                        if near_bs:
+                            filtered_samples.append((pt, yaw))
+                    samples = filtered_samples
+                self.get_logger().info(f'軌道をサンプリングしました: {len(samples)} 点 (解像度: {self.heatmap_resolution_m} m, 基地局近傍フィルタ適用後)')
                 
                 comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
                 e_plane_path = resolve_path(comms_params.get('e_plane_path', '/workspace/config/e_plane.csv'))
@@ -625,55 +640,28 @@ class LinkControllerNode(Node):
         self._rssi[vehicle_name] = msg.data
 
     def _on_comms_quality(self, vehicle_name: str, msg: CommsQuality) -> None:
-        """各車両からの通信品質・幾何学情報を受信。タイムスタンプ同期バッファで管理。"""
+        """各車両からの通信品質・幾何学情報を受信。"""
         current_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         
-        # 許容誤差範囲内 (5ms) の既存スタンプを探す
-        tolerance = 0.005
-        matched_stamp_key = None
-        for stamp_key in self._quality_buffer:
-            stamp_time = stamp_key[0] + stamp_key[1] * 1e-9
-            if abs(current_time - stamp_time) < tolerance:
-                matched_stamp_key = stamp_key
-                break
+        # 幾何情報を更新
+        self._geometry_info[vehicle_name] = {
+            'distance': msg.distance,
+            'antenna_gain_e_plane': msg.antenna_gain_e_plane,
+            'antenna_gain_h_plane': msg.antenna_gain_h_plane,
+            'path_loss': msg.path_loss,
+            'comm_active': msg.comm_active,
+            'link_state': msg.link_state,
+            'rssi': msg.rssi,
+            'ugv_x': msg.ugv_x,
+            'ugv_y': msg.ugv_y,
+            'ugv_z': msg.ugv_z
+        }
         
-        if matched_stamp_key is None:
-            stamp_key = (msg.header.stamp.sec, msg.header.stamp.nanosec)
-            self._quality_buffer[stamp_key] = {}
-            matched_stamp_key = stamp_key
-        
-        self._quality_buffer[matched_stamp_key][vehicle_name] = msg
-        
-        # すべての車両データがこのタイムスタンプで揃ったか確認
-        if len(self._quality_buffer[matched_stamp_key]) == len(self.vehicle_names):
-            # すべて揃ったので幾何情報を一括更新してスケジューリングを実行
-            for vn in self.vehicle_names:
-                m = self._quality_buffer[matched_stamp_key][vn]
-                self._geometry_info[vn] = {
-                    'distance': m.distance,
-                    'antenna_gain_e_plane': m.antenna_gain_e_plane,
-                    'antenna_gain_h_plane': m.antenna_gain_h_plane,
-                    'path_loss': m.path_loss,
-                    'comm_active': m.comm_active,
-                    'link_state': m.link_state,
-                    'rssi': m.rssi,
-                    'ugv_x': m.ugv_x,
-                    'ugv_y': m.ugv_y,
-                    'ugv_z': m.ugv_z
-                }
-            
-            # スケジュール処理を実行
-            trigger_time = matched_stamp_key[0] + matched_stamp_key[1] * 1e-9
-            self._schedule_tick(trigger_time)
-            
-            # メモリ節約のため、このスタンプとそれより古いスタンプを削除
-            keys_to_remove = []
-            for k in list(self._quality_buffer.keys()):
-                k_time = k[0] + k[1] * 1e-9
-                if k_time <= trigger_time + 1e-9:
-                    keys_to_remove.append(k)
-            for k in keys_to_remove:
-                self._quality_buffer.pop(k, None)
+        # すべてのアンテナデータが一度揃ったら、基準アンテナ受信時にのみスケジューリングを実行して無駄な多重実行を防止する。
+        # 揃う前は、全てのアンテナデータが集まった瞬間に一度実行する。
+        if len(self._geometry_info) == len(self.vehicle_names):
+            if vehicle_name == self.center_antenna_name or self._last_grant_change_time == 0.0:
+                self._schedule_tick(current_time)
 
     def _on_mission_complete(self, vehicle_name: str, msg: Bool) -> None:
         """各車両のミッション完了通知を受信。"""

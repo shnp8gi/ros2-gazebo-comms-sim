@@ -223,12 +223,18 @@ class CommsSimulatorNode(Node):
                 offset = np.array(bs_offsets_raw[i*3:(i+1)*3], dtype=float) if len(bs_offsets_raw) >= (i+1)*3 else np.array([0.0, 0.0, 3.0], dtype=float)
                 rpy = np.array(bs_rpys_raw[i*3:(i+1)*3], dtype=float) if len(bs_rpys_raw) >= (i+1)*3 else np.zeros(3, dtype=float)
                 rel_rpy = np.array(bs_relative_rpys_raw[i*3:(i+1)*3], dtype=float) if len(bs_relative_rpys_raw) >= (i+1)*3 else np.zeros(3, dtype=float)
+                
+                # Precalculate antenna rotation matrix
+                ant_rpy = rpy + rel_rpy
+                rotmat = self.antenna_parser._rpy_to_rotmat(float(ant_rpy[0]), float(ant_rpy[1]), float(ant_rpy[2]))
+                
                 self.base_stations.append({
                     'position': pos,
                     'antenna_offset': offset,
                     'rpy': rpy,
                     'antenna_relative_rpy': rel_rpy,
-                    'name': f'antenna_{i}'
+                    'name': f'antenna_{i}',
+                    'rotmat': rotmat
                 })
         else:
             bs_pos = self.get_parameter('base_station_position').value
@@ -236,12 +242,17 @@ class CommsSimulatorNode(Node):
             offset = np.array(self.get_parameter('base_station_antenna_offset').value, dtype=float)
             rpy = np.array(self.get_parameter('base_station_rpy').value, dtype=float)
             rel_rpy = np.array(self.get_parameter('base_station_antenna_relative_rpy').value, dtype=float)
+            
+            ant_rpy = rpy + rel_rpy
+            rotmat = self.antenna_parser._rpy_to_rotmat(float(ant_rpy[0]), float(ant_rpy[1]), float(ant_rpy[2]))
+            
             self.base_stations.append({
                 'position': pos,
                 'antenna_offset': offset,
                 'rpy': rpy,
                 'antenna_relative_rpy': rel_rpy,
-                'name': 'antenna_0'
+                'name': 'antenna_0',
+                'rotmat': rotmat
             })
 
         self.base_station_position: Optional[np.ndarray] = self.base_stations[0]['position']
@@ -264,6 +275,10 @@ class CommsSimulatorNode(Node):
         self._logging_ready: bool = (self._logging_trigger == 'immediate')
         # 排他制御（Link Grant）状態
         self.has_link_grant: bool = False
+
+        # リンクグラントのローカル判定用
+        self.vehicle_antennas: list = []
+        self.scheduling_policy: str = 'sequential'
 
         # リンク確立状態管理
         self.link_state: LinkState = LinkState.DISCONNECTED
@@ -412,7 +427,10 @@ class CommsSimulatorNode(Node):
                                     self.waypoints = [list(wp) for wp in wps_raw]
                                 else:
                                     self.waypoints = [wps_raw[i:i+4] for i in range(0, len(wps_raw), 4)]
-                            self.get_logger().info(f'[{self.vehicle_name}] ロードされたウェイポイント数: {len(self.waypoints)}')
+                            self.vehicle_antennas = v.get('antennas', [])
+                            lc_params = config.get('link_controller_node', {}).get('ros__parameters', {})
+                            self.scheduling_policy = lc_params.get('scheduling_policy', 'sequential')
+                            self.get_logger().info(f'[{self.vehicle_name}] ロードされたウェイポイント数: {len(self.waypoints)}, アンテナ数: {len(self.vehicle_antennas)}, ポリシー: {self.scheduling_policy}')
                             break
         except Exception as e:
             self.get_logger().warn(f'[{self.vehicle_name}] ウェイポイントのロード失敗: {e}')
@@ -671,7 +689,7 @@ class CommsSimulatorNode(Node):
         """リンク権付与通知コールバック"""
         self.has_link_grant = msg.data
 
-    def _update_link_state(self, rssi: float, current_time: float) -> bool:
+    def _update_link_state(self, rssi: float, current_time: float, has_link_grant: Optional[bool] = None) -> bool:
         """
         RSSIとリンク権限(has_link_grant)に基づいてリンク確立状態を更新する。
 
@@ -688,7 +706,8 @@ class CommsSimulatorNode(Node):
         Returns:
             通信が許可される場合True、それ以外はFalse
         """
-        if not self.has_link_grant or not self.comm_active:
+        grant = has_link_grant if has_link_grant is not None else self.has_link_grant
+        if not grant or not self.comm_active:
             if self.link_state != LinkState.DISCONNECTED:
                 self.link_state = LinkState.DISCONNECTED
                 self.link_establishment_start_time = None
@@ -704,6 +723,13 @@ class CommsSimulatorNode(Node):
                 self.get_logger().info(
                     f'リンク確立開始 (RSSI: {rssi:.1f} dBm)'
                 )
+                # 即時確立チェック（シミュレーションのサンプリング周期が確立時間以上の場合は即時完了とする）
+                if self.link_establishment_time <= (1.0 / self.sampling_rate):
+                    self.link_state = LinkState.CONNECTED
+                    self.get_logger().info(
+                        f'リンク確立完了 (即時確立: {self.link_establishment_time*1000:.1f} ms)'
+                    )
+                    return True
             return False
 
         elif self.link_state == LinkState.ESTABLISHING:
@@ -750,117 +776,231 @@ class CommsSimulatorNode(Node):
             self.get_logger().debug('/odom または /imu データ待機中...')
             return
 
-        # UGVアンテナ位置 = UGVボディ位置 + アンテナオフセット
-        ugv_pos = np.asarray(self.ugv_local_position, dtype=float)
-        ugv_antenna_pos = ugv_pos + np.asarray(self.ugv_antenna_offset, dtype=float)
-        ugv_ant_rpy = np.asarray(self.ugv_orientation, dtype=float) + np.asarray(self.ugv_antenna_relative_rpy, dtype=float)
-
-        # 複数基地局の中から最もRSSIが高いものを選択する
-        best_metrics = None
-        best_bs_idx = 0
-        best_tx_total = 0.0
-        best_rx_total = 0.0
-        best_bs_antenna_pos = None
-
-        for idx, bs in enumerate(self.base_stations):
-            bs_base = bs['position']
-            bs_antenna_pos = bs_base + bs['antenna_offset']
-            bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
-
-            # アンテナゲイン計算
-            tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
-                tx_pos_world=bs_antenna_pos,
-                tx_rpy_world=bs_ant_rpy,
-                rx_pos_world=ugv_antenna_pos,
-                rx_rpy_world=ugv_ant_rpy,
-            )
-            antenna_gain_db = float(tx_total + rx_total)
-
-            # 通信メトリクス計算 (AWGNノイズあり)
-            metrics = self.comms_calculator.calculate_all(
-                ugv_antenna_pos,
-                bs_antenna_pos,
-                antenna_gain_db=antenna_gain_db,
-                add_noise=True,
-            )
-
-            if best_metrics is None or metrics['rssi'] > best_metrics['rssi']:
-                best_metrics = metrics
-                best_bs_idx = idx
-                best_tx_total = tx_total
-                best_rx_total = rx_total
-                best_bs_antenna_pos = bs_antenna_pos
-
-        metrics = best_metrics
-        tx_total = best_tx_total
-        rx_total = best_rx_total
-        bs_antenna_pos = best_bs_antenna_pos
-
-        # 選択された基地局の情報を更新
-        self.base_station_position = self.base_stations[best_bs_idx]['position']
-        self.base_station_antenna_offset = self.base_stations[best_bs_idx]['antenna_offset']
-        self.base_station_entity_rpy = self.base_stations[best_bs_idx]['rpy']
-        self.base_station_antenna_relative_rpy = list(self.base_stations[best_bs_idx]['antenna_relative_rpy'])
-
-        # 最新RSSIをキャッシュ（_on_link_grant での即時遷移判定用）
-        self._last_rssi = metrics['rssi']
-
         # 現在時刻の取得
         current_time = self.get_clock().now().nanoseconds / 1e9
-        elapsed = current_time - (self.simulation_start_time or current_time)
 
-        # シミュレーション時間ステップ（決定論的な通信データ蓄積のため固定値を使用）
-        dt = 1.0 / self.sampling_rate
+        # サンプリング周期の決定
+        dt_target = 1.0 / self.sampling_rate
+
+        # サブステップの分割数を決定
+        last_calc_sim_time = getattr(self, '_last_calc_sim_time', None)
+        last_ugv_pos = getattr(self, 'last_ugv_pos', None)
+        last_ugv_orientation = getattr(self, 'last_ugv_orientation', None)
+
+        # 位置と姿勢の開始点と終了点をあらかじめ投影しておく
+        if 'shinkansen' in self.vehicle_name:
+            orig_pos = self.ugv_local_position
+            
+            # last position projection
+            if last_ugv_pos is not None:
+                self.ugv_local_position = self.last_ugv_pos
+                px_last, py_last, yaw_last = self.get_current_segment_pose()
+                if px_last is not None:
+                    self.last_ugv_pos[0] = px_last
+                    self.last_ugv_pos[1] = py_last
+                if yaw_last is not None:
+                    self.last_ugv_orientation = np.array([0.0, 0.0, yaw_last], dtype=float)
+            
+            # current position projection
+            self.ugv_local_position = orig_pos
+            px_curr, py_curr, yaw_curr = self.get_current_segment_pose()
+            if px_curr is not None:
+                self.ugv_local_position[0] = px_curr
+                self.ugv_local_position[1] = py_curr
+            if yaw_curr is not None:
+                self.ugv_orientation = np.array([0.0, 0.0, yaw_curr], dtype=float)
+
+        if last_calc_sim_time is None or last_ugv_pos is None or last_ugv_orientation is None:
+            # 初回は1ステップのみ
+            self._last_calc_sim_time = current_time
+            self.last_ugv_pos = np.copy(self.ugv_local_position)
+            self.last_ugv_orientation = np.copy(self.ugv_orientation)
+            num_steps = 1
+            dt_actual = dt_target
+        else:
+            elapsed = current_time - last_calc_sim_time
+            if elapsed <= 0.0:
+                # 時刻が進んでいない場合はスキップ
+                return
+            num_steps = int(round(elapsed / dt_target))
+            if num_steps <= 0:
+                num_steps = 1
+            elif num_steps > 5000:
+                self.get_logger().warn(
+                    f'大きいシミュレーション時間ギャップを検出 ({elapsed:.3f}s)。サンプリングレート {self.sampling_rate}Hz に対してサブステップ数を 5000 に制限します。',
+                    throttle_duration_sec=5.0
+                )
+                num_steps = 5000
+            dt_actual = elapsed / num_steps
+
+        # 最終ステップのメトリクスを保持するための変数
+        last_metrics = None
+        last_tx_total = 0.0
+        last_rx_total = 0.0
+        last_bs_antenna_pos = None
+        actual_throughput = 0.0
+
+        # サブステップループ
+        for step in range(1, num_steps + 1):
+            frac = step / num_steps
+            t_sub = self._last_calc_sim_time + step * dt_actual
+
+            # 位置と姿勢の補間 (すでに投影済み)
+            pos_sub = self.last_ugv_pos + frac * (self.ugv_local_position - self.last_ugv_pos)
+            rpy_sub = self.last_ugv_orientation + frac * (self.ugv_orientation - self.last_ugv_orientation)
+
+            # アンテナ位置の計算
+            ugv_antenna_pos = pos_sub + np.asarray(self.ugv_antenna_offset, dtype=float)
+            ugv_ant_rpy = rpy_sub + np.asarray(self.ugv_antenna_relative_rpy, dtype=float)
+
+            # 共通の受信側回転行列を1回だけ計算
+            rx_rotmat = self.antenna_parser._rpy_to_rotmat(float(ugv_ant_rpy[0]), float(ugv_ant_rpy[1]), float(ugv_ant_rpy[2]))
+
+            # 基地局の選定
+            best_metrics = None
+            best_bs_idx = 0
+            best_tx_total = 0.0
+            best_rx_total = 0.0
+            best_bs_antenna_pos = None
+
+            for idx, bs in enumerate(self.base_stations):
+                bs_base = bs['position']
+                bs_antenna_pos = bs_base + bs['antenna_offset']
+                bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
+
+                # アンテナゲイン計算
+                tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
+                    tx_pos_world=bs_antenna_pos,
+                    tx_rpy_world=bs_ant_rpy,
+                    rx_pos_world=ugv_antenna_pos,
+                    rx_rpy_world=ugv_ant_rpy,
+                    tx_rotmat=bs.get('rotmat'),
+                    rx_rotmat=rx_rotmat,
+                )
+                antenna_gain_db = float(tx_total + rx_total)
+
+                # 通信メトリクス計算 (AWGNノイズあり)
+                metrics = self.comms_calculator.calculate_all(
+                    ugv_antenna_pos,
+                    bs_antenna_pos,
+                    antenna_gain_db=antenna_gain_db,
+                    add_noise=True,
+                )
+
+                if best_metrics is None or metrics['rssi'] > best_metrics['rssi']:
+                    best_metrics = metrics
+                    best_bs_idx = idx
+                    best_tx_total = tx_total
+                    best_rx_total = rx_total
+                    best_bs_antenna_pos = bs_antenna_pos
+
+            # 最善の基地局のメトリクスを採用
+            metrics = best_metrics
+            tx_total = best_tx_total
+            rx_total = best_rx_total
+            bs_antenna_pos = best_bs_antenna_pos
+
+            # 選択された基地局の情報を更新
+            self.base_station_position = self.base_stations[best_bs_idx]['position']
+            self.base_station_antenna_offset = self.base_stations[best_bs_idx]['antenna_offset']
+            self.base_station_entity_rpy = self.base_stations[best_bs_idx]['rpy']
+            self.base_station_antenna_relative_rpy = list(self.base_stations[best_bs_idx]['antenna_relative_rpy'])
+
+            # 最新RSSIをキャッシュ
+            self._last_rssi = metrics['rssi']
+
+            # ローカルでのリンク権判定（高精度スケジューリングの遅延回避）
+            local_has_link_grant = self.has_link_grant
+            if (self.scheduling_policy in ('feedforward_optimal', 'rssi_priority', 'physical_score_priority', 'geometric_beam_priority', 'geometric_weighted') and 
+                self.vehicle_antennas):
+                best_rssi_per_ant = {}
+                for va in self.vehicle_antennas:
+                    is_current_va = (va['name'] == self.vehicle_name)
+                    if is_current_va and self.comms_calculator.noise_variance == 0.0:
+                        best_va_rssi = metrics['rssi']
+                    else:
+                        va_offset = np.asarray(va['offset'], dtype=float)
+                        va_pos_world = pos_sub + va_offset
+                        
+                        best_va_rssi = float('-inf')
+                        for bs in self.base_stations:
+                            bs_antenna_pos = bs['position'] + bs['antenna_offset']
+                            bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
+                            
+                            tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
+                                tx_pos_world=bs_antenna_pos,
+                                tx_rpy_world=bs_ant_rpy,
+                                rx_pos_world=va_pos_world,
+                                rx_rpy_world=ugv_ant_rpy, # since relative RPY are identical, we can use ugv_ant_rpy and rx_rotmat!
+                                tx_rotmat=bs.get('rotmat'),
+                                rx_rotmat=rx_rotmat,
+                            )
+                            antenna_gain_db = float(tx_total + rx_total)
+                            
+                            metrics_va = self.comms_calculator.calculate_all(
+                                va_pos_world,
+                                bs_antenna_pos,
+                                antenna_gain_db=antenna_gain_db,
+                                add_noise=False,
+                            )
+                            if metrics_va['rssi'] > best_va_rssi:
+                                best_va_rssi = metrics_va['rssi']
+                    
+                    best_rssi_per_ant[va['name']] = best_va_rssi
+                
+                best_ant_name = max(best_rssi_per_ant, key=best_rssi_per_ant.get)
+                local_has_link_grant = (self.vehicle_name == best_ant_name)
+
+            # リンク状態の更新
+            link_ready = self._update_link_state(metrics['rssi'], t_sub, has_link_grant=local_has_link_grant)
+
+            # 累計伝送データ量の更新
+            actual_throughput = 0.0
+            if link_ready and self.comm_active and self._logging_ready:
+                actual_throughput = metrics['throughput']
+                if metrics['throughput'] > 0:
+                    data_this_period = metrics['throughput'] * 1000 / 8 * dt_actual  # Mbps * s = MB
+                    self.total_data_transmitted += data_this_period
+                    if self.comm_data_limit_mb > 0 and self.total_data_transmitted >= self.comm_data_limit_mb:
+                        self.comm_active = False
+
+            # ループの最後で最終ステップの値をパブリッシュ用に保存
+            if step == num_steps:
+                last_metrics = metrics
+                last_tx_total = tx_total
+                last_rx_total = rx_total
+                last_bs_antenna_pos = bs_antenna_pos
+
+        # 状態の保存
         self._last_calc_sim_time = current_time
+        self.last_ugv_pos = np.copy(self.ugv_local_position)
+        self.last_ugv_orientation = np.copy(self.ugv_orientation)
 
-        # リンク権限要求（RSSIレポート）
-        # データ上限に到達して通信不要になった場合は最低のRSSIを報告し優先権を譲渡する
+        # リンク権限要求（最終ステップのRSSIをレポート）
         if hasattr(self, 'link_request_pub') and self.link_request_pub:
             req_msg = Float64()
-            req_msg.data = float(metrics['rssi']) if self.comm_active else float('-inf')
+            req_msg.data = float(last_metrics['rssi']) if self.comm_active else float('-inf')
             self.link_request_pub.publish(req_msg)
 
-        # RSSIとリンク権限に基づくリンク状態更新
-        link_ready = self._update_link_state(metrics['rssi'], current_time)
-
-        # 実効スループット計算（リンク状態とログ準備完了を考慮）
-        actual_throughput = 0.0
-        if link_ready and self.comm_active and self._logging_ready:
-            actual_throughput = metrics['throughput']
-
-            # 累計伝送データ量を更新
-            if metrics['throughput'] > 0:
-                # Gbps を実際の経過時間 dt 分の MB に変換
-                data_this_period = metrics['throughput'] * 1000 / 8 * dt  # Gbps → Mbps → MBps * s = MB
-                self.total_data_transmitted += data_this_period
-
-                # データ上限チェック
-                if self.comm_data_limit_mb > 0:
-                    if self.total_data_transmitted >= self.comm_data_limit_mb:
-                        self.comm_active = False
-                        self.get_logger().info(
-                            f'データ上限到達: {self.total_data_transmitted:.2f} MB'
-                        )
-
-        # ROSメッセージとしてパブリッシュ
+        # ROSメッセージとしてパブリッシュ (最終ステップの情報をパブリッシュ)
         if self.quality_pub is not None and CommsQuality is not None:
             msg = CommsQuality()
             msg.header = Header()
             msg.header.stamp = self.get_clock().now().to_msg()
             msg.header.frame_id = 'world'
-            msg.distance = metrics['distance']
-            msg.rssi = metrics['rssi']
-            msg.throughput = actual_throughput
+            msg.distance = last_metrics['distance']
+            msg.rssi = last_metrics['rssi']
+            msg.throughput = actual_throughput  # 最終ステップの実効スループット
             msg.total_data_transmitted = self.total_data_transmitted
-            msg.ugv_x = ugv_pos[0]
-            msg.ugv_y = ugv_pos[1]
-            msg.ugv_z = ugv_pos[2]
+            msg.ugv_x = self.ugv_local_position[0]
+            msg.ugv_y = self.ugv_local_position[1]
+            msg.ugv_z = self.ugv_local_position[2]
             msg.base_station_x = self.base_station_position[0]
             msg.base_station_y = self.base_station_position[1]
-            msg.base_station_z = bs_antenna_pos[2]
-            msg.antenna_gain_e_plane = float(tx_total)
-            msg.antenna_gain_h_plane = float(rx_total)
-            msg.path_loss = metrics['path_loss']
+            msg.base_station_z = last_bs_antenna_pos[2]
+            msg.antenna_gain_e_plane = float(last_tx_total)
+            msg.antenna_gain_h_plane = float(last_rx_total)
+            msg.path_loss = last_metrics['path_loss']
             msg.comm_active = self.comm_active
             msg.link_state = self.link_state.name
 
@@ -869,9 +1009,10 @@ class CommsSimulatorNode(Node):
         # ログ情報出力 (CONNECTED時のみ出力)
         if self.link_state == LinkState.CONNECTED:
             link_status = f"[{self.link_state.name}]"
+            elapsed = current_time - (self.simulation_start_time or current_time)
             self.get_logger().info(
-                f'[{elapsed:.1f}s] {link_status} D={metrics["distance"]:.1f}m, '
-                f'RSSI={metrics["rssi"]:.1f}dBm, '
+                f'[{elapsed:.1f}s] {link_status} D={last_metrics["distance"]:.1f}m, '
+                f'RSSI={last_metrics["rssi"]:.1f}dBm, '
                 f'TP={actual_throughput:.2f}Gbps, '
                 f'Total={self.total_data_transmitted:.1f}MB',
                 throttle_duration_sec=1.0

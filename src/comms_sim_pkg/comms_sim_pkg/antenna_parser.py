@@ -45,6 +45,10 @@ class AntennaPatternParser:
         """
         self.e_plane_interp: Optional[interp1d] = None
         self.h_plane_interp: Optional[interp1d] = None
+        self.e_plane_angles: Optional[np.ndarray] = None
+        self.e_plane_gains: Optional[np.ndarray] = None
+        self.h_plane_angles: Optional[np.ndarray] = None
+        self.h_plane_gains: Optional[np.ndarray] = None
         self.e_plane_peak: float = 0.0
         self.h_plane_peak: float = 0.0
         self.max_antenna_attenuation: float = max_antenna_attenuation
@@ -54,7 +58,7 @@ class AntennaPatternParser:
         if h_plane_path:
             self.load_h_plane(h_plane_path)
 
-    def _load_pattern(self, filepath: str) -> Tuple[interp1d, float]:
+    def _load_pattern(self, filepath: str) -> Tuple[np.ndarray, np.ndarray, float]:
         """
         CSVファイルからアンテナパターンを読み込む。
 
@@ -68,7 +72,7 @@ class AntennaPatternParser:
             filepath: CSVファイルのパス
 
         Returns:
-            (補間関数, ピークゲイン [dBi]) のタプル
+            (angles, gains, ピークゲイン [dBi]) のタプル
 
         Raises:
             FileNotFoundError: ファイルが存在しない場合
@@ -117,17 +121,7 @@ class AntennaPatternParser:
         gains = gains[sort_idx]
 
         peak_gain = float(np.max(gains))
-
-        # 補間関数を作成
-        # 範囲外の角度には非常に大きな負のゲイン (-1000 dBi) を割り当て、
-        # アンテナパターンの角度範囲外では事実上通信不可能であることを表現。
-        interp_func = interp1d(
-            angles, gains,
-            kind='linear',
-            bounds_error=False,
-            fill_value=-1000.0
-        )
-        return interp_func, peak_gain
+        return angles, gains, peak_gain
 
     def load_e_plane(self, filepath: str) -> None:
         """
@@ -136,9 +130,17 @@ class AntennaPatternParser:
         Args:
             filepath: E面CSVファイルのパス
         """
-        interp, peak = self._load_pattern(filepath)
-        self.e_plane_interp = interp
+        angles, gains, peak = self._load_pattern(filepath)
+        self.e_plane_angles = angles
+        self.e_plane_gains = gains
         self.e_plane_peak = peak
+        # 後方互換性のために interp1d も作成
+        self.e_plane_interp = interp1d(
+            angles, gains,
+            kind='linear',
+            bounds_error=False,
+            fill_value=-1000.0
+        )
 
     def load_h_plane(self, filepath: str) -> None:
         """
@@ -147,9 +149,17 @@ class AntennaPatternParser:
         Args:
             filepath: H面CSVファイルのパス
         """
-        interp, peak = self._load_pattern(filepath)
-        self.h_plane_interp = interp
+        angles, gains, peak = self._load_pattern(filepath)
+        self.h_plane_angles = angles
+        self.h_plane_gains = gains
         self.h_plane_peak = peak
+        # 後方互換性のために interp1d も作成
+        self.h_plane_interp = interp1d(
+            angles, gains,
+            kind='linear',
+            bounds_error=False,
+            fill_value=-1000.0
+        )
 
     def get_e_plane_gain(self, angle_deg: float) -> float:
         """
@@ -161,9 +171,9 @@ class AntennaPatternParser:
         Returns:
             ゲイン [dBi]
         """
-        if self.e_plane_interp is None:
+        if self.e_plane_angles is None or self.e_plane_gains is None:
             return 0.0
-        return float(self.e_plane_interp(angle_deg))
+        return float(np.interp(angle_deg, self.e_plane_angles, self.e_plane_gains, left=-1000.0, right=-1000.0))
 
     def get_h_plane_gain(self, angle_deg: float) -> float:
         """
@@ -175,9 +185,9 @@ class AntennaPatternParser:
         Returns:
             ゲイン [dBi]
         """
-        if self.h_plane_interp is None:
+        if self.h_plane_angles is None or self.h_plane_gains is None:
             return 0.0
-        return float(self.h_plane_interp(angle_deg))
+        return float(np.interp(angle_deg, self.h_plane_angles, self.h_plane_gains, left=-1000.0, right=-1000.0))
 
     def get_combined_gain(
         self,
@@ -209,23 +219,15 @@ class AntennaPatternParser:
 
         アンテナ/ボディフレーム → ワールドフレームへの変換に使用。
         """
-        cr, sr = float(np.cos(roll)), float(np.sin(roll))
-        cp, sp = float(np.cos(pitch)), float(np.sin(pitch))
-        cy, sy = float(np.cos(yaw)), float(np.sin(yaw))
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        cy, sy = np.cos(yaw), np.sin(yaw)
 
-        rx = np.array(
-            [[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]],
-            dtype=float,
-        )
-        ry = np.array(
-            [[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]],
-            dtype=float,
-        )
-        rz = np.array(
-            [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]],
-            dtype=float,
-        )
-        return rz @ ry @ rx
+        return np.array([
+            [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+            [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+            [-sp,   cp*sr,            cp*cr           ]
+        ], dtype=float)
 
     @staticmethod
     def _wrap_pi(angle_rad: float) -> float:
@@ -237,6 +239,7 @@ class AntennaPatternParser:
         antenna_pos_world: np.ndarray,
         target_pos_world: np.ndarray,
         antenna_rpy_world: np.ndarray,
+        rotmat: Optional[np.ndarray] = None,
     ) -> Tuple[float, float]:
         """アンテナフレームにおけるターゲット方向の (仰角, 方位角) を計算する。
 
@@ -254,12 +257,15 @@ class AntennaPatternParser:
         # 単位ベクトルに正規化
         v_world /= norm
 
-        # 回転行列を生成
-        r = self._rpy_to_rotmat(
-            float(antenna_rpy_world[0]),
-            float(antenna_rpy_world[1]),
-            float(antenna_rpy_world[2]),
-        )
+        # 回転行列を取得（渡されていない場合は計算）
+        if rotmat is None:
+            r = self._rpy_to_rotmat(
+                float(antenna_rpy_world[0]),
+                float(antenna_rpy_world[1]),
+                float(antenna_rpy_world[2]),
+            )
+        else:
+            r = rotmat
 
         # ワールド → アンテナフレーム: 逆回転（転置）
         v_ant = r.T @ v_world
@@ -305,6 +311,8 @@ class AntennaPatternParser:
         tx_rpy_world: np.ndarray,
         rx_pos_world: np.ndarray,
         rx_rpy_world: np.ndarray,
+        tx_rotmat: Optional[np.ndarray] = None,
+        rx_rotmat: Optional[np.ndarray] = None,
     ) -> Tuple[float, float, float, float, float, float]:
         """送信側・受信側のアンテナゲインを個別に計算する。
 
@@ -312,9 +320,9 @@ class AntennaPatternParser:
             (tx_e, tx_h, tx_total, rx_e, rx_h, rx_total) [dB]
         """
         # 送信側: アンテナから受信側方向の角度を計算
-        tx_el, tx_az = self.calculate_antenna_frame_angles(tx_pos_world, rx_pos_world, tx_rpy_world)
+        tx_el, tx_az = self.calculate_antenna_frame_angles(tx_pos_world, rx_pos_world, tx_rpy_world, tx_rotmat)
         # 受信側: アンテナから送信側方向の角度を計算
-        rx_el, rx_az = self.calculate_antenna_frame_angles(rx_pos_world, tx_pos_world, rx_rpy_world)
+        rx_el, rx_az = self.calculate_antenna_frame_angles(rx_pos_world, tx_pos_world, rx_rpy_world, rx_rotmat)
 
         tx_e, tx_h, tx_total = self.get_gain_from_angles(tx_el, tx_az)
         rx_e, rx_h, rx_total = self.get_gain_from_angles(rx_el, rx_az)
