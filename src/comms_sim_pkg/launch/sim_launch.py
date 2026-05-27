@@ -674,7 +674,7 @@ def launch_setup(context, *args, **kwargs):
                 actions=[
                     Node(
                         package='comms_sim_pkg',
-                        executable='comms_node.py',
+                        executable='comms_node_cpp',
                         name=f'comms_simulator_{ant_name}',
                         output='screen',
                         parameters=[
