@@ -28,22 +28,22 @@ UGVと基地局間の通信品質をシミュレーションするROS 2ノード
     - base_station_pose_topic: 基地局姿勢トピック名
 """
 
-import atexit
-import csv
-import os
-from datetime import datetime
 from typing import Optional, List, Tuple
 from enum import Enum
 
+import os
+import math
 import numpy as np
 import rclpy
 from rclpy.node import Node
+from rclpy.executors import MultiThreadedExecutor
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
 from rclpy.qos import QoSProfile, ReliabilityPolicy, HistoryPolicy
 from sensor_msgs.msg import Imu
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PoseStamped, Twist
 from std_msgs.msg import Header
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
 
 # ros2 launch経由で実行可能なように絶対インポートを優先
 try:
@@ -118,6 +118,11 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('ugv_antenna_relative_rpy', [0.0, 0.0, 0.0])
         self.declare_parameter('base_station_antenna_relative_rpy', [0.0, 0.0, 0.0])
         self.declare_parameter('base_station_pose_topic', '/base_station/pose')
+        self.declare_parameter('base_station_rpy', [0.0, 0.0, 0.0])
+        self.declare_parameter('base_station_positions', [0.0, 0.0, 0.0])
+        self.declare_parameter('base_station_antenna_offsets', [0.0, 0.0, 10.5])
+        self.declare_parameter('base_station_rpys', [0.0, 0.0, 0.0])
+        self.declare_parameter('base_station_antenna_relative_rpys', [0.0, 0.0, 0.0])
         self.declare_parameter('logging_start_trigger', 'on_movement')
         self.declare_parameter('logging_start_topic', '/logging/start')
         self.declare_parameter('max_antenna_attenuation', 30.0)
@@ -161,7 +166,7 @@ class CommsSimulatorNode(Node):
         pl_d0 = self.get_parameter('path_loss.pl_d0').value
 
         # 基地局エンティティの姿勢 (roll, pitch, yaw) [rad]
-        self.base_station_entity_rpy: np.ndarray = np.array([0.0, 0.0, 0.0], dtype=float)
+        self.base_station_entity_rpy: np.ndarray = np.array(self.get_parameter('base_station_rpy').value, dtype=float)
 
         # =====================================================================
         # コンポーネント初期化
@@ -204,31 +209,66 @@ class CommsSimulatorNode(Node):
         # =====================================================================
         # 状態変数
         # =====================================================================
-        # 基地局位置をパラメータから取得
-        bs_pos = self.get_parameter('base_station_position').value
-        self.base_station_position: Optional[np.ndarray] = np.array(bs_pos) if bs_pos else None
-        self.base_station_antenna_offset: np.ndarray = np.array(self.get_parameter('base_station_antenna_offset').value, dtype=float)
+        # 複数基地局のパラメータ取得
+        bs_positions_raw = list(self.get_parameter('base_station_positions').value)
+        bs_offsets_raw = list(self.get_parameter('base_station_antenna_offsets').value)
+        bs_rpys_raw = list(self.get_parameter('base_station_rpys').value)
+        bs_relative_rpys_raw = list(self.get_parameter('base_station_antenna_relative_rpys').value)
+
+        self.base_stations = []
+        if len(bs_positions_raw) >= 3 and len(bs_positions_raw) % 3 == 0:
+            n_bs = len(bs_positions_raw) // 3
+            for i in range(n_bs):
+                pos = np.array(bs_positions_raw[i*3:(i+1)*3], dtype=float)
+                offset = np.array(bs_offsets_raw[i*3:(i+1)*3], dtype=float) if len(bs_offsets_raw) >= (i+1)*3 else np.array([0.0, 0.0, 3.0], dtype=float)
+                rpy = np.array(bs_rpys_raw[i*3:(i+1)*3], dtype=float) if len(bs_rpys_raw) >= (i+1)*3 else np.zeros(3, dtype=float)
+                rel_rpy = np.array(bs_relative_rpys_raw[i*3:(i+1)*3], dtype=float) if len(bs_relative_rpys_raw) >= (i+1)*3 else np.zeros(3, dtype=float)
+                self.base_stations.append({
+                    'position': pos,
+                    'antenna_offset': offset,
+                    'rpy': rpy,
+                    'antenna_relative_rpy': rel_rpy,
+                    'name': f'antenna_{i}'
+                })
+        else:
+            bs_pos = self.get_parameter('base_station_position').value
+            pos = np.array(bs_pos, dtype=float) if bs_pos else np.zeros(3, dtype=float)
+            offset = np.array(self.get_parameter('base_station_antenna_offset').value, dtype=float)
+            rpy = np.array(self.get_parameter('base_station_rpy').value, dtype=float)
+            rel_rpy = np.array(self.get_parameter('base_station_antenna_relative_rpy').value, dtype=float)
+            self.base_stations.append({
+                'position': pos,
+                'antenna_offset': offset,
+                'rpy': rpy,
+                'antenna_relative_rpy': rel_rpy,
+                'name': 'antenna_0'
+            })
+
+        self.base_station_position: Optional[np.ndarray] = self.base_stations[0]['position']
+        self.base_station_antenna_offset: np.ndarray = self.base_stations[0]['antenna_offset']
         self.ugv_antenna_offset: np.ndarray = np.array(self.get_parameter('ugv_antenna_offset').value, dtype=float)
 
         self.ugv_orientation: Optional[np.ndarray] = None  # [roll, pitch, yaw]
         self.ugv_local_position: Optional[np.ndarray] = None
         self._odom_offset_set: bool = False
         self._odom_offset: np.ndarray = np.zeros(3, dtype=float)
+        self._initial_position_verified: bool = False
+        self._verification_attempt_count: int = 0
 
         self.total_data_transmitted: float = 0.0  # 累計伝送データ量 [MB]
         self.comm_active: bool = True
         self.simulation_start_time: Optional[float] = None
+        self._last_calc_sim_time: Optional[float] = None
 
         # ログ記録準備完了フラグ（トリガー条件が満たされたらTrue）
         self._logging_ready: bool = (self._logging_trigger == 'immediate')
+        # 排他制御（Link Grant）状態
+        self.has_link_grant: bool = False
+
         # リンク確立状態管理
         self.link_state: LinkState = LinkState.DISCONNECTED
         self.link_establishment_start_time: Optional[float] = None
-
-        # CSV出力用データログ
-        self.data_log: List[dict] = []
-        # CSV保存済みフラグ（二重保存防止）
-        self._csv_saved: bool = False
+        self._last_rssi: Optional[float] = None  
 
         # =====================================================================
         # QoSプロファイル
@@ -283,6 +323,15 @@ class CommsSimulatorNode(Node):
             10
         )
 
+        # リンクグラント受信
+        if self.vehicle_name:
+            self.link_grant_sub = self.create_subscription(
+                Bool,
+                f'/{self.vehicle_name}/link_grant',
+                self._on_link_grant,
+                10
+            )
+
         # 基地局姿勢サブスクライバ（オプション: 基地局の回転対応）
         self._bs_pose_sub = self.create_subscription(
             PoseStamped,
@@ -294,10 +343,17 @@ class CommsSimulatorNode(Node):
         # =====================================================================
         # パブリッシャ
         # =====================================================================
+        if self.vehicle_name:
+            quality_topic = f'/{self.vehicle_name}/comms/quality'
+            self.link_request_pub = self.create_publisher(Float64, f'/{self.vehicle_name}/link_request', 10)
+        else:
+            quality_topic = '/comms/quality'
+            self.link_request_pub = None
+
         if CommsQuality is not None:
             self.quality_pub = self.create_publisher(
                 CommsQuality,
-                '/comms/quality',
+                quality_topic,
                 10
             )
         else:
@@ -308,12 +364,65 @@ class CommsSimulatorNode(Node):
         # 定期計算タイマー
         # =====================================================================
         period = 1.0 / self.sampling_rate
-        self.calc_timer = self.create_timer(period, self.calculate_and_publish)
+        # YAMLからこのアンテナに属する車両のウェイポイントをロード
+        self.waypoints: List[List[float]] = []
+        try:
+            import yaml
+            from ament_index_python.packages import get_package_share_directory
+            def get_workspace_root() -> str:
+                if os.path.exists('/workspace'):
+                    return '/workspace'
+                current_dir = os.path.abspath(os.path.dirname(__file__))
+                temp_dir = current_dir
+                while True:
+                    if os.path.exists(os.path.join(temp_dir, '.git')) or os.path.exists(os.path.join(temp_dir, 'src')):
+                        return temp_dir
+                    parent = os.path.dirname(temp_dir)
+                    if parent == temp_dir:
+                        break
+                    temp_dir = parent
+                return os.getcwd()
 
-        # =====================================================================
-        # 終了時クリーンアップ登録
-        # =====================================================================
-        atexit.register(self.save_log_to_csv)
+            yaml_path = ''
+            try:
+                pkg_share = get_package_share_directory('comms_sim_pkg')
+                yaml_path = os.path.join(pkg_share, 'config', 'sim_params.yaml')
+            except Exception:
+                pass
+
+            if not yaml_path or not os.path.exists(yaml_path):
+                yaml_path = os.path.join(get_workspace_root(), 'src', 'comms_sim_pkg', 'config', 'sim_params.yaml')
+            if os.path.exists(yaml_path):
+                with open(yaml_path, 'r', encoding='utf-8') as f:
+                    config = yaml.safe_load(f)
+                    vehicles_cfg = config.get('vehicles', [])
+                    for v in vehicles_cfg:
+                        is_match = False
+                        if v.get('name') == self.vehicle_name:
+                            is_match = True
+                        elif 'antennas' in v:
+                            for a in v['antennas']:
+                                if a.get('name') == self.vehicle_name:
+                                    is_match = True
+                                    break
+                        if is_match:
+                            wps_raw = v.get('waypoints', [])
+                            if wps_raw:
+                                if isinstance(wps_raw[0], (list, tuple)):
+                                    self.waypoints = [list(wp) for wp in wps_raw]
+                                else:
+                                    self.waypoints = [wps_raw[i:i+4] for i in range(0, len(wps_raw), 4)]
+                            self.get_logger().info(f'[{self.vehicle_name}] ロードされたウェイポイント数: {len(self.waypoints)}')
+                            break
+        except Exception as e:
+            self.get_logger().warn(f'[{self.vehicle_name}] ウェイポイントのロード失敗: {e}')
+
+        # self.timer_cb_group = MutuallyExclusiveCallbackGroup()
+        # self.calc_timer = self.create_timer(
+        #     period, 
+        #     self.calculate_and_publish,
+        #     callback_group=self.timer_cb_group
+        # )
 
         self.get_logger().info(
             f'CommsSimulatorNode 初期化完了\n'
@@ -369,6 +478,7 @@ class CommsSimulatorNode(Node):
 
         # 初回のオドメトリ受信時にオフセットを計算
         # 最初の受信位置がugv_spawn_poseに一致するようにする
+        # 古いシミュレーションの残存メッセージを無視するため、スポーン位置付近（<= 10.0m）のメッセージのみ採用する
         if not self._odom_offset_set:
             if isinstance(self.ugv_spawn_pose, (list, tuple)) and len(self.ugv_spawn_pose) >= 3:
                 spawn = np.array([
@@ -376,6 +486,13 @@ class CommsSimulatorNode(Node):
                     float(self.ugv_spawn_pose[1]),
                     float(self.ugv_spawn_pose[2]),
                 ], dtype=float)
+                dist_to_spawn = np.linalg.norm(odom_pos - spawn)
+                if dist_to_spawn > 10.0:
+                    self.get_logger().debug(
+                        f'古いシミュレーションの残存オドメトリデータを検出 (スポーン位置からの距離 {dist_to_spawn:.1f}m)。無視します。'
+                    )
+                    return
+
                 self._odom_offset = spawn - odom_pos
                 self._odom_offset_set = True
                 self.get_logger().info(
@@ -390,9 +507,45 @@ class CommsSimulatorNode(Node):
         # オフセット適用済みの位置を保存（ワールド座標系）
         self.ugv_local_position = odom_pos + self._odom_offset
 
+        if 'shinkansen' in self.vehicle_name:
+            # ウェイポイント間の直線上に完全に投影して固定する
+            px, py, segment_yaw = self.get_current_segment_pose()
+            if px is not None:
+                self.ugv_local_position[0] = px
+                self.ugv_local_position[1] = py
+
+        # --- 初期位置の自己補正・検証システム ---
+        if not getattr(self, '_initial_position_verified', True) and isinstance(self.ugv_spawn_pose, (list, tuple)) and len(self.ugv_spawn_pose) >= 3:
+            expected = np.array([
+                float(self.ugv_spawn_pose[0]),
+                float(self.ugv_spawn_pose[1]),
+                float(self.ugv_spawn_pose[2]),
+            ], dtype=float)
+            error = np.linalg.norm((self.ugv_local_position - expected)[:2])
+            
+            if error > 10.0:
+                self._verification_attempt_count += 1
+                self.get_logger().warn(
+                    f'[通信ノード自己補正] 異常な初期位置を検出 (World: {self.ugv_local_position[0]:.1f}, {self.ugv_local_position[1]:.1f} '
+                    f'| Spawn: {expected[0]:.1f}, {expected[1]:.1f})。オフセットを再計算します。'
+                )
+                self._odom_offset = expected - odom_pos
+                self.ugv_local_position = odom_pos + self._odom_offset
+            elif error <= 0.5:
+                self._initial_position_verified = True
+                self.get_logger().info('通信ノード: 初期位置の検証が完了しました。')
+            else:
+                self._verification_attempt_count += 1
+                if self._verification_attempt_count > 50:
+                    self._initial_position_verified = True
+                    self.get_logger().info('通信ノード: 初期位置の検証をタイムアウトで完了しました。')
+
         # シミュレーション開始時刻を記録
         if self.simulation_start_time is None:
             self.simulation_start_time = self.get_clock().now().nanoseconds / 1e9
+
+        # オドメトリ更新に同期して通信品質の計算・パブリッシュを実行
+        self.calculate_and_publish()
 
     def imu_callback(self, msg: Imu) -> None:
         """IMU姿勢コールバック。"""
@@ -403,6 +556,64 @@ class CommsSimulatorNode(Node):
             msg.orientation.z,
             msg.orientation.w
         )
+
+        if 'shinkansen' in self.vehicle_name:
+            px, py, segment_yaw = self.get_current_segment_pose()
+            if segment_yaw is not None:
+                self.ugv_orientation = np.array([0.0, 0.0, segment_yaw], dtype=float)
+
+    def get_current_segment_pose(self) -> tuple:
+        """
+        現在走行中のウェイポイント区間（直線）上の投影位置と方位を計算する。
+        """
+        if not self.waypoints or self.ugv_local_position is None:
+            return None, None, None
+
+        # 現在位置
+        ux = float(self.ugv_local_position[0])
+        uy = float(self.ugv_local_position[1])
+
+        # 現在位置に最も近い投影先セグメントを選択する
+        best_px, best_py = ux, uy
+        best_yaw = 0.0
+        min_dist_sq = float('inf')
+
+        # 前の地点 A
+        ax = float(self.ugv_spawn_pose[0])
+        ay = float(self.ugv_spawn_pose[1])
+
+        for wp in self.waypoints:
+            bx = float(wp[0])
+            by = float(wp[1])
+
+            # ベクトル AB
+            vx = bx - ax
+            vy = by - ay
+            v_len_sq = vx*vx + vy*vy
+
+            if v_len_sq < 1e-6:
+                dist_sq = (ux - bx)**2 + (uy - by)**2
+                if dist_sq < min_dist_sq:
+                    min_dist_sq = dist_sq
+                    best_px, best_py = bx, by
+                    best_yaw = math.atan2(vy, vx)
+            else:
+                # 投影比率 t
+                t = ((ux - ax) * vx + (uy - ay) * vy) / v_len_sq
+                t = max(0.0, min(1.0, t))
+
+                px = ax + t * vx
+                py = ay + t * vy
+
+                dist_sq = (ux - px)**2 + (uy - py)**2
+                if dist_sq < min_dist_sq:
+                    min_dist_sq = dist_sq
+                    best_px, best_py = px, py
+                    best_yaw = math.atan2(vy, vx)
+
+            ax, ay = bx, by
+
+        return best_px, best_py, best_yaw
 
     def set_ugv_local_position(self, position: np.ndarray) -> None:
         """
@@ -456,15 +667,19 @@ class CommsSimulatorNode(Node):
             self._logging_ready = True
             self.get_logger().info('外部トピックによりログ記録を開始します。')
 
+    def _on_link_grant(self, msg: Bool) -> None:
+        """リンク権付与通知コールバック"""
+        self.has_link_grant = msg.data
+
     def _update_link_state(self, rssi: float, current_time: float) -> bool:
         """
-        RSSIに基づいてリンク確立状態を更新する。
+        RSSIとリンク権限(has_link_grant)に基づいてリンク確立状態を更新する。
 
         状態遷移:
-        - DISCONNECTED → ESTABLISHING: RSSIが閾値を上回った
+        - DISCONNECTED → ESTABLISHING: RSSIが閾値を上回り、かつリンク権限がある
         - ESTABLISHING → CONNECTED: リンク確立時間が経過した
-        - ESTABLISHING → DISCONNECTED: RSSIが閾値を下回った
-        - CONNECTED → DISCONNECTED: RSSIが閾値を下回った
+        - ESTABLISHING → DISCONNECTED: RSSIが閾値を下回った、またはリンク権限を失った
+        - CONNECTED → DISCONNECTED: RSSIが閾値を下回った、またはリンク権限を失った
 
         Args:
             rssi: 現在のRSSI [dBm]
@@ -473,6 +688,14 @@ class CommsSimulatorNode(Node):
         Returns:
             通信が許可される場合True、それ以外はFalse
         """
+        if not self.has_link_grant or not self.comm_active:
+            if self.link_state != LinkState.DISCONNECTED:
+                self.link_state = LinkState.DISCONNECTED
+                self.link_establishment_start_time = None
+                if not self.comm_active:
+                    self.get_logger().info('データ伝送終了のためリンクを切断しました')
+            return False
+
         if self.link_state == LinkState.DISCONNECTED:
             # RSSIが閾値を超えたか確認
             if rssi > self.rssi_threshold:
@@ -530,40 +753,74 @@ class CommsSimulatorNode(Node):
         # UGVアンテナ位置 = UGVボディ位置 + アンテナオフセット
         ugv_pos = np.asarray(self.ugv_local_position, dtype=float)
         ugv_antenna_pos = ugv_pos + np.asarray(self.ugv_antenna_offset, dtype=float)
-
-        # 基地局アンテナ位置 = 基地局原点 + アンテナオフセット
-        bs_base = np.asarray(self.base_station_position, dtype=float)
-        bs_antenna_pos = bs_base + np.asarray(self.base_station_antenna_offset, dtype=float)
-
-        # アンテナ姿勢 = エンティティ姿勢 + 相対RPY
         ugv_ant_rpy = np.asarray(self.ugv_orientation, dtype=float) + np.asarray(self.ugv_antenna_relative_rpy, dtype=float)
-        bs_ant_rpy = np.asarray(self.base_station_entity_rpy, dtype=float) + np.asarray(
-            self.base_station_antenna_relative_rpy, dtype=float
-        )
 
-        # 送信(基地局) → 受信(UGV) のアンテナゲイン計算
-        tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
-            tx_pos_world=bs_antenna_pos,
-            tx_rpy_world=bs_ant_rpy,
-            rx_pos_world=ugv_antenna_pos,
-            rx_rpy_world=ugv_ant_rpy,
-        )
+        # 複数基地局の中から最もRSSIが高いものを選択する
+        best_metrics = None
+        best_bs_idx = 0
+        best_tx_total = 0.0
+        best_rx_total = 0.0
+        best_bs_antenna_pos = None
 
-        antenna_gain_db = float(tx_total + rx_total)
+        for idx, bs in enumerate(self.base_stations):
+            bs_base = bs['position']
+            bs_antenna_pos = bs_base + bs['antenna_offset']
+            bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
 
-        # 通信メトリクス計算
-        metrics = self.comms_calculator.calculate_all(
-            ugv_antenna_pos,
-            bs_antenna_pos,
-            antenna_gain_db=antenna_gain_db,
-            add_noise=True,
-        )
+            # アンテナゲイン計算
+            tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
+                tx_pos_world=bs_antenna_pos,
+                tx_rpy_world=bs_ant_rpy,
+                rx_pos_world=ugv_antenna_pos,
+                rx_rpy_world=ugv_ant_rpy,
+            )
+            antenna_gain_db = float(tx_total + rx_total)
+
+            # 通信メトリクス計算 (AWGNノイズあり)
+            metrics = self.comms_calculator.calculate_all(
+                ugv_antenna_pos,
+                bs_antenna_pos,
+                antenna_gain_db=antenna_gain_db,
+                add_noise=True,
+            )
+
+            if best_metrics is None or metrics['rssi'] > best_metrics['rssi']:
+                best_metrics = metrics
+                best_bs_idx = idx
+                best_tx_total = tx_total
+                best_rx_total = rx_total
+                best_bs_antenna_pos = bs_antenna_pos
+
+        metrics = best_metrics
+        tx_total = best_tx_total
+        rx_total = best_rx_total
+        bs_antenna_pos = best_bs_antenna_pos
+
+        # 選択された基地局の情報を更新
+        self.base_station_position = self.base_stations[best_bs_idx]['position']
+        self.base_station_antenna_offset = self.base_stations[best_bs_idx]['antenna_offset']
+        self.base_station_entity_rpy = self.base_stations[best_bs_idx]['rpy']
+        self.base_station_antenna_relative_rpy = list(self.base_stations[best_bs_idx]['antenna_relative_rpy'])
+
+        # 最新RSSIをキャッシュ（_on_link_grant での即時遷移判定用）
+        self._last_rssi = metrics['rssi']
 
         # 現在時刻の取得
         current_time = self.get_clock().now().nanoseconds / 1e9
         elapsed = current_time - (self.simulation_start_time or current_time)
 
-        # RSSIに基づくリンク状態更新
+        # シミュレーション時間ステップ（決定論的な通信データ蓄積のため固定値を使用）
+        dt = 1.0 / self.sampling_rate
+        self._last_calc_sim_time = current_time
+
+        # リンク権限要求（RSSIレポート）
+        # データ上限に到達して通信不要になった場合は最低のRSSIを報告し優先権を譲渡する
+        if hasattr(self, 'link_request_pub') and self.link_request_pub:
+            req_msg = Float64()
+            req_msg.data = float(metrics['rssi']) if self.comm_active else float('-inf')
+            self.link_request_pub.publish(req_msg)
+
+        # RSSIとリンク権限に基づくリンク状態更新
         link_ready = self._update_link_state(metrics['rssi'], current_time)
 
         # 実効スループット計算（リンク状態とログ準備完了を考慮）
@@ -573,9 +830,8 @@ class CommsSimulatorNode(Node):
 
             # 累計伝送データ量を更新
             if metrics['throughput'] > 0:
-                # Gbps をサンプリング周期分の MB に変換
-                period = 1.0 / self.sampling_rate
-                data_this_period = metrics['throughput'] * 1000 / 8 * period  # Gbps → Mbps → MBps * s = MB
+                # Gbps を実際の経過時間 dt 分の MB に変換
+                data_this_period = metrics['throughput'] * 1000 / 8 * dt  # Gbps → Mbps → MBps * s = MB
                 self.total_data_transmitted += data_this_period
 
                 # データ上限チェック
@@ -585,33 +841,6 @@ class CommsSimulatorNode(Node):
                         self.get_logger().info(
                             f'データ上限到達: {self.total_data_transmitted:.2f} MB'
                         )
-
-        # データログ記録
-        log_entry = {
-            'time_s': elapsed,
-            'ugv_body_x_m': ugv_pos[0],
-            'ugv_body_y_m': ugv_pos[1],
-            'ugv_body_z_m': ugv_pos[2],
-            'ugv_antenna_x_m': ugv_antenna_pos[0],
-            'ugv_antenna_y_m': ugv_antenna_pos[1],
-            'ugv_antenna_z_m': ugv_antenna_pos[2],
-            'bs_origin_x_m': self.base_station_position[0],
-            'bs_origin_y_m': self.base_station_position[1],
-            'bs_origin_z_m': self.base_station_position[2],
-            'bs_antenna_x_m': bs_antenna_pos[0],
-            'bs_antenna_y_m': bs_antenna_pos[1],
-            'bs_antenna_z_m': bs_antenna_pos[2],
-            'distance_m': metrics['distance'],
-            'rssi_dBm': metrics['rssi'],
-            'throughput_Gbps': actual_throughput,
-            'total_data_MB': self.total_data_transmitted,
-            'path_loss_dB': metrics['path_loss'],
-            'e_gain_dB': float(rx_e),
-            'h_gain_dB': float(rx_h),
-            'link_state': self.link_state.name,
-        }
-        if self._logging_ready:
-            self.data_log.append(log_entry)
 
         # ROSメッセージとしてパブリッシュ
         if self.quality_pub is not None and CommsQuality is not None:
@@ -629,96 +858,28 @@ class CommsSimulatorNode(Node):
             msg.base_station_x = self.base_station_position[0]
             msg.base_station_y = self.base_station_position[1]
             msg.base_station_z = bs_antenna_pos[2]
-            msg.antenna_gain_e_plane = float(rx_e)
-            msg.antenna_gain_h_plane = float(rx_h)
+            msg.antenna_gain_e_plane = float(tx_total)
+            msg.antenna_gain_h_plane = float(rx_total)
             msg.path_loss = metrics['path_loss']
             msg.comm_active = self.comm_active
+            msg.link_state = self.link_state.name
 
             self.quality_pub.publish(msg)
 
-        # ログ情報出力
-        link_status = f"[{self.link_state.name}]"
-        self.get_logger().info(
-            f'[{elapsed:.1f}s] {link_status} D={metrics["distance"]:.1f}m, '
-            f'RSSI={metrics["rssi"]:.1f}dBm, '
-            f'TP={actual_throughput:.2f}Gbps, '
-            f'Total={self.total_data_transmitted:.1f}MB',
-            throttle_duration_sec=1.0
-        )
-
-    def save_log_to_csv(self) -> None:
-        """収集したデータをCSVファイルに保存する。"""
-        if self._csv_saved:
-            self.get_logger().info('CSV保存済み')
-            return
-        if not self.data_log:
-            self.get_logger().info('保存するデータがありません')
-            return
-
-        # ファイル名生成
-        timestamp = datetime.now().strftime('%Y%m%d_%H%M%S')
-        if self.comm_data_limit_mb > 0:
-            limit_str = f'LIMIT-{self.comm_data_limit_mb:.0f}MB'
-        else:
-            limit_str = 'LIMIT-UNLIMITED'
-
-        if self.vehicle_name:
-            filename = f'{timestamp}_{self.vehicle_name}_{limit_str}.csv'
-        else:
-            filename = f'{timestamp}_{limit_str}.csv'
-        output_dir = '/workspace/sim_results/'
-
-        # 出力ディレクトリ作成（存在しない場合）
-        os.makedirs(output_dir, exist_ok=True)
-        filepath = os.path.join(output_dir, filename)
-
-        # CSV書き込み
-        try:
-            with open(filepath, 'w', newline='', encoding='utf-8') as f:
-                # ヘッダコメント
-                f.write(f'# 通信シミュレーション結果\n')
-                f.write(f'# データ上限: {self.comm_data_limit_mb} MB\n')
-                f.write(f'# 伝搬路モデル: {self.propagation_model.model_name}\n')
-                f.write(f'# 送信電力: {self.tx_power} dBm\n')
-                f.write(f'# 雑音分散: {self.noise_variance} dB\n')
-                f.write('#\n')
-                f.write('# 列の座標定義:\n')
-                f.write('#   ugv_body    = UGV車体モデル原点（ホイールベース中心・地面レベル）\n')
-                f.write('#   ugv_antenna = UGVアンテナ位置（ugv_body + antenna_offset）\n')
-                f.write('#   bs_origin   = 基地局モデル原点\n')
-                f.write('#   bs_antenna  = 基地局アンテナ位置（bs_origin + antenna_offset）\n')
-                f.write('#   distance    = ugv_antenna と bs_antenna 間の3D距離\n')
-                f.write('#\n')
-
-                # データ書き込み
-                fieldnames = [
-                    'time_s',
-                    'ugv_body_x_m', 'ugv_body_y_m', 'ugv_body_z_m',
-                    'ugv_antenna_x_m', 'ugv_antenna_y_m', 'ugv_antenna_z_m',
-                    'bs_origin_x_m', 'bs_origin_y_m', 'bs_origin_z_m',
-                    'bs_antenna_x_m', 'bs_antenna_y_m', 'bs_antenna_z_m',
-                    'distance_m', 'rssi_dBm', 'throughput_Gbps', 'total_data_MB',
-                    'path_loss_dB', 'e_gain_dB', 'h_gain_dB', 'link_state'
-                ]
-                writer = csv.DictWriter(f, fieldnames=fieldnames)
-                writer.writeheader()
-                writer.writerows(self.data_log)
-
-            self._csv_saved = True
-            self.get_logger().info(f'データ保存完了: {filepath}')
-        except Exception as e:
-            self.get_logger().error(f'CSV保存失敗: {e}')
+        # ログ情報出力 (CONNECTED時のみ出力)
+        if self.link_state == LinkState.CONNECTED:
+            link_status = f"[{self.link_state.name}]"
+            self.get_logger().info(
+                f'[{elapsed:.1f}s] {link_status} D={metrics["distance"]:.1f}m, '
+                f'RSSI={metrics["rssi"]:.1f}dBm, '
+                f'TP={actual_throughput:.2f}Gbps, '
+                f'Total={self.total_data_transmitted:.1f}MB',
+                throttle_duration_sec=1.0
+            )
 
     def _on_mission_complete(self, msg: Bool) -> None:
-        """ミッション完了通知受信時にCSVを保存する（1回のみ）。"""
-        if not msg.data:
-            return
-        if self._saved_on_mission_complete:
-            return
-
-        self._saved_on_mission_complete = True
-        self.get_logger().info('ミッション完了通知受信。CSV保存中...')
-        self.save_log_to_csv()
+        """ミッション完了通知受信コールバック"""
+        pass
 
 
 def main(args=None):
@@ -726,18 +887,19 @@ def main(args=None):
     rclpy.init(args=args)
 
     node = CommsSimulatorNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
 
     try:
-        rclpy.spin(node)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
-        node.save_log_to_csv()
         node.destroy_node()
         try:
             rclpy.shutdown()
         except Exception:
-            pass  # 既にシャットダウン済みの場合は無視
+            pass
 
 
 if __name__ == '__main__':
