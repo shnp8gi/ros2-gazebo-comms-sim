@@ -390,93 +390,131 @@ void CommsSimulatorNode::calculate_and_publish() {
     double dt_target = 1.0 / sampling_rate_;
     
     int num_steps = 1;
-    if (last_calc_sim_time_.has_value()) {
-        num_steps = std::max(1, static_cast<int>(std::round((current_time - last_calc_sim_time_.value()) / dt_target)));
-        if (num_steps > 100) num_steps = 1;
-    }
     double dt_actual = dt_target;
+
+    if (!last_calc_sim_time_.has_value() || !last_ugv_pos_.has_value() || !last_ugv_orientation_.has_value()) {
+        last_calc_sim_time_ = current_time;
+        last_ugv_pos_ = ugv_local_position_.value();
+        last_ugv_orientation_ = ugv_orientation_.value();
+        num_steps = 1;
+        dt_actual = dt_target;
+    } else {
+        double elapsed = current_time - last_calc_sim_time_.value();
+        if (elapsed <= 0.0) {
+            return;
+        }
+        num_steps = static_cast<int>(std::round(elapsed / dt_target));
+        if (num_steps <= 0) {
+            num_steps = 1;
+        } else if (num_steps > 5000) {
+            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
+                "Large simulation time gap detected (%f s). Capping sub-steps to 5000.", elapsed);
+            num_steps = 5000;
+        }
+        dt_actual = elapsed / num_steps;
+    }
 
     CommsMetrics best_metrics;
     Eigen::Vector3d best_bs_pos = base_stations_[0].position + base_stations_[0].antenna_offset;
     double best_tx_total = 0, best_rx_total = 0;
     int best_bs_idx = 0;
-    
-    // Simplification: We only evaluate the end of the step instead of intermediate sub-steps like python does.
-    Eigen::Vector3d pos_sub = ugv_local_position_.value();
-    Eigen::Vector3d ori_sub = ugv_orientation_.value();
+    double actual_throughput = 0.0;
 
-    Eigen::Vector3d ugv_ant_rpy = ori_sub + ugv_antenna_relative_rpy_;
-    Eigen::Matrix3d rx_rotmat = antenna_parser_.rpy_to_rotmat(ugv_ant_rpy.x(), ugv_ant_rpy.y(), ugv_ant_rpy.z());
-    Eigen::Vector3d ugv_antenna_pos = pos_sub + rx_rotmat * ugv_antenna_offset_;
+    for (int step = 1; step <= num_steps; ++step) {
+        double frac = static_cast<double>(step) / num_steps;
+        double t_sub = last_calc_sim_time_.value() + step * dt_actual;
 
-    for (size_t i = 0; i < base_stations_.size(); ++i) {
-        auto& bs = base_stations_[i];
-        Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
-        Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
+        // Interpolate position and orientation (already projected)
+        Eigen::Vector3d pos_sub = last_ugv_pos_.value() + frac * (ugv_local_position_.value() - last_ugv_pos_.value());
+        Eigen::Vector3d ori_sub = last_ugv_orientation_.value() + frac * (ugv_orientation_.value() - last_ugv_orientation_.value());
 
-        auto gain_res = antenna_parser_.get_tx_rx_gains(
-            bs_antenna_pos, bs_ant_rpy, ugv_antenna_pos, ugv_ant_rpy,
-            &bs.rotmat, &rx_rotmat);
-        double tx_tot = gain_res.tx_total;
-        double rx_tot = gain_res.rx_total;
+        Eigen::Vector3d ugv_ant_rpy = ori_sub + ugv_antenna_relative_rpy_;
+        Eigen::Matrix3d rx_rotmat = antenna_parser_.rpy_to_rotmat(ugv_ant_rpy.x(), ugv_ant_rpy.y(), ugv_ant_rpy.z());
+        Eigen::Vector3d ugv_antenna_pos = pos_sub + rx_rotmat * ugv_antenna_offset_;
 
-        CommsMetrics metrics = comms_calculator_->calculate_all(ugv_antenna_pos, bs_antenna_pos, tx_tot + rx_tot, true);
-        if (i == 0 || metrics.rssi > best_metrics.rssi) {
-            best_metrics = metrics;
-            best_bs_idx = i;
-            best_tx_total = tx_tot;
-            best_rx_total = rx_tot;
-            best_bs_pos = bs_antenna_pos;
+        CommsMetrics step_best_metrics;
+        int step_best_bs_idx = 0;
+        double step_best_tx_total = 0.0;
+        double step_best_rx_total = 0.0;
+        Eigen::Vector3d step_best_bs_pos = Eigen::Vector3d::Zero();
+
+        for (size_t i = 0; i < base_stations_.size(); ++i) {
+            auto& bs = base_stations_[i];
+            Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
+            Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
+
+            auto gain_res = antenna_parser_.get_tx_rx_gains(
+                bs_antenna_pos, bs_ant_rpy, ugv_antenna_pos, ugv_ant_rpy,
+                &bs.rotmat, &rx_rotmat);
+            double tx_tot = gain_res.tx_total;
+            double rx_tot = gain_res.rx_total;
+
+            CommsMetrics metrics = comms_calculator_->calculate_all(ugv_antenna_pos, bs_antenna_pos, tx_tot + rx_tot, true);
+            if (i == 0 || metrics.rssi > step_best_metrics.rssi) {
+                step_best_metrics = metrics;
+                step_best_bs_idx = i;
+                step_best_tx_total = tx_tot;
+                step_best_rx_total = rx_tot;
+                step_best_bs_pos = bs_antenna_pos;
+            }
         }
-    }
 
-    last_rssi_ = best_metrics.rssi;
-    bool local_has_link_grant = has_link_grant_;
+        last_rssi_ = step_best_metrics.rssi;
+        bool local_has_link_grant = has_link_grant_;
 
-    if ((scheduling_policy_ == "feedforward_optimal" || scheduling_policy_ == "rssi_priority" || 
-         scheduling_policy_ == "physical_score_priority" || scheduling_policy_ == "geometric_beam_priority" || 
-         scheduling_policy_ == "geometric_weighted") && !vehicle_antennas_.empty()) 
-    {
-        double best_va_rssi_global = -1e9;
-        std::string best_ant_name = "";
+        if ((scheduling_policy_ == "feedforward_optimal" || scheduling_policy_ == "rssi_priority" || 
+             scheduling_policy_ == "physical_score_priority" || scheduling_policy_ == "geometric_beam_priority" || 
+             scheduling_policy_ == "geometric_weighted") && !vehicle_antennas_.empty()) 
+        {
+            double best_va_rssi_global = -1e9;
+            std::string best_ant_name = "";
 
-        for (const auto& va : vehicle_antennas_) {
-            bool is_current_va = (va.name == vehicle_name_);
-            double best_va_rssi = -1e9;
+            for (const auto& va : vehicle_antennas_) {
+                bool is_current_va = (va.name == vehicle_name_);
+                double best_va_rssi = -1e9;
 
-            if (is_current_va && noise_variance_ == 0.0) {
-                best_va_rssi = best_metrics.rssi;
-            } else {
-                Eigen::Vector3d va_pos_world = pos_sub + va.offset;
-                for (const auto& bs : base_stations_) {
-                    Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
-                    auto gain_res2 = antenna_parser_.get_tx_rx_gains(
-                        bs_antenna_pos, bs.rpy + bs.antenna_relative_rpy, va_pos_world, ugv_ant_rpy,
-                        &bs.rotmat, &rx_rotmat);
-                    double tx_tot = gain_res2.tx_total;
-                    double rx_tot = gain_res2.rx_total;
-                    
-                    CommsMetrics metrics_va = comms_calculator_->calculate_all(va_pos_world, bs_antenna_pos, tx_tot + rx_tot, false);
-                    if (metrics_va.rssi > best_va_rssi) best_va_rssi = metrics_va.rssi;
+                if (is_current_va && noise_variance_ == 0.0) {
+                    best_va_rssi = step_best_metrics.rssi;
+                } else {
+                    Eigen::Vector3d va_pos_world = pos_sub + va.offset;
+                    for (const auto& bs : base_stations_) {
+                        Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
+                        auto gain_res2 = antenna_parser_.get_tx_rx_gains(
+                            bs_antenna_pos, bs.rpy + bs.antenna_relative_rpy, va_pos_world, ugv_ant_rpy,
+                            &bs.rotmat, &rx_rotmat);
+                        double tx_tot = gain_res2.tx_total;
+                        double rx_tot = gain_res2.rx_total;
+                        
+                        CommsMetrics metrics_va = comms_calculator_->calculate_all(va_pos_world, bs_antenna_pos, tx_tot + rx_tot, false);
+                        if (metrics_va.rssi > best_va_rssi) best_va_rssi = metrics_va.rssi;
+                    }
+                }
+                if (best_va_rssi > best_va_rssi_global) {
+                    best_va_rssi_global = best_va_rssi;
+                    best_ant_name = va.name;
                 }
             }
-            if (best_va_rssi > best_va_rssi_global) {
-                best_va_rssi_global = best_va_rssi;
-                best_ant_name = va.name;
+            local_has_link_grant = (vehicle_name_ == best_ant_name);
+        }
+
+        bool link_ready = update_link_state(step_best_metrics.rssi, t_sub, local_has_link_grant);
+        actual_throughput = 0.0;
+        if (link_ready && comm_active_ && logging_ready_) {
+            actual_throughput = step_best_metrics.throughput;
+            if (actual_throughput > 0) {
+                total_data_transmitted_ += actual_throughput * 1000.0 / 8.0 * dt_actual;
+                if (comm_data_limit_mb_ > 0 && total_data_transmitted_ >= comm_data_limit_mb_) {
+                    comm_active_ = false;
+                }
             }
         }
-        local_has_link_grant = (vehicle_name_ == best_ant_name);
-    }
 
-    bool link_ready = update_link_state(best_metrics.rssi, current_time, local_has_link_grant);
-    double actual_throughput = 0.0;
-    if (link_ready && comm_active_ && logging_ready_) {
-        actual_throughput = best_metrics.throughput;
-        if (actual_throughput > 0) {
-            total_data_transmitted_ += actual_throughput * 1000.0 / 8.0 * (dt_actual * num_steps);
-            if (comm_data_limit_mb_ > 0 && total_data_transmitted_ >= comm_data_limit_mb_) {
-                comm_active_ = false;
-            }
+        if (step == num_steps) {
+            best_metrics = step_best_metrics;
+            best_bs_idx = step_best_bs_idx;
+            best_tx_total = step_best_tx_total;
+            best_rx_total = step_best_rx_total;
+            best_bs_pos = step_best_bs_pos;
         }
     }
 
