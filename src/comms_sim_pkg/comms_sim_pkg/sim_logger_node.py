@@ -23,11 +23,11 @@ from geometry_msgs.msg import Twist
 
 from comms_sim_msgs.msg import CommsQuality
 
-# mission_complete はラッチ（TRANSIENT_LOCAL）で受信する
-# tx_controller_node より sim_logger_node が遅く起動した場合でも受信できる
+# mission_complete は VOLATILE で受信する
+# 以前の実行での古いキャッシュメッセージを誤って受信するのを防ぐため、ラッチしない
 _MISSION_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
-    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    durability=DurabilityPolicy.VOLATILE,
     history=HistoryPolicy.KEEP_LAST,
     depth=1
 )
@@ -496,7 +496,15 @@ def main(args=None):
     rclpy.init(args=args)
     node = SimLoggerNode()
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            try:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                node.get_logger().error(f"Error during spin (ignored to prevent crash): {e}")
+                import time
+                time.sleep(0.01)
     except KeyboardInterrupt:
         pass
     finally:

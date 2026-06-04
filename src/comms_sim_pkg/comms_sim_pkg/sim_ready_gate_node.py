@@ -60,9 +60,15 @@ class SimReadyGateNode(Node):
             )
             self._subs.append(sub)
 
-        # 全ノード Ready 後に発行 (TRANSIENT_LOCAL: 遅延参加でも受信可能)
+        # /sim/all_ready utilizes a VOLATILE QoS to avoid caching startup signals from previous runs
+        _VOLATILE_QOS = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
         self.all_ready_pub = self.create_publisher(
-            Bool, '/sim/all_ready', _TRANSIENT_LOCAL_QOS)
+            Bool, '/sim/all_ready', _VOLATILE_QOS)
 
         self.get_logger().info(
             f'SimReadyGateNode 初期化完了。'
@@ -96,7 +102,15 @@ def main(args=None):
     rclpy.init(args=args)
     node = SimReadyGateNode()
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            try:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                node.get_logger().error(f"Error during spin (ignored to prevent crash): {e}")
+                import time
+                time.sleep(0.01)
     except KeyboardInterrupt:
         pass
     finally:

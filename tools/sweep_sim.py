@@ -79,9 +79,15 @@ def get_optimal_concurrency() -> int:
 
     optimal = min(max_by_cpu, max_by_mem)
     
+    # Gazebo has a significant CPU/GPU footprint even in headless mode.
+    # Running too many parallel instances causes thread starvation, DDS message drops,
+    # and inconsistent telemetry logging. We cap the default auto-detected concurrency to 4.
+    MAX_CONCURRENCY = 4
+    optimal = min(optimal, MAX_CONCURRENCY)
+    
     print(f"[Auto-detect] CPU Count: {cpu_count}, Load 1min: {load_1min:.2f} -> Max by CPU: {max_by_cpu}")
     print(f"[Auto-detect] Available Memory: {mem_available / (1024**3):.2f} GiB -> Max by Mem: {max_by_mem}")
-    print(f"[Auto-detect] Optimal Concurrency: {optimal}")
+    print(f"[Auto-detect] Optimal Concurrency (capped at {MAX_CONCURRENCY}): {optimal}")
     
     return optimal
 
@@ -112,11 +118,9 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
  
     t_expected = estimate_expected_duration(CONFIG_PATH, rtf)
     
-    if t_expected is not None:
-        dynamic_timeout = int(max(30.0, t_expected * 2.0 + 30.0))
-        task_timeout = min(timeout, dynamic_timeout)
-    else:
-        task_timeout = timeout
+    # Use the user-defined timeout. Under high parallelization, actual simulation RTF drops
+    # significantly below the target RTF. Terminating via a dynamic expected time is too aggressive.
+    task_timeout = timeout
 
     max_retries = 3
     for attempt in range(max_retries):

@@ -211,10 +211,10 @@ class TxControllerNode(Node):
         )
 
         # ミッション完了通知（他ノード向け、例: comms_node）
-        # TRANSIENT_LOCAL（ラッチ型）: sim_logger が遅く起動しても受信できる
+        # VOLATILE: 以前の実行での古いキャッシュメッセージを受信してしまうのを防ぐため、ラッチしない
         _mission_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1
         )
@@ -259,8 +259,16 @@ class TxControllerNode(Node):
         self._ready_pub = self.create_publisher(
             Bool, f'/tx_controller_{v_name}/ready', _ready_qos)
         self._all_nodes_ready = False
+        
+        # /sim/all_ready topic uses VOLATILE durability to prevent receiving old cached values
+        _all_ready_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
         self._all_ready_sub = self.create_subscription(
-            Bool, '/sim/all_ready', self._on_all_ready, _ready_qos)
+            Bool, '/sim/all_ready', self._on_all_ready, _all_ready_qos)
 
         # 初期化完了を定期的に通知（ゲートノードが確実に受信できるようにする）
         self._publish_ready_timer = self.create_timer(0.5, self._publish_ready)
@@ -303,6 +311,41 @@ class TxControllerNode(Node):
 
     def odom_callback(self, msg: Odometry) -> None:
         """オドメトリ更新コールバック。"""
+        # スポーン位置を使ってodom→ワールドオフセットを1回だけ計算
+        # 古いシミュレーションの残存メッセージを無視するため、スポーン位置付近（<= 10.0m）のメッセージのみ採用する
+        if not self.odom_offset_set:
+            if isinstance(self.spawn_pose, (list, tuple)) and len(self.spawn_pose) >= 3:
+                spawn_x = float(self.spawn_pose[0])
+                spawn_y = float(self.spawn_pose[1])
+                spawn_z = float(self.spawn_pose[2])
+                dist_to_spawn = math.sqrt((msg.pose.pose.position.x - spawn_x)**2 + (msg.pose.pose.position.y - spawn_y)**2 + (msg.pose.pose.position.z - spawn_z)**2)
+                if dist_to_spawn > 10.0:
+                    self.get_logger().debug(
+                        f'古いシミュレーションの残存オドメトリデータを検出 (スポーン位置からの距離 {dist_to_spawn:.1f}m)。無視します。'
+                    )
+                    return
+
+                self.odom_offset_x = spawn_x - msg.pose.pose.position.x
+                self.odom_offset_y = spawn_y - msg.pose.pose.position.y
+                self.odom_offset_z = spawn_z - msg.pose.pose.position.z
+                self.odom_offset_set = True
+                self.get_logger().info(
+                    f'odomオフセット初回計算: '
+                    f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
+                )
+        else:
+            # DDSの残存メッセージ等による急激な位置ジャンプを検出して無視する
+            if hasattr(self, '_last_raw_x'):
+                dx = msg.pose.pose.position.x - self._last_raw_x
+                dy = msg.pose.pose.position.y - self._last_raw_y
+                dz = msg.pose.pose.position.z - self._last_raw_z
+                jump_dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                if jump_dist > 20.0:
+                    self.get_logger().debug(
+                        f'無視: オドメトリの位置ジャンプを検出しました (移動距離: {jump_dist:.1f}m)。'
+                    )
+                    return
+
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
         self.current_z = msg.pose.pose.position.z
@@ -314,32 +357,11 @@ class TxControllerNode(Node):
         )
         self.actual_linear_x = msg.twist.twist.linear.x
 
-
-
         self.odom_received = True
 
-        # スポーン位置を使ってodom→ワールドオフセットを1回だけ計算
-        # 古いシミュレーションの残存メッセージを無視するため、スポーン位置付近（<= 10.0m）のメッセージのみ採用する
-        if not self.odom_offset_set:
-            if isinstance(self.spawn_pose, (list, tuple)) and len(self.spawn_pose) >= 3:
-                spawn_x = float(self.spawn_pose[0])
-                spawn_y = float(self.spawn_pose[1])
-                spawn_z = float(self.spawn_pose[2])
-                dist_to_spawn = math.sqrt((self.current_x - spawn_x)**2 + (self.current_y - spawn_y)**2 + (self.current_z - spawn_z)**2)
-                if dist_to_spawn > 10.0:
-                    self.get_logger().debug(
-                        f'古いシミュレーションの残存オドメトリデータを検出 (スポーン位置からの距離 {dist_to_spawn:.1f}m)。無視します。'
-                    )
-                    return
-
-                self.odom_offset_x = spawn_x - self.current_x
-                self.odom_offset_y = spawn_y - self.current_y
-                self.odom_offset_z = spawn_z - self.current_z
-                self.odom_offset_set = True
-                self.get_logger().info(
-                    f'odomオフセット初回計算: '
-                    f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
-                )
+        self._last_raw_x = self.current_x
+        self._last_raw_y = self.current_y
+        self._last_raw_z = self.current_z
 
         self.world_x = self.current_x + self.odom_offset_x
         self.world_y = self.current_y + self.odom_offset_y
@@ -585,7 +607,15 @@ def main(args=None):
     node = TxControllerNode()
 
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            try:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                node.get_logger().error(f"Error during spin (ignored to prevent crash): {e}")
+                import time
+                time.sleep(0.01)
     except KeyboardInterrupt:
         pass
     finally:

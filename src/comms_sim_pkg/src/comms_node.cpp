@@ -241,8 +241,9 @@ CommsSimulatorNode::CommsSimulatorNode()
       ready_pub_ = this->create_publisher<std_msgs::msg::Bool>(
           "/" + vehicle_name_ + "/ready", ready_qos);
           
+      auto all_ready_qos = rclcpp::QoS(1).reliable().durability(rclcpp::DurabilityPolicy::Volatile);
       all_ready_sub_ = this->create_subscription<std_msgs::msg::Bool>(
-          "/sim/all_ready", ready_qos, std::bind(&CommsSimulatorNode::on_all_ready, this, std::placeholders::_1));
+          "/sim/all_ready", all_ready_qos, std::bind(&CommsSimulatorNode::on_all_ready, this, std::placeholders::_1));
 
       ready_timer_ = this->create_wall_timer(
           std::chrono::milliseconds(500),
@@ -369,6 +370,17 @@ void CommsSimulatorNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr 
           odom_offset_ = spawn - odom_pos;
       }
       odom_offset_set_ = true;
+  } else {
+      // Validate that position did not jump suddenly (DDS residual messages from previous runs)
+      if (last_tx_pos_.has_value()) {
+          Eigen::Vector3d current_world_pos = odom_pos + odom_offset_;
+          double jump_dist = (current_world_pos - last_tx_pos_.value()).norm();
+          if (jump_dist > 20.0) {
+              RCLCPP_WARN(this->get_logger(), 
+                  "Ignored odom message due to large position jump (%.2f m) - likely stale DDS message", jump_dist);
+              return;
+          }
+      }
   }
   tx_local_position_ = odom_pos + odom_offset_;
 
