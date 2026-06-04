@@ -1,6 +1,6 @@
 # ROS 2 Gazebo Communication Simulator
 
-ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固定基地局間の無線通信品質シミュレータです。
+ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（TX/SUV）と固定基地局間の無線通信品質シミュレータです。
 
 ## 📋 概要
 
@@ -13,7 +13,7 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（UGV/SUV）と固�
 - **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始
 - **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）
 - **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（Strategyパターンで差し替え可能）
-- **マルチ車両・高密度・マルチウェイポイント追従**: 複数台のUGVによる同期待機、区間速度制御（スリップ防止用加速度制御対応）、および自動経路追従
+- **マルチ車両・高密度・マルチウェイポイント追従**: 複数台のTXによる同期待機、区間速度制御（スリップ防止用加速度制御対応）、および自動経路追従
 - **集中スケジューリング**: 基地局側で通信権（Grant）を1台ずつ排他的に付与。RSSI優先、アンテナアライメント（幾何学スコア）、推定受信電力ベースに加え、事前計算されたnominal RSSIヒートマップに基づくフィードフォワード制御ポリシー（`feedforward_optimal`）を搭載。
 - **プロアクティブハンドオーバーと自律的権限譲渡**: 通信データ上限到達時の自律的な譲渡のほか、リンク切断（DISCONNECTED）時に即座に最適な幾何学スコアを持つ後続車両へ通信権を強制切替する機能
 - **GPUアクセラレーション対応**: Docker Composeでの NVIDIA GPU リソース割り当てにより、GUIモードでの高速なGazeboレンダリングをサポート
@@ -57,7 +57,7 @@ ros2-gazebo-comms-sim/
 │   │   ├── link_controller_node.py# 基地局側調停ノード（アクセス許可付与、フィードフォワード制御、LUT事前計算）
 │   │   ├── link_scheduling_strategy.py # スケジューリング戦略（feedforward_optimal等）
 │   │   ├── sim_logger_node.py     # ログノード（ミッション監視、フォルダ分け保存、サマリー集計）
-│   │   └── ugv_controller_node.py # UGV制御ノード（/cmd_vel publish）
+│   │   └── tx_controller_node.py # TX制御ノード（/cmd_vel publish）
 │   ├── launch/
 │   │   └── sim_launch.py          # Gazebo起動/スポーン/ブリッジ/ノード起動
 │   ├── resource/
@@ -372,10 +372,10 @@ link_controller_node:
 
 ※ 通信距離はワールド座標で計算されます。`/odom`（相対座標）からワールド座標へ変換するため、通常は `spawn_entities.suv.pose` と同じ値を指定します（launch が自動で渡します）。
 
-#### UGV制御パラメータ
+#### TX制御パラメータ
 
 ```yaml
-ugv_controller_node:
+tx_controller_node:
   ros__parameters:
     waypoints:
       - [value, value, value, value] # [X, Y, Z, V] (ワールド座標)
@@ -386,7 +386,7 @@ ugv_controller_node:
     heading_gain: value # 方向制御ゲイン (default: 1.5)
 ```
 
-> **Note**: `waypoints` はワールド座標として扱われます。`sim_launch.py` は `spawn_entities.suv.pose` を元に `spawn_pose` を自動生成して `ugv_controller_node` に渡し、`/odom` とワールド座標の差分を補正します。
+> **Note**: `waypoints` はワールド座標として扱われます。`sim_launch.py` は `spawn_entities.suv.pose` を元に `spawn_pose` を自動生成して `tx_controller_node` に渡し、`/odom` とワールド座標の差分を補正します。
 
 #### エンティティスポーン設定
 
@@ -466,7 +466,7 @@ sim_results/
 - `e_gain_dB`: E面アンテナゲイン [dBi]
 - `h_gain_dB`: H面アンテナゲイン [dBi]
 - `comm_active`: 通信可否フラグ
-- `ugv_x_m`, `ugv_y_m`, `ugv_z_m`: UGVアンテナ位置座標 [m]
+- `tx_x_m`, `tx_y_m`, `tx_z_m`: TXアンテナ位置座標 [m]
 - `bs_x_m`, `bs_y_m`, `bs_z_m`: 基地局アンテナ位置座標 [m]
 - `link_state`: リンク状態 (`DISCONNECTED` / `ESTABLISHING` / `CONNECTED`)
 
@@ -490,7 +490,7 @@ sim_results/
 #### 5. フィードフォワード制御ログ (`control/feedforward_log.csv`)
 `feedforward_optimal` ポリシー稼働中の、リアルタイムなアンテナ選択決定の履歴です。
 - `time_s`: 経過時間 [s]
-- `ugv_x_m`, `ugv_y_m`, `ugv_z_m`: 現在の UGV アンテナ位置座標 [m]
+- `tx_x_m`, `tx_y_m`, `tx_z_m`: 現在の TX アンテナ位置座標 [m]
 - `rssi_{antenna_name}`: 各車載アンテナの現在の実測 RSSI [dBm]
 - `selected_antenna`: 現在選択（Grant付与）されている車載アンテナ名
 - `rssi_optimal_dBm`: 現在位置に対応するヒートマップ上（LUT）の nominal optimal RSSI [dBm]
@@ -501,30 +501,30 @@ sim_results/
 
 | トピック名           | メッセージ型                  | 方向    | 説明                                                          |
 | -------------------- | ----------------------------- | ------- | ------------------------------------------------------------- |
-| `/imu/data`          | `sensor_msgs/Imu`             | Sub     | UGV姿勢情報（ros_gz_bridge経由）                              |
-| `/odom`              | `nav_msgs/Odometry`           | Sub     | UGVオドメトリ（ros_gz_bridge経由）                            |
+| `/imu/data`          | `sensor_msgs/Imu`             | Sub     | TX姿勢情報（ros_gz_bridge経由）                              |
+| `/odom`              | `nav_msgs/Odometry`           | Sub     | TXオドメトリ（ros_gz_bridge経由）                            |
 | `/cmd_vel`           | `geometry_msgs/Twist`         | Pub     | 速度指令（ros_gz_bridge経由でGazeboへ送信）                   |
 | `/comms/quality`     | `comms_sim_msgs/CommsQuality` | Pub     | 通信品質                                                      |
 | `/link_request`      | `std_msgs/Float64`            | Pub     | 基地局へRSSIをスコアとして報告し通信権限を要求                |
 | `/link_grant`        | `std_msgs/Bool`               | Sub     | 完了局からのアクセス許可(TDMA的スケジューリング)              |
-| `/mission_complete`  | `std_msgs/Bool`               | Pub     | UGV完走通知（全車完了で`sim_logger_node`が自動終了を実行）    |
-| `/base_station/pose` | `geometry_msgs/PoseStamped`   | Sub     | 基地局姿勢（オプション、アンテナ方向計算に使用）              |
+| `/mission_complete`  | `std_msgs/Bool`               | Pub     | TX完走通知（全車完了で`sim_logger_node`が自動終了を実行）    |
+| `/rx/pose` | `geometry_msgs/PoseStamped`   | Sub     | 基地局姿勢（オプション、アンテナ方向計算に使用）              |
 | `/clock`             | `rosgraph_msgs/Clock`         | Sub     | シミュレーション時間（use_sim_time=true時）                   |
 
 ### カスタムメッセージ: CommsQuality
 
 ```
 std_msgs/Header header
-float64 distance              # UGV-基地局間距離 [m]
+float64 distance              # TX-基地局間距離 [m]
 float64 rssi                  # 受信信号強度 [dBm]
 float64 throughput            # 瞬時スループット [Gbps]
 float64 total_data_transmitted # 累計伝送データ量 [Mb]
-float64 ugv_x                 # UGV位置X [m]
-float64 ugv_y                 # UGV位置Y [m]
-float64 ugv_z                 # UGV位置Z [m]
-float64 base_station_x        # 基地局位置X [m]
-float64 base_station_y        # 基地局位置Y [m]
-float64 base_station_z        # 基地局アンテナ位置Z [m]
+float64 tx_x                 # TX位置X [m]
+float64 tx_y                 # TX位置Y [m]
+float64 tx_z                 # TX位置Z [m]
+float64 rx_x        # 基地局位置X [m]
+float64 rx_y        # 基地局位置Y [m]
+float64 rx_z        # 基地局アンテナ位置Z [m]
 float64 antenna_gain_e_plane   # E面ゲイン [dBi]
 float64 antenna_gain_h_plane   # H面ゲイン [dBi]
 float64 path_loss              # パスロス [dB]

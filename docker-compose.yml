@@ -25,6 +25,7 @@ services:
     stdin_open: true
     tty: true
     working_dir: /workspace
+    shm_size: '2gb'  # FastDDS 共有メモリ通信に必要
 
     command: >
       bash -c "

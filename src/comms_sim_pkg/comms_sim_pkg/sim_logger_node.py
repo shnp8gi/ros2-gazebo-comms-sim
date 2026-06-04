@@ -24,7 +24,7 @@ from geometry_msgs.msg import Twist
 from comms_sim_msgs.msg import CommsQuality
 
 # mission_complete はラッチ（TRANSIENT_LOCAL）で受信する
-# ugv_controller_node より sim_logger_node が遅く起動した場合でも受信できる
+# tx_controller_node より sim_logger_node が遅く起動した場合でも受信できる
 _MISSION_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
     durability=DurabilityPolicy.TRANSIENT_LOCAL,
@@ -241,11 +241,11 @@ class SimLoggerNode(Node):
                 if self.logging_level == 3:
                     fields = ['time_s', 'vehicle_name', 'distance_m', 'rssi_dBm', 'throughput_Gbps', 
                               'total_data_MB', 'path_loss_dB', 'e_gain_dB', 'h_gain_dB',
-                              'ugv_x_m', 'ugv_y_m', 'ugv_z_m', 'bs_x_m', 'bs_y_m', 'bs_z_m']
+                              'tx_x_m', 'tx_y_m', 'tx_z_m', 'bs_x_m', 'bs_y_m', 'bs_z_m']
                 else: # Level 4
                     fields = ['time_s', 'vehicle_time_s', 'vehicle_name', 'has_link_grant', 'distance_m', 
                               'rssi_dBm', 'throughput_Gbps', 'total_data_MB', 'path_loss_dB', 'e_gain_dB', 
-                              'h_gain_dB', 'comm_active', 'ugv_x_m', 'ugv_y_m', 'ugv_z_m', 
+                              'h_gain_dB', 'comm_active', 'tx_x_m', 'tx_y_m', 'tx_z_m', 
                               'bs_x_m', 'bs_y_m', 'bs_z_m', 'link_state']
                 
                 self.ts_writers[vn] = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
@@ -253,6 +253,7 @@ class SimLoggerNode(Node):
                 self._set_file_ownership(path)
 
         # 状態保持
+        self.ts_buffers = {vn: [] for vn in self.vehicle_names}
         self._link_grants: Dict[str, bool] = {name: False for name in self.vehicle_names}
         self._mission_status: Dict[str, bool] = {name: False for name in self.base_vehicle_names}
         self._last_time = {name: None for name in self.vehicle_names}
@@ -279,7 +280,7 @@ class SimLoggerNode(Node):
             self._quality_subs.append(sub_quality)
 
         for name in self.base_vehicle_names:
-            # TRANSIENT_LOCAL: ugv_controller より遅く起動しても最後のメッセージを受信できる
+            # TRANSIENT_LOCAL: tx_controller より遅く起動しても最後のメッセージを受信できる
             sub_mission = self.create_subscription(
                 Bool,
                 f'/{name}/mission_complete',
@@ -353,8 +354,14 @@ class SimLoggerNode(Node):
         vehicle_elapsed = current_time - self._vehicle_start_times[vehicle_name]
         has_grant = self._link_grants.get(vehicle_name, False)
         
-        # 各comms_nodeのサンプリング周波数(100Hz)に合わせた決定論的な固定時間ステップを使用
-        dt = 0.01
+        # msg.header.stamp を基に動的かつ決定論的に時間差を計算
+        prev_time = self._last_time.get(vehicle_name)
+        if prev_time is not None:
+            dt = current_time - prev_time
+            if dt < 0.0:
+                dt = 0.0
+        else:
+            dt = 0.0
         self._last_time[vehicle_name] = current_time
 
         # --- Level 1: サマリーの集計 ---
@@ -400,12 +407,12 @@ class SimLoggerNode(Node):
                     'path_loss_dB': msg.path_loss,
                     'e_gain_dB': msg.antenna_gain_e_plane,
                     'h_gain_dB': msg.antenna_gain_h_plane,
-                    'ugv_x_m': msg.ugv_x,
-                    'ugv_y_m': msg.ugv_y,
-                    'ugv_z_m': msg.ugv_z,
-                    'bs_x_m': msg.base_station_x,
-                    'bs_y_m': msg.base_station_y,
-                    'bs_z_m': msg.base_station_z
+                    'tx_x_m': msg.tx_x,
+                    'tx_y_m': msg.tx_y,
+                    'tx_z_m': msg.tx_z,
+                    'bs_x_m': msg.rx_x,
+                    'bs_y_m': msg.rx_y,
+                    'bs_z_m': msg.rx_z
                 }
                 if self.logging_level >= 4:
                     row.update({
@@ -414,7 +421,7 @@ class SimLoggerNode(Node):
                         'comm_active': msg.comm_active,
                         'link_state': msg.link_state
                     })
-                self.ts_writers[vehicle_name].writerow(row)
+                self.ts_buffers[vehicle_name].append(row)
 
     def save_summary_and_close(self):
         if getattr(self, '_summary_saved', False):
@@ -424,7 +431,10 @@ class SimLoggerNode(Node):
         # 終了処理 (ファイルを閉じる)
         if self.event_file:
             self.event_file.close()
-        for f in self.ts_files.values():
+        for vn, f in self.ts_files.items():
+            if vn in self.ts_buffers and self.ts_buffers[vn]:
+                self.ts_writers[vn].writerows(self.ts_buffers[vn])
+                self.ts_buffers[vn].clear()
             f.close()
 
         if self.output_subdir:

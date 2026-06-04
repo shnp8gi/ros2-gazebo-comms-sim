@@ -2,15 +2,15 @@
 # -*- coding: utf-8 -*-
 # =============================================================================
 # 通信シミュレータノード
-# UGV-基地局間の無線通信品質をシミュレーションするROS 2ノード
+# TX-基地局間の無線通信品質をシミュレーションするROS 2ノード
 # =============================================================================
 """
-UGVと基地局間の通信品質をシミュレーションするROS 2ノード。
+TXと基地局間の通信品質をシミュレーションするROS 2ノード。
 
 サブスクライブトピック:
-    - /imu/data (sensor_msgs/Imu): UGVの姿勢情報
-    - /odom (nav_msgs/Odometry): UGVのローカル位置
-    - /base_station/pose (geometry_msgs/PoseStamped): 基地局の姿勢（オプション）
+    - /imu/data (sensor_msgs/Imu): TXの姿勢情報
+    - /odom (nav_msgs/Odometry): TXのローカル位置
+    - /rx/pose (geometry_msgs/PoseStamped): 基地局の姿勢（オプション）
 
 パブリッシュトピック:
     - /comms/quality (comms_sim_msgs/CommsQuality): 通信メトリクス
@@ -25,7 +25,7 @@ UGVと基地局間の通信品質をシミュレーションするROS 2ノード
     - tx_power: 送信電力 [dBm]
     - odom_topic: オドメトリトピック名
     - mission_complete_topic: ミッション完了トピック名
-    - base_station_pose_topic: 基地局姿勢トピック名
+    - rx_pose_topic: 基地局姿勢トピック名
 """
 
 from typing import Optional, List, Tuple
@@ -82,7 +82,7 @@ class CommsSimulatorNode(Node):
     """
     通信シミュレーション用ROS 2ノード。
 
-    UGVの位置・姿勢と基地局の配置に基づき、
+    TXの位置・姿勢と基地局の配置に基づき、
     設定可能な伝搬路モデルを用いてRSSIとスループットを計算する。
 
     リンク確立遅延の実装:
@@ -107,22 +107,22 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('path_loss.d0', 1.0)
         self.declare_parameter('path_loss.pl_d0', -1.0)
         self.declare_parameter('tx_power', -7.0)
-        self.declare_parameter('base_station_position', [0.0, 0.0, 0.0])
-        self.declare_parameter('base_station_antenna_offset', [0.0, 0.0, 10.5])
-        self.declare_parameter('ugv_antenna_offset', [0.0, 0.0, 1.3])
+        self.declare_parameter('rx_position', [0.0, 0.0, 0.0])
+        self.declare_parameter('rx_antenna_offset', [0.0, 0.0, 10.5])
+        self.declare_parameter('tx_antenna_offset', [0.0, 0.0, 1.3])
         self.declare_parameter('mcs_table_path', '')
         self.declare_parameter('link_establishment_time_ms', 2.0)
         self.declare_parameter('mission_complete_topic', '/mission_complete')
         self.declare_parameter('odom_topic', '/odom')
-        self.declare_parameter('ugv_spawn_pose', [-20.0, 0.0, 0.0])
-        self.declare_parameter('ugv_antenna_relative_rpy', [0.0, 0.0, 0.0])
-        self.declare_parameter('base_station_antenna_relative_rpy', [0.0, 0.0, 0.0])
-        self.declare_parameter('base_station_pose_topic', '/base_station/pose')
-        self.declare_parameter('base_station_rpy', [0.0, 0.0, 0.0])
-        self.declare_parameter('base_station_positions', [0.0, 0.0, 0.0])
-        self.declare_parameter('base_station_antenna_offsets', [0.0, 0.0, 10.5])
-        self.declare_parameter('base_station_rpys', [0.0, 0.0, 0.0])
-        self.declare_parameter('base_station_antenna_relative_rpys', [0.0, 0.0, 0.0])
+        self.declare_parameter('tx_spawn_pose', [-20.0, 0.0, 0.0])
+        self.declare_parameter('tx_antenna_relative_rpy', [0.0, 0.0, 0.0])
+        self.declare_parameter('rx_antenna_relative_rpy', [0.0, 0.0, 0.0])
+        self.declare_parameter('rx_pose_topic', '/rx/pose')
+        self.declare_parameter('rx_rpy', [0.0, 0.0, 0.0])
+        self.declare_parameter('rx_positions', [0.0, 0.0, 0.0])
+        self.declare_parameter('rx_antenna_offsets', [0.0, 0.0, 10.5])
+        self.declare_parameter('rx_rpys', [0.0, 0.0, 0.0])
+        self.declare_parameter('rx_antenna_relative_rpys', [0.0, 0.0, 0.0])
         self.declare_parameter('logging_start_trigger', 'on_movement')
         self.declare_parameter('logging_start_topic', '/logging/start')
         self.declare_parameter('max_antenna_attenuation', 30.0)
@@ -140,10 +140,10 @@ class CommsSimulatorNode(Node):
         self.link_establishment_time = self.get_parameter('link_establishment_time_ms').value / 1000.0  # ミリ秒→秒
         self._mission_complete_topic: str = str(self.get_parameter('mission_complete_topic').value)
         self.odom_topic: str = str(self.get_parameter('odom_topic').value)
-        self.ugv_spawn_pose: List[float] = list(self.get_parameter('ugv_spawn_pose').value)
-        self.ugv_antenna_relative_rpy: List[float] = list(self.get_parameter('ugv_antenna_relative_rpy').value)
-        self.base_station_antenna_relative_rpy: List[float] = list(self.get_parameter('base_station_antenna_relative_rpy').value)
-        self.base_station_pose_topic: str = str(self.get_parameter('base_station_pose_topic').value)
+        self.tx_spawn_pose: List[float] = list(self.get_parameter('tx_spawn_pose').value)
+        self.tx_antenna_relative_rpy: List[float] = list(self.get_parameter('tx_antenna_relative_rpy').value)
+        self.rx_antenna_relative_rpy: List[float] = list(self.get_parameter('rx_antenna_relative_rpy').value)
+        self.rx_pose_topic: str = str(self.get_parameter('rx_pose_topic').value)
         self._saved_on_mission_complete: bool = False
         self.vehicle_name: str = str(self.get_parameter('vehicle_name').value)
         self.cmd_vel_topic: str = str(self.get_parameter('cmd_vel_topic').value)
@@ -166,7 +166,7 @@ class CommsSimulatorNode(Node):
         pl_d0 = self.get_parameter('path_loss.pl_d0').value
 
         # 基地局エンティティの姿勢 (roll, pitch, yaw) [rad]
-        self.base_station_entity_rpy: np.ndarray = np.array(self.get_parameter('base_station_rpy').value, dtype=float)
+        self.rx_entity_rpy: np.ndarray = np.array(self.get_parameter('rx_rpy').value, dtype=float)
 
         # =====================================================================
         # コンポーネント初期化
@@ -210,12 +210,12 @@ class CommsSimulatorNode(Node):
         # 状態変数
         # =====================================================================
         # 複数基地局のパラメータ取得
-        bs_positions_raw = list(self.get_parameter('base_station_positions').value)
-        bs_offsets_raw = list(self.get_parameter('base_station_antenna_offsets').value)
-        bs_rpys_raw = list(self.get_parameter('base_station_rpys').value)
-        bs_relative_rpys_raw = list(self.get_parameter('base_station_antenna_relative_rpys').value)
+        bs_positions_raw = list(self.get_parameter('rx_positions').value)
+        bs_offsets_raw = list(self.get_parameter('rx_antenna_offsets').value)
+        bs_rpys_raw = list(self.get_parameter('rx_rpys').value)
+        bs_relative_rpys_raw = list(self.get_parameter('rx_antenna_relative_rpys').value)
 
-        self.base_stations = []
+        self.rx_nodes = []
         if len(bs_positions_raw) >= 3 and len(bs_positions_raw) % 3 == 0:
             n_bs = len(bs_positions_raw) // 3
             for i in range(n_bs):
@@ -228,7 +228,7 @@ class CommsSimulatorNode(Node):
                 ant_rpy = rpy + rel_rpy
                 rotmat = self.antenna_parser._rpy_to_rotmat(float(ant_rpy[0]), float(ant_rpy[1]), float(ant_rpy[2]))
                 
-                self.base_stations.append({
+                self.rx_nodes.append({
                     'position': pos,
                     'antenna_offset': offset,
                     'rpy': rpy,
@@ -237,16 +237,16 @@ class CommsSimulatorNode(Node):
                     'rotmat': rotmat
                 })
         else:
-            bs_pos = self.get_parameter('base_station_position').value
+            bs_pos = self.get_parameter('rx_position').value
             pos = np.array(bs_pos, dtype=float) if bs_pos else np.zeros(3, dtype=float)
-            offset = np.array(self.get_parameter('base_station_antenna_offset').value, dtype=float)
-            rpy = np.array(self.get_parameter('base_station_rpy').value, dtype=float)
-            rel_rpy = np.array(self.get_parameter('base_station_antenna_relative_rpy').value, dtype=float)
+            offset = np.array(self.get_parameter('rx_antenna_offset').value, dtype=float)
+            rpy = np.array(self.get_parameter('rx_rpy').value, dtype=float)
+            rel_rpy = np.array(self.get_parameter('rx_antenna_relative_rpy').value, dtype=float)
             
             ant_rpy = rpy + rel_rpy
             rotmat = self.antenna_parser._rpy_to_rotmat(float(ant_rpy[0]), float(ant_rpy[1]), float(ant_rpy[2]))
             
-            self.base_stations.append({
+            self.rx_nodes.append({
                 'position': pos,
                 'antenna_offset': offset,
                 'rpy': rpy,
@@ -255,12 +255,12 @@ class CommsSimulatorNode(Node):
                 'rotmat': rotmat
             })
 
-        self.base_station_position: Optional[np.ndarray] = self.base_stations[0]['position']
-        self.base_station_antenna_offset: np.ndarray = self.base_stations[0]['antenna_offset']
-        self.ugv_antenna_offset: np.ndarray = np.array(self.get_parameter('ugv_antenna_offset').value, dtype=float)
+        self.rx_position: Optional[np.ndarray] = self.rx_nodes[0]['position']
+        self.rx_antenna_offset: np.ndarray = self.rx_nodes[0]['antenna_offset']
+        self.tx_antenna_offset: np.ndarray = np.array(self.get_parameter('tx_antenna_offset').value, dtype=float)
 
-        self.ugv_orientation: Optional[np.ndarray] = None  # [roll, pitch, yaw]
-        self.ugv_local_position: Optional[np.ndarray] = None
+        self.tx_orientation: Optional[np.ndarray] = None  # [roll, pitch, yaw]
+        self.tx_local_position: Optional[np.ndarray] = None
         self._odom_offset_set: bool = False
         self._odom_offset: np.ndarray = np.zeros(3, dtype=float)
         self._initial_position_verified: bool = False
@@ -330,7 +330,7 @@ class CommsSimulatorNode(Node):
             sensor_qos
         )
 
-        # UGVコントローラからのミッション完了通知
+        # TXコントローラからのミッション完了通知
         self.mission_complete_sub = self.create_subscription(
             Bool,
             self._mission_complete_topic,
@@ -350,8 +350,8 @@ class CommsSimulatorNode(Node):
         # 基地局姿勢サブスクライバ（オプション: 基地局の回転対応）
         self._bs_pose_sub = self.create_subscription(
             PoseStamped,
-            self.base_station_pose_topic,
-            self._on_base_station_pose,
+            self.rx_pose_topic,
+            self._on_rx_pose,
             10,
         )
 
@@ -462,7 +462,7 @@ class CommsSimulatorNode(Node):
             f'  mission_complete: {self._mission_complete_topic}'
         )
 
-    def set_base_station_position(
+    def set_rx_position(
         self,
         position: List[float],
         antenna_offset: List[float]
@@ -474,20 +474,20 @@ class CommsSimulatorNode(Node):
             position: 基地局位置 [x, y, z]
             antenna_offset: モデル原点からのアンテナオフセット [x, y, z]
         """
-        self.base_station_position = np.array(position[:3])
-        self.base_station_antenna_offset = np.array(antenna_offset[:3], dtype=float)
+        self.rx_position = np.array(position[:3])
+        self.rx_antenna_offset = np.array(antenna_offset[:3], dtype=float)
         self.get_logger().info(
             f'基地局設定: {position}, アンテナオフセット: {antenna_offset}'
         )
 
-    def set_ugv_antenna_offset(self, offset: List[float]) -> None:
+    def set_tx_antenna_offset(self, offset: List[float]) -> None:
         """
-        UGVアンテナオフセットを設定する。
+        TXアンテナオフセットを設定する。
 
         Args:
-            offset: UGVモデル原点からのアンテナオフセット [x, y, z]
+            offset: TXモデル原点からのアンテナオフセット [x, y, z]
         """
-        self.ugv_antenna_offset = np.array(offset[:3], dtype=float)
+        self.tx_antenna_offset = np.array(offset[:3], dtype=float)
 
     def odom_callback(self, msg: Odometry) -> None:
         """オドメトリ更新コールバック（ローカル位置 [m] として処理）。"""
@@ -495,14 +495,14 @@ class CommsSimulatorNode(Node):
         odom_pos = np.array([p.x, p.y, p.z], dtype=float)
 
         # 初回のオドメトリ受信時にオフセットを計算
-        # 最初の受信位置がugv_spawn_poseに一致するようにする
+        # 最初の受信位置がtx_spawn_poseに一致するようにする
         # 古いシミュレーションの残存メッセージを無視するため、スポーン位置付近（<= 10.0m）のメッセージのみ採用する
         if not self._odom_offset_set:
-            if isinstance(self.ugv_spawn_pose, (list, tuple)) and len(self.ugv_spawn_pose) >= 3:
+            if isinstance(self.tx_spawn_pose, (list, tuple)) and len(self.tx_spawn_pose) >= 3:
                 spawn = np.array([
-                    float(self.ugv_spawn_pose[0]),
-                    float(self.ugv_spawn_pose[1]),
-                    float(self.ugv_spawn_pose[2]),
+                    float(self.tx_spawn_pose[0]),
+                    float(self.tx_spawn_pose[1]),
+                    float(self.tx_spawn_pose[2]),
                 ], dtype=float)
                 dist_to_spawn = np.linalg.norm(odom_pos - spawn)
                 if dist_to_spawn > 10.0:
@@ -523,32 +523,32 @@ class CommsSimulatorNode(Node):
                 self._odom_offset_set = True
 
         # オフセット適用済みの位置を保存（ワールド座標系）
-        self.ugv_local_position = odom_pos + self._odom_offset
+        self.tx_local_position = odom_pos + self._odom_offset
 
         if 'shinkansen' in self.vehicle_name:
             # ウェイポイント間の直線上に完全に投影して固定する
             px, py, segment_yaw = self.get_current_segment_pose()
             if px is not None:
-                self.ugv_local_position[0] = px
-                self.ugv_local_position[1] = py
+                self.tx_local_position[0] = px
+                self.tx_local_position[1] = py
 
         # --- 初期位置の自己補正・検証システム ---
-        if not getattr(self, '_initial_position_verified', True) and isinstance(self.ugv_spawn_pose, (list, tuple)) and len(self.ugv_spawn_pose) >= 3:
+        if not getattr(self, '_initial_position_verified', True) and isinstance(self.tx_spawn_pose, (list, tuple)) and len(self.tx_spawn_pose) >= 3:
             expected = np.array([
-                float(self.ugv_spawn_pose[0]),
-                float(self.ugv_spawn_pose[1]),
-                float(self.ugv_spawn_pose[2]),
+                float(self.tx_spawn_pose[0]),
+                float(self.tx_spawn_pose[1]),
+                float(self.tx_spawn_pose[2]),
             ], dtype=float)
-            error = np.linalg.norm((self.ugv_local_position - expected)[:2])
+            error = np.linalg.norm((self.tx_local_position - expected)[:2])
             
             if error > 10.0:
                 self._verification_attempt_count += 1
                 self.get_logger().warn(
-                    f'[通信ノード自己補正] 異常な初期位置を検出 (World: {self.ugv_local_position[0]:.1f}, {self.ugv_local_position[1]:.1f} '
+                    f'[通信ノード自己補正] 異常な初期位置を検出 (World: {self.tx_local_position[0]:.1f}, {self.tx_local_position[1]:.1f} '
                     f'| Spawn: {expected[0]:.1f}, {expected[1]:.1f})。オフセットを再計算します。'
                 )
                 self._odom_offset = expected - odom_pos
-                self.ugv_local_position = odom_pos + self._odom_offset
+                self.tx_local_position = odom_pos + self._odom_offset
             elif error <= 0.5:
                 self._initial_position_verified = True
                 self.get_logger().info('通信ノード: 初期位置の検証が完了しました。')
@@ -568,7 +568,7 @@ class CommsSimulatorNode(Node):
     def imu_callback(self, msg: Imu) -> None:
         """IMU姿勢コールバック。"""
         # クォータニオンをオイラー角に変換
-        self.ugv_orientation = self._quat_to_rpy(
+        self.tx_orientation = self._quat_to_rpy(
             msg.orientation.x,
             msg.orientation.y,
             msg.orientation.z,
@@ -578,18 +578,18 @@ class CommsSimulatorNode(Node):
         if 'shinkansen' in self.vehicle_name:
             px, py, segment_yaw = self.get_current_segment_pose()
             if segment_yaw is not None:
-                self.ugv_orientation = np.array([0.0, 0.0, segment_yaw], dtype=float)
+                self.tx_orientation = np.array([0.0, 0.0, segment_yaw], dtype=float)
 
     def get_current_segment_pose(self) -> tuple:
         """
         現在走行中のウェイポイント区間（直線）上の投影位置と方位を計算する。
         """
-        if not self.waypoints or self.ugv_local_position is None:
+        if not self.waypoints or self.tx_local_position is None:
             return None, None, None
 
         # 現在位置
-        ux = float(self.ugv_local_position[0])
-        uy = float(self.ugv_local_position[1])
+        ux = float(self.tx_local_position[0])
+        uy = float(self.tx_local_position[1])
 
         # 現在位置に最も近い投影先セグメントを選択する
         best_px, best_py = ux, uy
@@ -597,8 +597,8 @@ class CommsSimulatorNode(Node):
         min_dist_sq = float('inf')
 
         # 前の地点 A
-        ax = float(self.ugv_spawn_pose[0])
-        ay = float(self.ugv_spawn_pose[1])
+        ax = float(self.tx_spawn_pose[0])
+        ay = float(self.tx_spawn_pose[1])
 
         for wp in self.waypoints:
             bx = float(wp[0])
@@ -633,14 +633,14 @@ class CommsSimulatorNode(Node):
 
         return best_px, best_py, best_yaw
 
-    def set_ugv_local_position(self, position: np.ndarray) -> None:
+    def set_tx_local_position(self, position: np.ndarray) -> None:
         """
-        UGVのローカル位置を直接設定する（オドメトリまたは直接ポーズ経由）。
+        TXのローカル位置を直接設定する（オドメトリまたは直接ポーズ経由）。
 
         Args:
             position: ワールド座標系での位置 [x, y, z]
         """
-        self.ugv_local_position = position
+        self.tx_local_position = position
 
     @staticmethod
     def _quat_to_rpy(x: float, y: float, z: float, w: float) -> np.ndarray:
@@ -664,15 +664,15 @@ class CommsSimulatorNode(Node):
 
         return np.array([roll, pitch, yaw], dtype=float)
 
-    def _on_base_station_pose(self, msg: PoseStamped) -> None:
+    def _on_rx_pose(self, msg: PoseStamped) -> None:
         """基地局姿勢コールバック。"""
         q = msg.pose.orientation
-        self.base_station_entity_rpy = self._quat_to_rpy(float(q.x), float(q.y), float(q.z), float(q.w))
+        self.rx_entity_rpy = self._quat_to_rpy(float(q.x), float(q.y), float(q.z), float(q.w))
 
     def _on_cmd_vel(self, msg: Twist) -> None:
         """速度指令コールバック（on_movementトリガー用）。"""
         if not self._logging_ready:
-            # 直進速度が非ゼロならUGVが動き始めたと判定
+            # 直進速度が非ゼロならTXが動き始めたと判定
             if abs(msg.linear.x) > 1e-3 or abs(msg.linear.y) > 1e-3:
                 self._logging_ready = True
                 self.get_logger().info(
@@ -767,12 +767,12 @@ class CommsSimulatorNode(Node):
         """定期コールバック: 通信品質を計算しパブリッシュする。"""
 
         # 必要なデータが揃っているか確認
-        if self.base_station_position is None:
+        if self.rx_position is None:
             self.get_logger().warn('基地局位置が未設定', throttle_duration_sec=5.0)
             return
 
-        # ローカル位置（/odom由来）が必要: base_station_positionと同一座標系を維持
-        if self.ugv_local_position is None or self.ugv_orientation is None:
+        # ローカル位置（/odom由来）が必要: rx_positionと同一座標系を維持
+        if self.tx_local_position is None or self.tx_orientation is None:
             self.get_logger().debug('/odom または /imu データ待機中...')
             return
 
@@ -784,37 +784,37 @@ class CommsSimulatorNode(Node):
 
         # サブステップの分割数を決定
         last_calc_sim_time = getattr(self, '_last_calc_sim_time', None)
-        last_ugv_pos = getattr(self, 'last_ugv_pos', None)
-        last_ugv_orientation = getattr(self, 'last_ugv_orientation', None)
+        last_tx_pos = getattr(self, 'last_tx_pos', None)
+        last_tx_orientation = getattr(self, 'last_tx_orientation', None)
 
         # 位置と姿勢の開始点と終了点をあらかじめ投影しておく
         if 'shinkansen' in self.vehicle_name:
-            orig_pos = self.ugv_local_position
+            orig_pos = self.tx_local_position
             
             # last position projection
-            if last_ugv_pos is not None:
-                self.ugv_local_position = self.last_ugv_pos
+            if last_tx_pos is not None:
+                self.tx_local_position = self.last_tx_pos
                 px_last, py_last, yaw_last = self.get_current_segment_pose()
                 if px_last is not None:
-                    self.last_ugv_pos[0] = px_last
-                    self.last_ugv_pos[1] = py_last
+                    self.last_tx_pos[0] = px_last
+                    self.last_tx_pos[1] = py_last
                 if yaw_last is not None:
-                    self.last_ugv_orientation = np.array([0.0, 0.0, yaw_last], dtype=float)
+                    self.last_tx_orientation = np.array([0.0, 0.0, yaw_last], dtype=float)
             
             # current position projection
-            self.ugv_local_position = orig_pos
+            self.tx_local_position = orig_pos
             px_curr, py_curr, yaw_curr = self.get_current_segment_pose()
             if px_curr is not None:
-                self.ugv_local_position[0] = px_curr
-                self.ugv_local_position[1] = py_curr
+                self.tx_local_position[0] = px_curr
+                self.tx_local_position[1] = py_curr
             if yaw_curr is not None:
-                self.ugv_orientation = np.array([0.0, 0.0, yaw_curr], dtype=float)
+                self.tx_orientation = np.array([0.0, 0.0, yaw_curr], dtype=float)
 
-        if last_calc_sim_time is None or last_ugv_pos is None or last_ugv_orientation is None:
+        if last_calc_sim_time is None or last_tx_pos is None or last_tx_orientation is None:
             # 初回は1ステップのみ
             self._last_calc_sim_time = current_time
-            self.last_ugv_pos = np.copy(self.ugv_local_position)
-            self.last_ugv_orientation = np.copy(self.ugv_orientation)
+            self.last_tx_pos = np.copy(self.tx_local_position)
+            self.last_tx_orientation = np.copy(self.tx_orientation)
             num_steps = 1
             dt_actual = dt_target
         else:
@@ -846,15 +846,15 @@ class CommsSimulatorNode(Node):
             t_sub = self._last_calc_sim_time + step * dt_actual
 
             # 位置と姿勢の補間 (すでに投影済み)
-            pos_sub = self.last_ugv_pos + frac * (self.ugv_local_position - self.last_ugv_pos)
-            rpy_sub = self.last_ugv_orientation + frac * (self.ugv_orientation - self.last_ugv_orientation)
+            pos_sub = self.last_tx_pos + frac * (self.tx_local_position - self.last_tx_pos)
+            rpy_sub = self.last_tx_orientation + frac * (self.tx_orientation - self.last_tx_orientation)
 
             # アンテナ位置の計算
-            ugv_antenna_pos = pos_sub + np.asarray(self.ugv_antenna_offset, dtype=float)
-            ugv_ant_rpy = rpy_sub + np.asarray(self.ugv_antenna_relative_rpy, dtype=float)
+            tx_antenna_pos = pos_sub + np.asarray(self.tx_antenna_offset, dtype=float)
+            tx_ant_rpy = rpy_sub + np.asarray(self.tx_antenna_relative_rpy, dtype=float)
 
             # 共通の受信側回転行列を1回だけ計算
-            rx_rotmat = self.antenna_parser._rpy_to_rotmat(float(ugv_ant_rpy[0]), float(ugv_ant_rpy[1]), float(ugv_ant_rpy[2]))
+            rx_rotmat = self.antenna_parser._rpy_to_rotmat(float(tx_ant_rpy[0]), float(tx_ant_rpy[1]), float(tx_ant_rpy[2]))
 
             # 基地局の選定
             best_metrics = None
@@ -863,7 +863,7 @@ class CommsSimulatorNode(Node):
             best_rx_total = 0.0
             best_bs_antenna_pos = None
 
-            for idx, bs in enumerate(self.base_stations):
+            for idx, bs in enumerate(self.rx_nodes):
                 bs_base = bs['position']
                 bs_antenna_pos = bs_base + bs['antenna_offset']
                 bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
@@ -872,8 +872,8 @@ class CommsSimulatorNode(Node):
                 tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
                     tx_pos_world=bs_antenna_pos,
                     tx_rpy_world=bs_ant_rpy,
-                    rx_pos_world=ugv_antenna_pos,
-                    rx_rpy_world=ugv_ant_rpy,
+                    rx_pos_world=tx_antenna_pos,
+                    rx_rpy_world=tx_ant_rpy,
                     tx_rotmat=bs.get('rotmat'),
                     rx_rotmat=rx_rotmat,
                 )
@@ -881,7 +881,7 @@ class CommsSimulatorNode(Node):
 
                 # 通信メトリクス計算 (AWGNノイズあり)
                 metrics = self.comms_calculator.calculate_all(
-                    ugv_antenna_pos,
+                    tx_antenna_pos,
                     bs_antenna_pos,
                     antenna_gain_db=antenna_gain_db,
                     add_noise=True,
@@ -901,10 +901,10 @@ class CommsSimulatorNode(Node):
             bs_antenna_pos = best_bs_antenna_pos
 
             # 選択された基地局の情報を更新
-            self.base_station_position = self.base_stations[best_bs_idx]['position']
-            self.base_station_antenna_offset = self.base_stations[best_bs_idx]['antenna_offset']
-            self.base_station_entity_rpy = self.base_stations[best_bs_idx]['rpy']
-            self.base_station_antenna_relative_rpy = list(self.base_stations[best_bs_idx]['antenna_relative_rpy'])
+            self.rx_position = self.rx_nodes[best_bs_idx]['position']
+            self.rx_antenna_offset = self.rx_nodes[best_bs_idx]['antenna_offset']
+            self.rx_entity_rpy = self.rx_nodes[best_bs_idx]['rpy']
+            self.rx_antenna_relative_rpy = list(self.rx_nodes[best_bs_idx]['antenna_relative_rpy'])
 
             # 最新RSSIをキャッシュ
             self._last_rssi = metrics['rssi']
@@ -923,7 +923,7 @@ class CommsSimulatorNode(Node):
                         va_pos_world = pos_sub + va_offset
                         
                         best_va_rssi = float('-inf')
-                        for bs in self.base_stations:
+                        for bs in self.rx_nodes:
                             bs_antenna_pos = bs['position'] + bs['antenna_offset']
                             bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
                             
@@ -931,7 +931,7 @@ class CommsSimulatorNode(Node):
                                 tx_pos_world=bs_antenna_pos,
                                 tx_rpy_world=bs_ant_rpy,
                                 rx_pos_world=va_pos_world,
-                                rx_rpy_world=ugv_ant_rpy, # since relative RPY are identical, we can use ugv_ant_rpy and rx_rotmat!
+                                rx_rpy_world=tx_ant_rpy, # since relative RPY are identical, we can use tx_ant_rpy and rx_rotmat!
                                 tx_rotmat=bs.get('rotmat'),
                                 rx_rotmat=rx_rotmat,
                             )
@@ -973,8 +973,8 @@ class CommsSimulatorNode(Node):
 
         # 状態の保存
         self._last_calc_sim_time = current_time
-        self.last_ugv_pos = np.copy(self.ugv_local_position)
-        self.last_ugv_orientation = np.copy(self.ugv_orientation)
+        self.last_tx_pos = np.copy(self.tx_local_position)
+        self.last_tx_orientation = np.copy(self.tx_orientation)
 
         # リンク権限要求（最終ステップのRSSIをレポート）
         if hasattr(self, 'link_request_pub') and self.link_request_pub:
@@ -992,12 +992,12 @@ class CommsSimulatorNode(Node):
             msg.rssi = last_metrics['rssi']
             msg.throughput = actual_throughput  # 最終ステップの実効スループット
             msg.total_data_transmitted = self.total_data_transmitted
-            msg.ugv_x = self.ugv_local_position[0]
-            msg.ugv_y = self.ugv_local_position[1]
-            msg.ugv_z = self.ugv_local_position[2]
-            msg.base_station_x = self.base_station_position[0]
-            msg.base_station_y = self.base_station_position[1]
-            msg.base_station_z = last_bs_antenna_pos[2]
+            msg.tx_x = self.tx_local_position[0]
+            msg.tx_y = self.tx_local_position[1]
+            msg.tx_z = self.tx_local_position[2]
+            msg.rx_x = self.rx_position[0]
+            msg.rx_y = self.rx_position[1]
+            msg.rx_z = last_bs_antenna_pos[2]
             msg.antenna_gain_e_plane = float(last_tx_total)
             msg.antenna_gain_h_plane = float(last_rx_total)
             msg.path_loss = last_metrics['path_loss']

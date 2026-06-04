@@ -110,8 +110,8 @@ void CommsCalculator::init_default_mcs_table() {
   mcs_throughput_ = {2.5813, 3.2853, 5.1627, 6.5707, 9.856, 13.1413};
 }
 
-double CommsCalculator::calculate_distance(const Eigen::Vector3d& ugv_pos, const Eigen::Vector3d& bs_pos) const {
-  return (ugv_pos - bs_pos).norm();
+double CommsCalculator::calculate_distance(const Eigen::Vector3d& tx_pos, const Eigen::Vector3d& bs_pos) const {
+  return (tx_pos - bs_pos).norm();
 }
 
 std::pair<double, double> CommsCalculator::calculate_rssi(double distance, double antenna_gain_db, bool add_noise) {
@@ -134,11 +134,11 @@ double CommsCalculator::calculate_throughput(double rssi) const {
   return mcs_throughput_[idx];
 }
 
-CommsMetrics CommsCalculator::calculate_all(const Eigen::Vector3d& ugv_pos,
+CommsMetrics CommsCalculator::calculate_all(const Eigen::Vector3d& tx_pos,
                                             const Eigen::Vector3d& bs_pos,
                                             double antenna_gain_db,
                                             bool add_noise) {
-  double distance = calculate_distance(ugv_pos, bs_pos);
+  double distance = calculate_distance(tx_pos, bs_pos);
   auto [rssi, path_loss] = calculate_rssi(distance, antenna_gain_db, add_noise);
   double throughput = calculate_throughput(rssi);
 

@@ -54,12 +54,12 @@ public:
                   double noise_variance = 2.0,
                   const std::string& mcs_table_path = "");
 
-  CommsMetrics calculate_all(const Eigen::Vector3d& ugv_pos,
+  CommsMetrics calculate_all(const Eigen::Vector3d& tx_pos,
                              const Eigen::Vector3d& bs_pos,
                              double antenna_gain_db = 0.0,
                              bool add_noise = true);
 
-  double calculate_distance(const Eigen::Vector3d& ugv_pos, const Eigen::Vector3d& bs_pos) const;
+  double calculate_distance(const Eigen::Vector3d& tx_pos, const Eigen::Vector3d& bs_pos) const;
   std::pair<double, double> calculate_rssi(double distance, double antenna_gain_db = 0.0, bool add_noise = true);
 
   double rssi_min, rssi_max;

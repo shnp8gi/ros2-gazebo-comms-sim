@@ -4,7 +4,7 @@
 # タイムスタンプ付きヘッダ
 std_msgs/Header header
 
-# UGV-基地局間の距離 [m]
+# TX-基地局間の距離 [m]
 float64 distance
 
 # 受信信号強度 (RSSI) [dBm]
@@ -16,15 +16,15 @@ float64 throughput
 # 累計伝送データ量 [Mb]
 float64 total_data_transmitted
 
-# UGVのワールド座標位置 [m]
-float64 ugv_x
-float64 ugv_y
-float64 ugv_z
+# TXのワールド座標位置 [m]
+float64 tx_x
+float64 tx_y
+float64 tx_z
 
 # 基地局のワールド座標位置 [m]
-float64 base_station_x
-float64 base_station_y
-float64 base_station_z
+float64 rx_x
+float64 rx_y
+float64 rx_z
 
 # アンテナゲイン [dBi]
 float64 antenna_gain_e_plane

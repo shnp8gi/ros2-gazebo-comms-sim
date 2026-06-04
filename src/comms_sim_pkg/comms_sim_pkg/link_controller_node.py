@@ -410,14 +410,14 @@ class LinkControllerNode(Node):
                     config = yaml.safe_load(f)
                 
                 spawn_ent = config.get('spawn_entities', {})
-                base_stations = []
+                rx_nodes = []
                 for k, v in spawn_ent.items():
                     if k.startswith('antenna_'):
                         pos = np.array(v.get('pose', [0, 0, 0, 0, 0, 0])[:3], dtype=float)
                         offset = np.array(v.get('antenna_offset', [0, 0, 0]), dtype=float)
                         rpy = np.array(v.get('pose', [0, 0, 0, 0, 0, 0])[3:6], dtype=float)
                         rel_rpy = np.array(v.get('antenna_relative_rpy', [0, 0, 0]), dtype=float)
-                        base_stations.append({
+                        rx_nodes.append({
                             'name': k,
                             'position': pos,
                             'antenna_offset': offset,
@@ -438,11 +438,11 @@ class LinkControllerNode(Node):
                     polyline_points.append(np.array(wp[:3], dtype=float))
                 
                 samples = sample_trajectory(polyline_points, self.heatmap_resolution_m)
-                if base_stations:
+                if rx_nodes:
                     filtered_samples = []
                     for pt, yaw in samples:
                         near_bs = False
-                        for bs in base_stations:
+                        for bs in rx_nodes:
                             if np.linalg.norm(pt[:2] - bs['position'][:2]) < 100.0:
                                 near_bs = True
                                 break
@@ -486,7 +486,7 @@ class LinkControllerNode(Node):
                 
                 heatmap_rows = []
                 for pt, yaw in samples:
-                    ugv_orientation = np.array([0.0, 0.0, yaw])
+                    tx_orientation = np.array([0.0, 0.0, yaw])
                     
                     max_rssi = float('-inf')
                     optimal_antenna = None
@@ -497,24 +497,26 @@ class LinkControllerNode(Node):
                         'yaw_rad': round(yaw, 4)
                     }
                     
-                    for bs in base_stations:
+                    # Rotate vehicle antenna offset by vehicle's orientation
+                    R_veh = parser._rpy_to_rotmat(tx_orientation[0], tx_orientation[1], tx_orientation[2])
+                    for bs in rx_nodes:
                         bs_antenna_pos = bs['position'] + bs['antenna_offset']
                         bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
                         
                         for va in vehicle_antennas:
-                            ugv_antenna_pos = pt + np.asarray(va['offset'], dtype=float)
-                            ugv_ant_rpy = ugv_orientation + np.asarray(va['relative_rpy'], dtype=float)
+                            tx_antenna_pos = pt + R_veh.dot(np.asarray(va['offset'], dtype=float))
+                            tx_ant_rpy = tx_orientation + np.asarray(va['relative_rpy'], dtype=float)
                             
                             tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = parser.get_tx_rx_gains(
                                 tx_pos_world=bs_antenna_pos,
                                 tx_rpy_world=bs_ant_rpy,
-                                rx_pos_world=ugv_antenna_pos,
-                                rx_rpy_world=ugv_ant_rpy,
+                                rx_pos_world=tx_antenna_pos,
+                                rx_rpy_world=tx_ant_rpy,
                             )
                             antenna_gain_db = float(tx_total + rx_total)
                             
                             metrics = calculator.calculate_all(
-                                ugv_antenna_pos,
+                                tx_antenna_pos,
                                 bs_antenna_pos,
                                 antenna_gain_db=antenna_gain_db,
                                 add_noise=False
@@ -540,7 +542,7 @@ class LinkControllerNode(Node):
                     
                     with open(heatmap_path, 'w', newline='', encoding='utf-8') as csvfile:
                         fieldnames = ['x_m', 'y_m', 'z_m', 'yaw_rad']
-                        for bs in base_stations:
+                        for bs in rx_nodes:
                             for va in vehicle_antennas:
                                 fieldnames.append(f"rssi_{bs['name']}_{va['name']}")
                         fieldnames.extend(['optimal_antenna', 'max_rssi'])
@@ -564,7 +566,7 @@ class LinkControllerNode(Node):
                 os.makedirs(control_dir, exist_ok=True)
                 ff_path = os.path.join(control_dir, 'feedforward_log.csv')
                 
-                fieldnames = ['time_s', 'ugv_x_m', 'ugv_y_m', 'ugv_z_m']
+                fieldnames = ['time_s', 'tx_x_m', 'tx_y_m', 'tx_z_m']
                 for name in self.vehicle_names:
                     fieldnames.append(f"rssi_{name}")
                 fieldnames.extend(['selected_antenna', 'rssi_optimal_dBm'])
@@ -652,9 +654,9 @@ class LinkControllerNode(Node):
             'comm_active': msg.comm_active,
             'link_state': msg.link_state,
             'rssi': msg.rssi,
-            'ugv_x': msg.ugv_x,
-            'ugv_y': msg.ugv_y,
-            'ugv_z': msg.ugv_z
+            'tx_x': msg.tx_x,
+            'tx_y': msg.tx_y,
+            'tx_z': msg.tx_z
         }
         
         # すべてのアンテナデータが一度揃ったら、基準アンテナ受信時にのみスケジューリングを実行して無駄な多重実行を防止する。
@@ -777,10 +779,10 @@ class LinkControllerNode(Node):
             ux, uy, uz = 0.0, 0.0, 0.0
             for name in self.vehicle_names:
                 info = self._geometry_info.get(name, {})
-                if 'ugv_x' in info:
-                    ux = info['ugv_x']
-                    uy = info['ugv_y']
-                    uz = info['ugv_z']
+                if 'tx_x' in info:
+                    ux = info['tx_x']
+                    uy = info['tx_y']
+                    uz = info['tx_z']
                     break
             
             nominal_rssi = float('-inf')
@@ -791,9 +793,9 @@ class LinkControllerNode(Node):
             
             row = {
                 'time_s': round(elapsed, 4),
-                'ugv_x_m': round(ux, 4),
-                'ugv_y_m': round(uy, 4),
-                'ugv_z_m': round(uz, 4)
+                'tx_x_m': round(ux, 4),
+                'tx_y_m': round(uy, 4),
+                'tx_z_m': round(uz, 4)
             }
             for name in self.vehicle_names:
                 row[f"rssi_{name}"] = round(self._rssi.get(name, float('-inf')), 2)

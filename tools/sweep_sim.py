@@ -22,7 +22,7 @@ sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 # =========================================================================
 from lib.sweep_config import (
     Y_POSITIONS,
-    BASE_STATION_YAW_DEG,
+    RX_YAW_DEG as BASE_STATION_YAW_DEG,
     START_ANGLE,
     END_ANGLE,
     STEP_ANGLE,

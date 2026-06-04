@@ -58,7 +58,7 @@
 | 項目 | 詳細 | Fuel URI / 構成 |
 | :--- | :--- | :--- |
 | **ワールド** | シンプルな無限平面 (Empty World + Ground Plane)。将来的な物体設置は可能とする。 | `minimal_world.sdf` |
-| **移動車両 (UGV)** | 実在感のあるSUVモデルに駆動系とセンサをアタッチ。 | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/SUV`** |
+| **移動車両 (TX)** | 実在感のあるSUVモデルに駆動系とセンサをアタッチ。 | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/SUV`** |
 | **基地局** | 高さのあるアンテナ塔モデル。固定設置。 | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/antenna`** |
 | **モデル参照** | Gazebo Fuelからローカルにダウンロードし、Dockerでマウントして参照する。 | `GZ_SIM_RESOURCE_PATH` を設定。 |
 
@@ -123,7 +123,7 @@
 | :--- | :--- | :--- |
 | `sampling_rate` | float | 通信計算の更新頻度 (Hz)。 |
 | `noise_variance` | float | AWGNの分散値（初期設定）。 |
-| `base_station_position` | list [x, y, z] | 基地局の静的なワールド座標。 |
+| `rx_position` | list [x, y, z] | 基地局の静的なワールド座標。 |
 | `e_plane_path` | string | E面ゲインCSVファイルへのパス。 |
 | `h_plane_path` | string | H面ゲインCSVファイルへのパス。 |
 | `suv_model_path` | string | SUVモデルのメッシュデータへのパス |
@@ -132,19 +132,19 @@
 
 ---
 
-### 6. UGV制御とシミュレーションシナリオ
+### 6. TX制御とシミュレーションシナリオ
 
-#### 6.1. UGVの動作 (`ugv_controller_node`)
+#### 6.1. TXの動作 (`tx_controller_node`)
 
-* **経路設定**: UGVは、設定ファイル (`sim_params.yaml`) から読み込んだ**マルチウェイポイントリスト**を順次追従する。
-* **区間速度制御**: 各ウェイポイントは目標直線速度 (`V`) を持ち、UGVはその区間の目標速度を維持するように走行する。
+* **経路設定**: TXは、設定ファイル (`sim_params.yaml`) から読み込んだ**マルチウェイポイントリスト**を順次追従する。
+* **区間速度制御**: 各ウェイポイントは目標直線速度 (`V`) を持ち、TXはその区間の目標速度を維持するように走行する。
   * ウェイポイントデータ形式: **`[X, Y, Z, V]`** (4要素)
 
 #### 6.2. シミュレーション制御と終了条件
 
 | 項目 | 詳細 |
 | :--- | :--- |
-| **全体終了条件** | UGVの全ウェイポイント到達をもって、シミュレーション全体を終了し、ROS 2ドメインをシャットダウンする。 |
+| **全体終了条件** | TXの全ウェイポイント到達をもって、シミュレーション全体を終了し、ROS 2ドメインをシャットダウンする。 |
 | **通信停止条件** | 送信データ量 (`TotalDataTransmittion`) が `comm_data_limit_mb` に達したとき、`comms_simulator_node` は**データ送信機能のみを停止**する。車両の移動とノードの実行は継続される。 |
 
 ---
@@ -163,7 +163,7 @@
 | 項目名 | 単位 |
 | :--- | :--- |
 | 時間 | \[s\] |
-| UGV座標 (X, Y, Z) | \[m\] |
+| TX座標 (X, Y, Z) | \[m\] |
 | 基地局座標 (X, Y, Z) | \[m\] |
 | RSSI | \[dBm\] |
 | 瞬時スループット | \[Gbps\] |
@@ -195,7 +195,7 @@ ros2-gazebo-comms-sim/
 │   │   ├── comms_node.py
 │   │   ├── comms_calculator.py
 │   │   ├── antenna_parser.py
-│   │   └── ugv_controller_node.py
+│   │   └── tx_controller_node.py
 │   ├── launch/
 │   │   └── sim_launch.py
 │   ├── resource/

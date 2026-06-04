@@ -7,11 +7,11 @@
 | 変更日     | バージョン | 改定内容                                                                                                                                                                                                                                                            |
 | :--------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
 | 2025/12/14 | ver 1.0    | 初版                                                                                                                                                                                                                                                                |
-| 2025/12/14 | ver 2.0    | UGVのマルチウェイポイント追従と区間速度制御、アンテナゲインの動的参照、通信容量上限による通信停止機能の追加、およびCSVロギング仕様の確定                                                                                                                            |
+| 2025/12/14 | ver 2.0    | TXのマルチウェイポイント追従と区間速度制御、アンテナゲインの動的参照、通信容量上限による通信停止機能の追加、およびCSVロギング仕様の確定                                                                                                                            |
 | 2025/12/22 | ver 3.0    | MCSテーブルベースのスループット計算への変更、リンク確立時間（Association time）の実装、RSSI閾値の自動取得機能、YAMLベースの完全パラメータ化                                                                                                                         |
 | 2026/01/04 | ver 3.1    | 実装（`sim_params.yaml`/`sim_launch.py`/`comms_node.py`）に合わせて、CSV出力先・ROSインターフェース・パラメータ定義の齟齬を修正                                                                                                                                     |
-| 2026/02/16 | ver 4.0    | MCSテーブル値を現行に更新、アンテナオフセットを3D相対座標`[x,y,z]`に変更、CSV出力列名にbody/antenna/origin区分を追加、座標系説明の追加、`sampling_rate`デフォルト値修正、`base_station_pose_topic`インターフェース追加、CSV出力タイミングにmission_complete時を追記 |
-| 2026/04/20 | ver 5.0    | 複数車両設定（マルチUGV）への対応、`link_controller_node`による集中スケジューリング（RSSI優先による通信アクセス権の調停）の追加、データ上限到達時の動的なリンク権限譲渡機能、`/cmd_vel`監視による時間軸(`time_s`, `vehicle_time_s`)起点のゼロ化、全ミッション完了時の自動終了、およびログノードの集約と個別CSV分離出力を追加 |
+| 2026/02/16 | ver 4.0    | MCSテーブル値を現行に更新、アンテナオフセットを3D相対座標`[x,y,z]`に変更、CSV出力列名にbody/antenna/origin区分を追加、座標系説明の追加、`sampling_rate`デフォルト値修正、`rx_pose_topic`インターフェース追加、CSV出力タイミングにmission_complete時を追記 |
+| 2026/04/20 | ver 5.0    | 複数車両設定（マルチTX）への対応、`link_controller_node`による集中スケジューリング（RSSI優先による通信アクセス権の調停）の追加、データ上限到達時の動的なリンク権限譲渡機能、`/cmd_vel`監視による時間軸(`time_s`, `vehicle_time_s`)起点のゼロ化、全ミッション完了時の自動終了、およびログノードの集約と個別CSV分離出力を追加 |
 | 2026/05/01 | ver 6.0    | DockerでのNVIDIA GPUアクセラレーション対応、幾何学スコアや推定受信電力（physical_score_priority）に基づくスケジューリングポリシーの追加、切断時のプロアクティブハンドオーバー機能実装、および高速走行時のスリップ防止用加速度制限制御の追加 |
 | 2026/05/15 | ver 7.0    | カスタムモデルの追加要件（SDF記述ルール）の明文化、タイヤの空転による誤差を排除するGround Truthオドメトリ（`OdometryPublisher`）の採用、`VelocityControl`を用いた物理干渉なしの厳密な加速度制御の導入、複数アンテナ搭載時のロギング終了判定の修正、およびGazebo初期化時の座標ズレを自動修正する「初期位置検証・自己補正機能」の追加 |
 | 2026/05/21 | ver 8.0    | nominal RSSIヒートマップ事前計算に基づく車載アンテナのフィードフォワード制御ポリシー（`feedforward_optimal`）の追加、ロギングレベル5（ヒートマップ出力＋制御ログ）の導入、およびログ保存ディレクトリの3階層フォルダリング（`comms/`, `control/`, `heatmap/`）によるカプセル化（可視性向上）の実装 |
@@ -41,7 +41,7 @@ Gazebo Simで駆動する複数台の移動車両と固定基地局間の通信�
 | 項目               | 詳細                                                                            | Fuel URI / 構成                                                        |
 | :----------------- | :------------------------------------------------------------------------------ | :--------------------------------------------------------------------- |
 | **ワールド**       | シンプルな無限平面 (Empty World + Ground Plane)。将来的な物体設置は可能とする。 | `minimal_world.sdf`                                                    |
-| **移動車両 (UGV)** | SUVモデルに駆動系とセンサをアタッチ。                                           | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/SUV`**     |
+| **移動車両 (TX)** | SUVモデルに駆動系とセンサをアタッチ。                                           | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/SUV`**     |
 | **基地局**         | 高さのあるアンテナ塔モデル。固定設置。                                          | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/antenna`** |
 | **モデル参照**     | Gazebo Fuelからローカルにダウンロードし、Dockerでマウントして参照する。         | `GZ_SIM_RESOURCE_PATH` を設定。                                        |
 
@@ -81,7 +81,7 @@ RL ●─────● RR      (x=-1.5)
 ### 3.2. カスタムモデルの追加と要件
 
 本システムは特定の車両モデル（SUVや新幹線）に依存せず、YAMLファイルの `model_uri` 指定によって任意の自作モデルを動的にロード可能である。
-新しいモデルを追加し、UGVコントローラーで正常に制御・ロギングさせるためには、モデルの SDF ファイル (`models/<ModelName>/model.sdf`) に以下の要件を満たすプラグインを記述する必要がある。
+新しいモデルを追加し、TXコントローラーで正常に制御・ロギングさせるためには、モデルの SDF ファイル (`models/<ModelName>/model.sdf`) に以下の要件を満たすプラグインを記述する必要がある。
 
 1. **速度入力プラグイン (`cmd_vel`)**
    - 車両を動かすためのプラグイン（`gz::sim::systems::DiffDrive` や `gz::sim::systems::VelocityControl`）を含める。
@@ -130,7 +130,7 @@ ros2-gazebo-comms-sim/
 │   │   ├── link_controller_node.py# 集中通信アクセス調停（スケジュール）ノード
 │   │   ├── link_scheduling_strategy.py # スケジュール戦略パターン（RSSI優先等）
 │   │   ├── sim_logger_node.py     # ログ集約・CSV自動保存ノード
-│   │   └── ugv_controller_node.py # UGV制御ノード
+│   │   └── tx_controller_node.py # TX制御ノード
 │   │
 │   ├── launch/                    # 起動ファイル
 │   │   └── sim_launch.py          # メインランチファイル
@@ -173,7 +173,7 @@ ros2-gazebo-comms-sim/
 | **車両**     | IMU                     | `/imu/data` (Publish)                        | 姿勢情報 (Roll, Pitch, Yaw) の提供。**アンテナゲイン計算**に利用。                        |
 | **車両**     | OdometryPublisher       | `/odom` (Publish)                            | 位置（ワールド座標系に補正して利用）・速度の提供。車輪の空転に依存しないGround Truth座標を使用。 |
 | **基地局**   | N/A                     | パラメータ/スポーン設定から座標を取得        | 静的なためセンサ不要。                                                                    |
-| **基地局**   | N/A                     | `/base_station/pose` (Subscribe、オプション) | 基地局の姿勢をアンテナ方向計算に利用（パラメータ `base_station_pose_topic` で変更可能）。 |
+| **基地局**   | N/A                     | `/rx/pose` (Subscribe、オプション) | 基地局の姿勢をアンテナ方向計算に利用（パラメータ `rx_pose_topic` で変更可能）。 |
 
 > 注: `NavSat (GNSS)` / `/gps/fix` は仕様として想定しているが、現状の `sim_params.yaml`（`ros_gz_bridge.bridge_topics`）ではブリッジ設定が未定義のため、実装は `OdometryPublisher` 等による `/odom` を位置入力として用いる。
 
@@ -205,8 +205,8 @@ ros2-gazebo-comms-sim/
 | **通信結果**       | `/{vehicle}/comms/quality` | カスタム (`CommsQuality.msg`) | Publish   | 計算された通信状態をログ集約ノードへ出力。                                |
 | **アクセス要求**   | `/{vehicle}/link_request` | `std_msgs/Float64`            | Publish   | コントローラへRSSIを報告して通信権限を要求。上限到達時は `-inf` を送信し権限を譲渡。 |
 | **アクセス許可**   | `/{vehicle}/link_grant`   | `std_msgs/Bool`               | Subscribe | コントローラから通信権の付与を受け取る。                             |
-| **ミッション完了** | `/{vehicle}/mission_complete` | `std_msgs/Bool`               | Publish/Sub | UGV完走通知。ログ集約ノードが全完了を受信し自動終了をトリガ。 |
-| **基地局姿勢**     | `/base_station/pose`  | `geometry_msgs/PoseStamped`   | Subscribe | 基地局の姿勢（オプション）。アンテナ方向計算に利用。                  |
+| **ミッション完了** | `/{vehicle}/mission_complete` | `std_msgs/Bool`               | Publish/Sub | TX完走通知。ログ集約ノードが全完了を受信し自動終了をトリガ。 |
+| **基地局姿勢**     | `/rx/pose`  | `geometry_msgs/PoseStamped`   | Subscribe | 基地局の姿勢（オプション）。アンテナ方向計算に利用。                  |
 
 ### 6.3. 伝搬路モデル計算ロジック
 
@@ -341,13 +341,13 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 | `comm_data_limit_mb`                | float          | -1.0                                          | 通信データ量の上限 [Mb]。`-1.0`で無制限。                      |
 | `max_antenna_attenuation`           | float          | 30.0                                          | ゲイン低下時の最大減衰量クランプ値 [dB]。                      |
 | `logging_start_trigger`             | string         | `on_movement`                                 | ログ記録開始条件 (`immediate`, `on_movement`, `on_topic`)。    |
-| `base_station_position`             | list [x, y, z] | `spawn_entities.antenna.pose[0:3]`            | 基地局のワールド座標（スポーン設定から取得して起動時に反映）。 |
-| `base_station_antenna_offset`       | list [x, y, z] | `[0.0, 0.0, 3.0]`                             | 基地局モデル原点からのアンテナ位置オフセット [m]。             |
-| `ugv_spawn_pose`                    | list [x, y, z] | `spawn_entities.suv.pose[0:3]`                | UGVスポーンワールド座標（/odom → ワールド補正に使用）。        |
-| `ugv_antenna_offset`                | list [x, y, z] | `[0.0, 0.0, 1.9]`                             | UGVモデル原点からのアンテナ位置オフセット [m]。                |
-| `ugv_antenna_relative_rpy`          | list [r, p, y] | `spawn_entities.suv.antenna_relative_rpy`     | UGVアンテナの相対姿勢 [rad]。                                  |
-| `base_station_antenna_relative_rpy` | list [r, p, y] | `spawn_entities.antenna.antenna_relative_rpy` | 基地局アンテナの相対姿勢 [rad]。                               |
-| `base_station_pose_topic`           | string         | `/base_station/pose`                          | 基地局姿勢トピック名（オプション）。                           |
+| `rx_position`             | list [x, y, z] | `spawn_entities.antenna.pose[0:3]`            | 基地局のワールド座標（スポーン設定から取得して起動時に反映）。 |
+| `rx_antenna_offset`       | list [x, y, z] | `[0.0, 0.0, 3.0]`                             | 基地局モデル原点からのアンテナ位置オフセット [m]。             |
+| `tx_spawn_pose`                    | list [x, y, z] | `spawn_entities.suv.pose[0:3]`                | TXスポーンワールド座標（/odom → ワールド補正に使用）。        |
+| `tx_antenna_offset`                | list [x, y, z] | `[0.0, 0.0, 1.9]`                             | TXモデル原点からのアンテナ位置オフセット [m]。                |
+| `tx_antenna_relative_rpy`          | list [r, p, y] | `spawn_entities.suv.antenna_relative_rpy`     | TXアンテナの相対姿勢 [rad]。                                  |
+| `rx_antenna_relative_rpy` | list [r, p, y] | `spawn_entities.antenna.antenna_relative_rpy` | 基地局アンテナの相対姿勢 [rad]。                               |
+| `rx_pose_topic`           | string         | `/rx/pose`                          | 基地局姿勢トピック名（オプション）。                           |
 
 #### リンクコントローラノードパラメータ
 
@@ -371,20 +371,20 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 
 ---
 
-## 7. UGV制御とシミュレーションシナリオ
+## 7. TX制御とシミュレーションシナリオ
 
-### 7.1. UGVの動作 (`ugv_controller_node`)
+### 7.1. TXの動作 (`tx_controller_node`)
 
-- **経路設定**: UGVは、設定ファイル (`sim_params.yaml`) から読み込んだ**マルチウェイポイントリスト**を順次追従する。（※最新版では5台のUGVが近接・高密度で走行するシナリオを設定）
+- **経路設定**: TXは、設定ファイル (`sim_params.yaml`) から読み込んだ**マルチウェイポイントリスト**を順次追従する。（※最新版では5台のTXが近接・高密度で走行するシナリオを設定）
 - **初期位置検証と自己補正**: 起動直後、Gazeboのスポーン処理による遅延や物理エンジンの荒ぶりが原因で発生する「スポーン座標と実際のオドメトリ座標のズレ」を自動検知する。ズレが10m以上の場合は異常とみなし、ワールド座標系のオフセットを動的に再計算することで、シミュレーションの破綻を未然に防ぐ。
-- **区間速度制御**: 各ウェイポイントは目標直線速度 (`V`) を持ち、UGVはその区間の目標速度を維持するように走行する。
+- **区間速度制御**: 各ウェイポイントは目標直線速度 (`V`) を持ち、TXはその区間の目標速度を維持するように走行する。
 - **スリップ防止（加速度制御）**: 高速走行（50km/h等）時の急加速によるタイヤの空転やオドメトリ誤差を防ぐため、`max_acceleration` により速度指令（`/cmd_vel`）の変化率に制限をかける。
   - ウェイポイントデータ形式: **`[X, Y, Z, V]`** (4要素)
 
 #### ウェイポイントパラメータ例
 
 ```yaml
-ugv_controller_node:
+tx_controller_node:
   ros__parameters:
     waypoints:
       - [-20.0, 0.0, 0.0, 2.78] # 10 km/h
@@ -419,7 +419,7 @@ ugv_controller_node:
 ### CSV出力項目
 
 各座標カラムの意味:
-- **`ugv_x_m`, `ugv_y_m`, `ugv_z_m`**: UGVアンテナ位置座標（絶対座標）
+- **`tx_x_m`, `tx_y_m`, `tx_z_m`**: TXアンテナ位置座標（絶対座標）
 - **`bs_x_m`, `bs_y_m`, `bs_z_m`**: 基地局アンテナ位置座標（絶対座標）
 
 #### 1. 通信品質時系列CSV (`comms/{vehicle_name}_full.csv` または `_connected.csv`)
@@ -438,7 +438,7 @@ ugv_controller_node:
 | `e_gain_dB` | [dBi] | E面アンテナゲイン |
 | `h_gain_dB` | [dBi] | H面アンテナゲイン |
 | `comm_active` | bool | 通信可否フラグ（`full.csv`のみ） |
-| `ugv_x_m`, `ugv_y_m`, `ugv_z_m` | [m] | UGVアンテナ位置座標 |
+| `tx_x_m`, `tx_y_m`, `tx_z_m` | [m] | TXアンテナ位置座標 |
 | `bs_x_m`, `bs_y_m`, `bs_z_m` | [m] | 基地局アンテナ位置座標 |
 | `link_state` | - | リンク状態 (`DISCONNECTED` / `ESTABLISHING` / `CONNECTED`、`full.csv`のみ) |
 
@@ -468,7 +468,7 @@ ugv_controller_node:
 | 項目名 | 単位 | 説明 |
 | :--- | :--- | :--- |
 | `time_s` | [s] | 経過時間 |
-| `ugv_x_m`, `ugv_y_m`, `ugv_z_m` | [m] | 現在の UGV アンテナ位置座標 |
+| `tx_x_m`, `tx_y_m`, `tx_z_m` | [m] | 現在の TX アンテナ位置座標 |
 | `rssi_{antenna_name}` | [dBm] | 各車載アンテナの現在の実測 RSSI (車両アンテナ構成に基づき動的に列数が変動) |
 | `selected_antenna` | string | 現在選択（Grant付与）されている車載アンテナ名 |
 | `rssi_optimal_dBm` | [dBm] | 現在位置に対応するヒートマップ上（LUT）の nominal optimal RSSI |
@@ -477,7 +477,7 @@ ugv_controller_node:
 
 #### 通信品質時系列CSV例 (`comms/shinkansen_front_full.csv`)
 ```csv
-time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,throughput_Gbps,total_data_MB,path_loss_dB,e_gain_dB,h_gain_dB,comm_active,ugv_x_m,ugv_y_m,ugv_z_m,bs_x_m,bs_y_m,bs_z_m,link_state
+time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,throughput_Gbps,total_data_MB,path_loss_dB,e_gain_dB,h_gain_dB,comm_active,tx_x_m,tx_y_m,tx_z_m,bs_x_m,bs_y_m,bs_z_m,link_state
 15.0,15.0,shinkansen_front,True,20.42,-55.2,4.6,1.2,65.2,8.5,6.2,True,-20.0,0.0,0.0,0.0,3.0,0.0,CONNECTED
 ```
 
@@ -495,7 +495,7 @@ x_m,y_m,z_m,yaw_rad,rssi_antenna_bs_front,rssi_antenna_bs_mid,rssi_antenna_bs_re
 
 #### フィードフォワード制御ログ例 (`control/feedforward_log.csv`)
 ```csv
-time_s,ugv_x_m,ugv_y_m,ugv_z_m,rssi_shinkansen_front,rssi_shinkansen_mid,rssi_shinkansen_rear,selected_antenna,rssi_optimal_dBm
+time_s,tx_x_m,tx_y_m,tx_z_m,rssi_shinkansen_front,rssi_shinkansen_mid,rssi_shinkansen_rear,selected_antenna,rssi_optimal_dBm
 15.0,-20.0,0.0,0.0,-55.2,-60.1,-65.3,shinkansen_front,-55.2
 ```
 
@@ -570,7 +570,7 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 
 | シナリオ         | 確認項目                                                 |
 | :--------------- | :------------------------------------------------------- |
-| **基本動作**     | UGVが移動し、通信品質が計算され、CSVに出力される。       |
+| **基本動作**     | TXが移動し、通信品質が計算され、CSVに出力される。       |
 | **リンク確立**   | RSSI閾値を超えてから2ms後に通信が開始される。            |
 | **データ量制限** | 設定された上限に達したら通信が停止する。                 |
 | **再接続**       | RSSI低下後、再び閾値を超えたら再度リンク確立が行われる。 |

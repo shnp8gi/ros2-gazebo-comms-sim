@@ -30,29 +30,33 @@ CommsSimulatorNode::CommsSimulatorNode()
   this->declare_parameter("path_loss.d0", 1.0);
   this->declare_parameter("path_loss.pl_d0", -1.0);
   this->declare_parameter("tx_power", -7.0);
-  this->declare_parameter("base_station_position", std::vector<double>{0.0, 0.0, 0.0});
-  this->declare_parameter("base_station_antenna_offset", std::vector<double>{0.0, 0.0, 10.5});
-  this->declare_parameter("ugv_antenna_offset", std::vector<double>{0.0, 0.0, 1.3});
+  this->declare_parameter("rx_position", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("rx_antenna_offset", std::vector<double>{0.0, 0.0, 10.5});
+  this->declare_parameter("tx_antenna_offset", std::vector<double>{0.0, 0.0, 1.3});
   this->declare_parameter("mcs_table_path", "");
   this->declare_parameter("link_establishment_time_ms", 2.0);
   this->declare_parameter("mission_complete_topic", "/mission_complete");
   this->declare_parameter("odom_topic", "/odom");
-  this->declare_parameter("ugv_spawn_pose", std::vector<double>{-20.0, 0.0, 0.0});
-  this->declare_parameter("ugv_antenna_relative_rpy", std::vector<double>{0.0, 0.0, 0.0});
-  this->declare_parameter("base_station_pose_topic", "/base_station/pose");
-  this->declare_parameter("base_station_rpy", std::vector<double>{0.0, 0.0, 0.0});
-  this->declare_parameter("base_station_antenna_relative_rpy", std::vector<double>{0.0, 0.0, 0.0});
-  this->declare_parameter("base_station_positions", std::vector<double>{0.0, 0.0, 0.0});
-  this->declare_parameter("base_station_antenna_offsets", std::vector<double>{0.0, 0.0, 10.5});
-  this->declare_parameter("base_station_rpys", std::vector<double>{0.0, 0.0, 0.0});
-  this->declare_parameter("base_station_antenna_relative_rpys", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("tx_spawn_pose", std::vector<double>{-20.0, 0.0, 0.0});
+  this->declare_parameter("tx_antenna_relative_rpy", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("rx_pose_topic", "/rx/pose");
+  this->declare_parameter("rx_rpy", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("rx_antenna_relative_rpy", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("rx_positions", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("rx_antenna_offsets", std::vector<double>{0.0, 0.0, 10.5});
+  this->declare_parameter("rx_rpys", std::vector<double>{0.0, 0.0, 0.0});
+  this->declare_parameter("rx_antenna_relative_rpys", std::vector<double>{0.0, 0.0, 0.0});
   this->declare_parameter("logging_start_trigger", "on_movement");
   this->declare_parameter("logging_start_topic", "/logging/start");
   this->declare_parameter("max_antenna_attenuation", 30.0);
   this->declare_parameter("vehicle_name", "");
   this->declare_parameter("cmd_vel_topic", "/cmd_vel");
+  this->declare_parameter("config_file_path", "/workspace/src/comms_sim_pkg/config/sim_params.yaml");
+  this->declare_parameter("publish_rate", 100.0);
 
   sampling_rate_ = this->get_parameter("sampling_rate").as_double();
+  publish_rate_ = this->get_parameter("publish_rate").as_double();
+  last_publish_time_ = -1.0;
   noise_variance_ = this->get_parameter("noise_variance").as_double();
   e_plane_path_ = this->get_parameter("e_plane_path").as_string();
   h_plane_path_ = this->get_parameter("h_plane_path").as_string();
@@ -62,16 +66,16 @@ CommsSimulatorNode::CommsSimulatorNode()
   link_establishment_time_ = this->get_parameter("link_establishment_time_ms").as_double() / 1000.0;
   mission_complete_topic_ = this->get_parameter("mission_complete_topic").as_string();
   odom_topic_ = this->get_parameter("odom_topic").as_string();
-  ugv_spawn_pose_ = this->get_parameter("ugv_spawn_pose").as_double_array();
+  tx_spawn_pose_ = this->get_parameter("tx_spawn_pose").as_double_array();
   
-  auto rel = this->get_parameter("ugv_antenna_relative_rpy").as_double_array();
+  auto rel = this->get_parameter("tx_antenna_relative_rpy").as_double_array();
   if (rel.size() >= 3) {
-      ugv_antenna_relative_rpy_ = Eigen::Vector3d(rel[0], rel[1], rel[2]);
+      tx_antenna_relative_rpy_ = Eigen::Vector3d(rel[0], rel[1], rel[2]);
   } else {
-      ugv_antenna_relative_rpy_ = Eigen::Vector3d::Zero();
+      tx_antenna_relative_rpy_ = Eigen::Vector3d::Zero();
   }
 
-  base_station_pose_topic_ = this->get_parameter("base_station_pose_topic").as_string();
+  rx_pose_topic_ = this->get_parameter("rx_pose_topic").as_string();
   vehicle_name_ = this->get_parameter("vehicle_name").as_string();
   cmd_vel_topic_ = this->get_parameter("cmd_vel_topic").as_string();
   logging_trigger_ = this->get_parameter("logging_start_trigger").as_string();
@@ -97,15 +101,15 @@ CommsSimulatorNode::CommsSimulatorNode()
   if (!e_plane_path_.empty()) antenna_parser_.load_e_plane(e_plane_path_);
   if (!h_plane_path_.empty()) antenna_parser_.load_h_plane(h_plane_path_);
 
-  auto bs_positions = this->get_parameter("base_station_positions").as_double_array();
-  auto bs_offsets = this->get_parameter("base_station_antenna_offsets").as_double_array();
-  auto bs_rpys = this->get_parameter("base_station_rpys").as_double_array();
-  auto bs_rel_rpys = this->get_parameter("base_station_antenna_relative_rpys").as_double_array();
+  auto bs_positions = this->get_parameter("rx_positions").as_double_array();
+  auto bs_offsets = this->get_parameter("rx_antenna_offsets").as_double_array();
+  auto bs_rpys = this->get_parameter("rx_rpys").as_double_array();
+  auto bs_rel_rpys = this->get_parameter("rx_antenna_relative_rpys").as_double_array();
 
   if (bs_positions.size() >= 3 && bs_positions.size() % 3 == 0) {
       size_t n_bs = bs_positions.size() / 3;
       for (size_t i = 0; i < n_bs; ++i) {
-          BaseStationConfig bs;
+          RxConfig bs;
           bs.position = Eigen::Vector3d(bs_positions[i*3], bs_positions[i*3+1], bs_positions[i*3+2]);
           if (bs_offsets.size() >= (i+1)*3) {
               bs.antenna_offset = Eigen::Vector3d(bs_offsets[i*3], bs_offsets[i*3+1], bs_offsets[i*3+2]);
@@ -125,14 +129,14 @@ CommsSimulatorNode::CommsSimulatorNode()
           bs.name = "antenna_" + std::to_string(i);
           Eigen::Vector3d ant_rpy = bs.rpy + bs.antenna_relative_rpy;
           bs.rotmat = antenna_parser_.rpy_to_rotmat(ant_rpy.x(), ant_rpy.y(), ant_rpy.z());
-          base_stations_.push_back(bs);
+          rx_nodes_.push_back(bs);
       }
   } else {
-      BaseStationConfig bs;
-      auto pos = this->get_parameter("base_station_position").as_double_array();
-      auto off = this->get_parameter("base_station_antenna_offset").as_double_array();
-      auto rpy = this->get_parameter("base_station_rpy").as_double_array();
-      auto rel = this->get_parameter("base_station_antenna_relative_rpy").as_double_array();
+      RxConfig bs;
+      auto pos = this->get_parameter("rx_position").as_double_array();
+      auto off = this->get_parameter("rx_antenna_offset").as_double_array();
+      auto rpy = this->get_parameter("rx_rpy").as_double_array();
+      auto rel = this->get_parameter("rx_antenna_relative_rpy").as_double_array();
       if(pos.size()>=3) bs.position = Eigen::Vector3d(pos[0], pos[1], pos[2]); else bs.position = Eigen::Vector3d::Zero();
       if(off.size()>=3) bs.antenna_offset = Eigen::Vector3d(off[0], off[1], off[2]); else bs.antenna_offset = Eigen::Vector3d::Zero();
       if(rpy.size()>=3) bs.rpy = Eigen::Vector3d(rpy[0], rpy[1], rpy[2]); else bs.rpy = Eigen::Vector3d::Zero();
@@ -140,19 +144,19 @@ CommsSimulatorNode::CommsSimulatorNode()
       bs.name = "antenna_0";
       Eigen::Vector3d ant_rpy = bs.rpy + bs.antenna_relative_rpy;
       bs.rotmat = antenna_parser_.rpy_to_rotmat(ant_rpy.x(), ant_rpy.y(), ant_rpy.z());
-      base_stations_.push_back(bs);
+      rx_nodes_.push_back(bs);
   }
 
-  auto ugv_off = this->get_parameter("ugv_antenna_offset").as_double_array();
-  if (ugv_off.size() >= 3) {
-      ugv_antenna_offset_ = Eigen::Vector3d(ugv_off[0], ugv_off[1], ugv_off[2]);
+  auto tx_off = this->get_parameter("tx_antenna_offset").as_double_array();
+  if (tx_off.size() >= 3) {
+      tx_antenna_offset_ = Eigen::Vector3d(tx_off[0], tx_off[1], tx_off[2]);
   } else {
-      ugv_antenna_offset_ = Eigen::Vector3d::Zero();
+      tx_antenna_offset_ = Eigen::Vector3d::Zero();
   }
 
   // Load from YAML
   try {
-      std::string yaml_path = "/workspace/src/comms_sim_pkg/config/sim_params.yaml";
+      std::string yaml_path = this->get_parameter("config_file_path").as_string();
       YAML::Node config = YAML::LoadFile(yaml_path);
       if (config["vehicles"]) {
           for (auto v : config["vehicles"]) {
@@ -178,6 +182,12 @@ CommsSimulatorNode::CommsSimulatorNode()
                           va.name = a["name"].as<std::string>();
                           std::vector<double> off = a["offset"].as<std::vector<double>>();
                           va.offset = Eigen::Vector3d(off[0], off[1], off[2]);
+                          if (a["relative_rpy"]) {
+                              std::vector<double> rpy = a["relative_rpy"].as<std::vector<double>>();
+                              va.relative_rpy = Eigen::Vector3d(rpy[0], rpy[1], rpy[2]);
+                          } else {
+                              va.relative_rpy = Eigen::Vector3d::Zero();
+                          }
                           vehicle_antennas_.push_back(va);
                       }
                   }
@@ -218,6 +228,34 @@ CommsSimulatorNode::CommsSimulatorNode()
   } else {
       quality_pub_ = this->create_publisher<comms_sim_msgs::msg::CommsQuality>("/comms/quality", 10);
   }
+
+  // 通信ハードウェアの内部クロックを模擬:
+  // sampling_rate_ Hz の固定周期で通信品質を計算するタイマー
+  double timer_period_s = 1.0 / sampling_rate_;
+  RCLCPP_INFO(this->get_logger(), "Timer-driven comms calc enabled: %.1f Hz (%.4f ms period)",
+      sampling_rate_, timer_period_s * 1000.0);
+
+  // Ready シグナルの発行（全ノードの起動同期用）
+  if (!vehicle_name_.empty()) {
+      auto ready_qos = rclcpp::QoS(1).reliable().transient_local();
+      ready_pub_ = this->create_publisher<std_msgs::msg::Bool>(
+          "/" + vehicle_name_ + "/ready", ready_qos);
+          
+      all_ready_sub_ = this->create_subscription<std_msgs::msg::Bool>(
+          "/sim/all_ready", ready_qos, std::bind(&CommsSimulatorNode::on_all_ready, this, std::placeholders::_1));
+
+      ready_timer_ = this->create_wall_timer(
+          std::chrono::milliseconds(500),
+          [this]() {
+              if (all_nodes_ready_) {
+                  ready_timer_->cancel();
+                  return;
+              }
+              auto ready_msg = std_msgs::msg::Bool();
+              ready_msg.data = true;
+              ready_pub_->publish(ready_msg);
+          });
+  }
 }
 
 CommsSimulatorNode::~CommsSimulatorNode() {}
@@ -245,6 +283,13 @@ void CommsSimulatorNode::on_link_grant(const std_msgs::msg::Bool::SharedPtr msg)
     has_link_grant_ = msg->data;
 }
 
+void CommsSimulatorNode::on_all_ready(const std_msgs::msg::Bool::SharedPtr msg) {
+    if (msg->data && !all_nodes_ready_) {
+        all_nodes_ready_ = true;
+        RCLCPP_INFO(this->get_logger(), "Received all_ready signal.");
+    }
+}
+
 void CommsSimulatorNode::on_cmd_vel(const geometry_msgs::msg::Twist::SharedPtr msg) {
   if (!logging_ready_) {
     if (std::abs(msg->linear.x) > 1e-3 || std::abs(msg->linear.y) > 1e-3) {
@@ -259,7 +304,7 @@ void CommsSimulatorNode::on_logging_start_topic(const std_msgs::msg::Bool::Share
   }
 }
 
-void CommsSimulatorNode::on_base_station_pose(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
+void CommsSimulatorNode::on_rx_pose(const geometry_msgs::msg::PoseStamped::SharedPtr msg) {
   (void)msg;
 }
 
@@ -268,13 +313,13 @@ void CommsSimulatorNode::on_mission_complete(const std_msgs::msg::Bool::SharedPt
 }
 
 bool CommsSimulatorNode::get_current_segment_pose(double& best_px, double& best_py, double& best_yaw) {
-    if (waypoints_.empty() || !ugv_local_position_.has_value() || ugv_spawn_pose_.size() < 3) return false;
-    double ux = ugv_local_position_.value().x();
-    double uy = ugv_local_position_.value().y();
+    if (waypoints_.empty() || !tx_local_position_.has_value() || tx_spawn_pose_.size() < 3) return false;
+    double ux = tx_local_position_.value().x();
+    double uy = tx_local_position_.value().y();
 
     best_px = ux; best_py = uy; best_yaw = 0.0;
     double min_dist_sq = 1e9;
-    double ax = ugv_spawn_pose_[0], ay = ugv_spawn_pose_[1];
+    double ax = tx_spawn_pose_[0], ay = tx_spawn_pose_[1];
 
     for (const auto& wp : waypoints_) {
         double bx = wp[0], by = wp[1];
@@ -305,12 +350,12 @@ bool CommsSimulatorNode::get_current_segment_pose(double& best_px, double& best_
 }
 
 void CommsSimulatorNode::imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg) {
-  ugv_orientation_ = quat_to_rpy(msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w);
+  tx_orientation_ = quat_to_rpy(msg->orientation.x, msg->orientation.y, msg->orientation.z, msg->orientation.w);
 
   if (vehicle_name_.find("shinkansen") != std::string::npos) {
       double px, py, yaw;
       if (get_current_segment_pose(px, py, yaw)) {
-          ugv_orientation_ = Eigen::Vector3d(0.0, 0.0, yaw);
+          tx_orientation_ = Eigen::Vector3d(0.0, 0.0, yaw);
       }
   }
 }
@@ -318,28 +363,64 @@ void CommsSimulatorNode::imu_callback(const sensor_msgs::msg::Imu::SharedPtr msg
 void CommsSimulatorNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr msg) {
   Eigen::Vector3d odom_pos(msg->pose.pose.position.x, msg->pose.pose.position.y, msg->pose.pose.position.z);
   if (!odom_offset_set_) {
-      if (ugv_spawn_pose_.size() >= 3) {
-          Eigen::Vector3d spawn(ugv_spawn_pose_[0], ugv_spawn_pose_[1], ugv_spawn_pose_[2]);
+      if (tx_spawn_pose_.size() >= 3) {
+          Eigen::Vector3d spawn(tx_spawn_pose_[0], tx_spawn_pose_[1], tx_spawn_pose_[2]);
           if ((odom_pos - spawn).norm() > 10.0) return;
           odom_offset_ = spawn - odom_pos;
       }
       odom_offset_set_ = true;
   }
-  ugv_local_position_ = odom_pos + odom_offset_;
+  tx_local_position_ = odom_pos + odom_offset_;
 
   if (vehicle_name_.find("shinkansen") != std::string::npos) {
       double px, py, yaw;
       if (get_current_segment_pose(px, py, yaw)) {
-          ugv_local_position_.value().x() = px;
-          ugv_local_position_.value().y() = py;
+          tx_local_position_.value().x() = px;
+          tx_local_position_.value().y() = py;
       }
   }
 
-  if (!simulation_start_time_.has_value()) {
-      simulation_start_time_ = this->get_clock()->now().nanoseconds() / 1e9;
+  if (!logging_ready_) {
+      last_odom_time_ = msg->header.stamp;
+      last_tx_pos_ = tx_local_position_;
+      last_tx_orientation_ = tx_orientation_;
+      return;
   }
 
-  calculate_and_publish();
+  rclcpp::Time current_odom_time = msg->header.stamp;
+  if (!last_odom_time_.has_value()) {
+      last_odom_time_ = current_odom_time;
+      last_tx_pos_ = tx_local_position_;
+      last_tx_orientation_ = tx_orientation_;
+      return;
+  }
+
+  double dt_odom = (current_odom_time - last_odom_time_.value()).seconds();
+  if (dt_odom <= 0.0) return;
+
+  int num_steps = static_cast<int>(std::round(dt_odom * sampling_rate_));
+  if (num_steps <= 0) return;
+
+  Eigen::Vector3d start_pos = last_tx_pos_.value_or(tx_local_position_.value());
+  Eigen::Vector3d end_pos = tx_local_position_.value();
+  Eigen::Vector3d start_ori = last_tx_orientation_.value_or(tx_orientation_.value());
+  Eigen::Vector3d end_ori = tx_orientation_.value();
+
+  double step_dt = dt_odom / num_steps;
+  double base_time = last_odom_time_.value().nanoseconds() / 1e9;
+
+  for (int i = 1; i <= num_steps; ++i) {
+      double alpha = static_cast<double>(i) / num_steps;
+      Eigen::Vector3d pos = start_pos + alpha * (end_pos - start_pos);
+      Eigen::Vector3d ori = start_ori + alpha * (end_ori - start_ori);
+      double current_time = base_time + alpha * dt_odom;
+
+      calculate_and_publish(pos, ori, step_dt, current_time);
+  }
+
+  last_odom_time_ = current_odom_time;
+  last_tx_pos_ = tx_local_position_;
+  last_tx_orientation_ = tx_orientation_;
 }
 
 bool CommsSimulatorNode::update_link_state(double rssi, double current_time, bool has_link_grant) {
@@ -347,16 +428,23 @@ bool CommsSimulatorNode::update_link_state(double rssi, double current_time, boo
       if (link_state_ != LinkState::DISCONNECTED) {
           link_state_ = LinkState::DISCONNECTED;
           link_establishment_start_time_.reset();
+          establishment_step_count_ = 0;
       }
       return false;
   }
+
+  // リンク確立に必要なステップ数（無線規格のフレーム単位を模擬）
+  int required_steps = static_cast<int>(
+      std::ceil(link_establishment_time_ * sampling_rate_));
 
   if (link_state_ == LinkState::DISCONNECTED) {
       if (rssi > rssi_threshold_) {
           link_state_ = LinkState::ESTABLISHING;
           link_establishment_start_time_ = current_time;
-          if (link_establishment_time_ <= (1.0 / sampling_rate_)) {
+          establishment_step_count_ = 1;
+          if (required_steps <= 1) {
               link_state_ = LinkState::CONNECTED;
+              establishment_step_count_ = 0;
               return true;
           }
       }
@@ -365,10 +453,13 @@ bool CommsSimulatorNode::update_link_state(double rssi, double current_time, boo
       if (rssi <= rssi_threshold_) {
           link_state_ = LinkState::DISCONNECTED;
           link_establishment_start_time_.reset();
+          establishment_step_count_ = 0;
           return false;
       }
-      if (current_time - link_establishment_start_time_.value() >= link_establishment_time_) {
+      establishment_step_count_++;
+      if (establishment_step_count_ >= required_steps) {
           link_state_ = LinkState::CONNECTED;
+          establishment_step_count_ = 0;
           return true;
       }
       return false;
@@ -376,6 +467,7 @@ bool CommsSimulatorNode::update_link_state(double rssi, double current_time, boo
       if (rssi <= rssi_threshold_) {
           link_state_ = LinkState::DISCONNECTED;
           link_establishment_start_time_.reset();
+          establishment_step_count_ = 0;
           return false;
       }
       return true;
@@ -383,171 +475,132 @@ bool CommsSimulatorNode::update_link_state(double rssi, double current_time, boo
   return false;
 }
 
-void CommsSimulatorNode::calculate_and_publish() {
-    if (base_stations_.empty() || !ugv_local_position_.has_value() || !ugv_orientation_.has_value()) return;
+void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const Eigen::Vector3d& ori, double dt_step, double current_time) {
+    if (rx_nodes_.empty()) return;
 
-    double current_time = this->get_clock()->now().nanoseconds() / 1e9;
-    double dt_target = 1.0 / sampling_rate_;
-    
-    int num_steps = 1;
-    double dt_actual = dt_target;
-
-    if (!last_calc_sim_time_.has_value() || !last_ugv_pos_.has_value() || !last_ugv_orientation_.has_value()) {
-        last_calc_sim_time_ = current_time;
-        last_ugv_pos_ = ugv_local_position_.value();
-        last_ugv_orientation_ = ugv_orientation_.value();
-        num_steps = 1;
-        dt_actual = dt_target;
-    } else {
-        double elapsed = current_time - last_calc_sim_time_.value();
-        if (elapsed <= 0.0) {
-            return;
-        }
-        num_steps = static_cast<int>(std::round(elapsed / dt_target));
-        if (num_steps <= 0) {
-            num_steps = 1;
-        } else if (num_steps > 5000) {
-            RCLCPP_WARN_THROTTLE(this->get_logger(), *this->get_clock(), 5000,
-                "Large simulation time gap detected (%f s). Capping sub-steps to 5000.", elapsed);
-            num_steps = 5000;
-        }
-        dt_actual = elapsed / num_steps;
-    }
+    Eigen::Vector3d tx_ant_rpy = ori + tx_antenna_relative_rpy_;
+    Eigen::Matrix3d rx_rotmat = antenna_parser_.rpy_to_rotmat(tx_ant_rpy.x(), tx_ant_rpy.y(), tx_ant_rpy.z());
+    Eigen::Matrix3d vehicle_rotmat = antenna_parser_.rpy_to_rotmat(ori.x(), ori.y(), ori.z());
+    Eigen::Vector3d tx_antenna_pos = pos + vehicle_rotmat * tx_antenna_offset_;
 
     CommsMetrics best_metrics;
-    Eigen::Vector3d best_bs_pos = base_stations_[0].position + base_stations_[0].antenna_offset;
-    double best_tx_total = 0, best_rx_total = 0;
     int best_bs_idx = 0;
+    double best_tx_total = 0.0;
+    double best_rx_total = 0.0;
+    Eigen::Vector3d best_bs_pos = rx_nodes_[0].position + rx_nodes_[0].antenna_offset;
+
+    for (size_t i = 0; i < rx_nodes_.size(); ++i) {
+        auto& bs = rx_nodes_[i];
+        Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
+        Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
+
+        auto gain_res = antenna_parser_.get_tx_rx_gains(
+            tx_antenna_pos, tx_ant_rpy, bs_antenna_pos, bs_ant_rpy,
+            &rx_rotmat, &bs.rotmat);
+        double tx_tot = gain_res.tx_total;
+        double rx_tot = gain_res.rx_total;
+
+        CommsMetrics metrics = comms_calculator_->calculate_all(tx_antenna_pos, bs_antenna_pos, tx_tot + rx_tot, true);
+        if (i == 0 || metrics.rssi > best_metrics.rssi) {
+            best_metrics = metrics;
+            best_bs_idx = static_cast<int>(i);
+            best_tx_total = tx_tot;
+            best_rx_total = rx_tot;
+            best_bs_pos = bs_antenna_pos;
+        }
+    }
+
+    last_rssi_ = best_metrics.rssi;
+    bool local_has_link_grant = has_link_grant_;
+
+    if ((scheduling_policy_ == "feedforward_optimal" || scheduling_policy_ == "rssi_priority" || 
+         scheduling_policy_ == "physical_score_priority" || scheduling_policy_ == "geometric_beam_priority" || 
+         scheduling_policy_ == "geometric_weighted") && !vehicle_antennas_.empty()) 
+    {
+        double best_va_rssi_global = -1e9;
+        std::string best_ant_name = "";
+
+        for (const auto& va : vehicle_antennas_) {
+            bool is_current_va = (va.name == vehicle_name_);
+            double best_va_rssi = -1e9;
+
+            if (is_current_va && noise_variance_ == 0.0) {
+                best_va_rssi = best_metrics.rssi;
+            } else {
+                Eigen::Vector3d va_pos_world = pos + vehicle_rotmat * va.offset;
+                Eigen::Vector3d va_ant_rpy = ori + va.relative_rpy;
+                Eigen::Matrix3d va_rotmat = antenna_parser_.rpy_to_rotmat(va_ant_rpy.x(), va_ant_rpy.y(), va_ant_rpy.z());
+                for (const auto& bs : rx_nodes_) {
+                    Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
+                    auto gain_res2 = antenna_parser_.get_tx_rx_gains(
+                        va_pos_world, va_ant_rpy, bs_antenna_pos, bs.rpy + bs.antenna_relative_rpy,
+                        &va_rotmat, &bs.rotmat);
+                    double tx_tot = gain_res2.tx_total;
+                    double rx_tot = gain_res2.rx_total;
+                    
+                    CommsMetrics metrics_va = comms_calculator_->calculate_all(va_pos_world, bs_antenna_pos, tx_tot + rx_tot, false);
+                    if (metrics_va.rssi > best_va_rssi) best_va_rssi = metrics_va.rssi;
+                }
+            }
+            if (best_va_rssi > best_va_rssi_global) {
+                best_va_rssi_global = best_va_rssi;
+                best_ant_name = va.name;
+            }
+        }
+        local_has_link_grant = (vehicle_name_ == best_ant_name);
+    }
+    LinkState old_link_state = link_state_;
+    bool link_ready = update_link_state(best_metrics.rssi, current_time, local_has_link_grant);
+    bool state_changed = (old_link_state != link_state_);
+
     double actual_throughput = 0.0;
-
-    for (int step = 1; step <= num_steps; ++step) {
-        double frac = static_cast<double>(step) / num_steps;
-        double t_sub = last_calc_sim_time_.value() + step * dt_actual;
-
-        // Interpolate position and orientation (already projected)
-        Eigen::Vector3d pos_sub = last_ugv_pos_.value() + frac * (ugv_local_position_.value() - last_ugv_pos_.value());
-        Eigen::Vector3d ori_sub = last_ugv_orientation_.value() + frac * (ugv_orientation_.value() - last_ugv_orientation_.value());
-
-        Eigen::Vector3d ugv_ant_rpy = ori_sub + ugv_antenna_relative_rpy_;
-        Eigen::Matrix3d rx_rotmat = antenna_parser_.rpy_to_rotmat(ugv_ant_rpy.x(), ugv_ant_rpy.y(), ugv_ant_rpy.z());
-        Eigen::Vector3d ugv_antenna_pos = pos_sub + rx_rotmat * ugv_antenna_offset_;
-
-        CommsMetrics step_best_metrics;
-        int step_best_bs_idx = 0;
-        double step_best_tx_total = 0.0;
-        double step_best_rx_total = 0.0;
-        Eigen::Vector3d step_best_bs_pos = Eigen::Vector3d::Zero();
-
-        for (size_t i = 0; i < base_stations_.size(); ++i) {
-            auto& bs = base_stations_[i];
-            Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
-            Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
-
-            auto gain_res = antenna_parser_.get_tx_rx_gains(
-                bs_antenna_pos, bs_ant_rpy, ugv_antenna_pos, ugv_ant_rpy,
-                &bs.rotmat, &rx_rotmat);
-            double tx_tot = gain_res.tx_total;
-            double rx_tot = gain_res.rx_total;
-
-            CommsMetrics metrics = comms_calculator_->calculate_all(ugv_antenna_pos, bs_antenna_pos, tx_tot + rx_tot, true);
-            if (i == 0 || metrics.rssi > step_best_metrics.rssi) {
-                step_best_metrics = metrics;
-                step_best_bs_idx = i;
-                step_best_tx_total = tx_tot;
-                step_best_rx_total = rx_tot;
-                step_best_bs_pos = bs_antenna_pos;
+    if (link_ready && comm_active_ && logging_ready_) {
+        actual_throughput = best_metrics.throughput;
+        if (actual_throughput > 0) {
+            total_data_transmitted_ += actual_throughput * 1000.0 / 8.0 * dt_step;
+            if (comm_data_limit_mb_ > 0 && total_data_transmitted_ >= comm_data_limit_mb_) {
+                comm_active_ = false;
             }
-        }
-
-        last_rssi_ = step_best_metrics.rssi;
-        bool local_has_link_grant = has_link_grant_;
-
-        if ((scheduling_policy_ == "feedforward_optimal" || scheduling_policy_ == "rssi_priority" || 
-             scheduling_policy_ == "physical_score_priority" || scheduling_policy_ == "geometric_beam_priority" || 
-             scheduling_policy_ == "geometric_weighted") && !vehicle_antennas_.empty()) 
-        {
-            double best_va_rssi_global = -1e9;
-            std::string best_ant_name = "";
-
-            for (const auto& va : vehicle_antennas_) {
-                bool is_current_va = (va.name == vehicle_name_);
-                double best_va_rssi = -1e9;
-
-                if (is_current_va && noise_variance_ == 0.0) {
-                    best_va_rssi = step_best_metrics.rssi;
-                } else {
-                    Eigen::Vector3d va_pos_world = pos_sub + va.offset;
-                    for (const auto& bs : base_stations_) {
-                        Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
-                        auto gain_res2 = antenna_parser_.get_tx_rx_gains(
-                            bs_antenna_pos, bs.rpy + bs.antenna_relative_rpy, va_pos_world, ugv_ant_rpy,
-                            &bs.rotmat, &rx_rotmat);
-                        double tx_tot = gain_res2.tx_total;
-                        double rx_tot = gain_res2.rx_total;
-                        
-                        CommsMetrics metrics_va = comms_calculator_->calculate_all(va_pos_world, bs_antenna_pos, tx_tot + rx_tot, false);
-                        if (metrics_va.rssi > best_va_rssi) best_va_rssi = metrics_va.rssi;
-                    }
-                }
-                if (best_va_rssi > best_va_rssi_global) {
-                    best_va_rssi_global = best_va_rssi;
-                    best_ant_name = va.name;
-                }
-            }
-            local_has_link_grant = (vehicle_name_ == best_ant_name);
-        }
-
-        bool link_ready = update_link_state(step_best_metrics.rssi, t_sub, local_has_link_grant);
-        actual_throughput = 0.0;
-        if (link_ready && comm_active_ && logging_ready_) {
-            actual_throughput = step_best_metrics.throughput;
-            if (actual_throughput > 0) {
-                total_data_transmitted_ += actual_throughput * 1000.0 / 8.0 * dt_actual;
-                if (comm_data_limit_mb_ > 0 && total_data_transmitted_ >= comm_data_limit_mb_) {
-                    comm_active_ = false;
-                }
-            }
-        }
-
-        if (step == num_steps) {
-            best_metrics = step_best_metrics;
-            best_bs_idx = step_best_bs_idx;
-            best_tx_total = step_best_tx_total;
-            best_rx_total = step_best_rx_total;
-            best_bs_pos = step_best_bs_pos;
         }
     }
 
-    last_calc_sim_time_ = current_time;
-    last_ugv_pos_ = ugv_local_position_;
-    last_ugv_orientation_ = ugv_orientation_;
-
-    if (link_request_pub_) {
-        std_msgs::msg::Float64 req_msg;
-        req_msg.data = comm_active_ ? best_metrics.rssi : -1e9;
-        link_request_pub_->publish(req_msg);
+    bool should_publish = false;
+    if (last_publish_time_ < 0.0 || state_changed || 
+        (current_time - last_publish_time_) >= (1.0 / publish_rate_)) 
+    {
+        should_publish = true;
+        last_publish_time_ = current_time;
     }
 
-    if (quality_pub_) {
-        comms_sim_msgs::msg::CommsQuality msg;
-        msg.header.stamp = this->get_clock()->now();
-        msg.header.frame_id = "world";
-        msg.distance = best_metrics.distance;
-        msg.rssi = best_metrics.rssi;
-        msg.throughput = actual_throughput;
-        msg.total_data_transmitted = total_data_transmitted_;
-        msg.ugv_x = ugv_local_position_.value().x();
-        msg.ugv_y = ugv_local_position_.value().y();
-        msg.ugv_z = ugv_local_position_.value().z();
-        msg.base_station_x = base_stations_[best_bs_idx].position.x();
-        msg.base_station_y = base_stations_[best_bs_idx].position.y();
-        msg.base_station_z = best_bs_pos.z();
-        msg.antenna_gain_e_plane = best_tx_total;
-        msg.antenna_gain_h_plane = best_rx_total;
-        msg.path_loss = best_metrics.path_loss;
-        msg.comm_active = comm_active_;
-        msg.link_state = link_state_ == LinkState::CONNECTED ? "CONNECTED" : (link_state_ == LinkState::ESTABLISHING ? "ESTABLISHING" : "DISCONNECTED");
-        quality_pub_->publish(msg);
+    if (should_publish) {
+        if (link_request_pub_) {
+            std_msgs::msg::Float64 req_msg;
+            req_msg.data = comm_active_ ? best_metrics.rssi : -1e9;
+            link_request_pub_->publish(req_msg);
+        }
+
+        if (quality_pub_) {
+            comms_sim_msgs::msg::CommsQuality msg;
+            msg.header.stamp.sec = static_cast<int32_t>(current_time);
+            msg.header.stamp.nanosec = static_cast<uint32_t>(std::round((current_time - msg.header.stamp.sec) * 1e9));
+            msg.header.frame_id = "world";
+            msg.distance = best_metrics.distance;
+            msg.rssi = best_metrics.rssi;
+            msg.throughput = actual_throughput;
+            msg.total_data_transmitted = total_data_transmitted_;
+            msg.tx_x = pos.x();
+            msg.tx_y = pos.y();
+            msg.tx_z = pos.z();
+            msg.rx_x = rx_nodes_[best_bs_idx].position.x();
+            msg.rx_y = rx_nodes_[best_bs_idx].position.y();
+            msg.rx_z = best_bs_pos.z();
+            msg.antenna_gain_e_plane = best_tx_total;
+            msg.antenna_gain_h_plane = best_rx_total;
+            msg.path_loss = best_metrics.path_loss;
+            msg.comm_active = comm_active_;
+            msg.link_state = link_state_ == LinkState::CONNECTED ? "CONNECTED" : (link_state_ == LinkState::ESTABLISHING ? "ESTABLISHING" : "DISCONNECTED");
+            quality_pub_->publish(msg);
+        }
     }
 }
 

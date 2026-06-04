@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =============================================================================
-# UGVコントローラノード
+# TXコントローラノード
 # ウェイポイント追従制御を行うROS 2ノード
 # =============================================================================
 """
-ウェイポイント追従によりUGVの移動を制御するROS 2ノード。
+ウェイポイント追従によりTXの移動を制御するROS 2ノード。
 
 サブスクライブトピック:
-    - /odom (nav_msgs/Odometry): UGVオドメトリ（位置フィードバック）
+    - /odom (nav_msgs/Odometry): TXオドメトリ（位置フィードバック）
 
 パブリッシュトピック:
     - /cmd_vel (geometry_msgs/Twist): 速度指令
@@ -79,7 +79,7 @@ class Waypoint:
         return f"Waypoint(x={self.x}, y={self.y}, z={self.z}, v={self.velocity})"
 
 
-class UGVControllerNode(Node):
+class TxControllerNode(Node):
     """
     ウェイポイント追従制御を行うROS 2ノード。
 
@@ -88,7 +88,7 @@ class UGVControllerNode(Node):
     """
 
     def __init__(self) -> None:
-        super().__init__('ugv_controller_node')
+        super().__init__('tx_controller_node')
 
         # =====================================================================
         # パラメータ宣言
@@ -231,7 +231,7 @@ class UGVControllerNode(Node):
         # self.control_timer = self.create_timer(period, self.control_loop)
 
         self.get_logger().info(
-            f'UGVControllerNode 初期化完了\n'
+            f'TxControllerNode 初期化完了\n'
             f'  ウェイポイント数: {len(self.waypoints)}\n'
             f'  到達判定距離: {self.waypoint_tolerance} m\n'
             f'  制御レート: {self.control_rate} Hz\n'
@@ -244,6 +244,44 @@ class UGVControllerNode(Node):
 
         for i, wp in enumerate(self.waypoints):
             self.get_logger().info(f'  WP{i}: {wp}')
+
+        # =================================================================
+        # Ready シグナルの発行と全ノード待機（実車ECU起動シーケンスの再現）
+        # =================================================================
+        _ready_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        # 車両名をトピック名から取得
+        v_name = self.odom_topic.strip('/').split('/')[0] if '/' in self.odom_topic else 'tx'
+        self._ready_pub = self.create_publisher(
+            Bool, f'/tx_controller_{v_name}/ready', _ready_qos)
+        self._all_nodes_ready = False
+        self._all_ready_sub = self.create_subscription(
+            Bool, '/sim/all_ready', self._on_all_ready, _ready_qos)
+
+        # 初期化完了を定期的に通知（ゲートノードが確実に受信できるようにする）
+        self._publish_ready_timer = self.create_timer(0.5, self._publish_ready)
+
+    def _publish_ready(self) -> None:
+        """初期化完了を通知する。全ノードReady受信後は停止する。"""
+        if self._all_nodes_ready:
+            if hasattr(self, '_publish_ready_timer') and self._publish_ready_timer:
+                self._publish_ready_timer.cancel()
+            return
+        ready_msg = Bool()
+        ready_msg.data = True
+        self._ready_pub.publish(ready_msg)
+
+    def _on_all_ready(self, msg: Bool) -> None:
+        """全ノード Ready シグナルの受信コールバック。"""
+        if msg.data and not self._all_nodes_ready:
+            self._all_nodes_ready = True
+            self.get_logger().info(
+                '=== 全ノード Ready 受信。車両移動を開始します。 ==='
+            )
 
     def set_position_callback(self, callback: Callable[[np.ndarray], None]) -> None:
         """
@@ -361,17 +399,13 @@ class UGVControllerNode(Node):
             self.get_logger().debug('初期位置の検証・補正中...', throttle_duration_sec=2.0)
             return
 
-        # (link_controller_node + sim_logger_node + comms_nodes が購読する)
-        if not getattr(self, '_logger_ready', False):
-            sub_count = self.count_subscribers(self.mission_complete_topic)
-            if sub_count < self.expected_subscribers:
-                self.get_logger().info(
-                    f'ロガー起動待機中... (mission_complete 購読者数: {sub_count}/{self.expected_subscribers})',
-                    throttle_duration_sec=2.0
-                )
-                return
-            self._logger_ready = True
-            self.get_logger().info('全ノード準備完了。車両移動を開始します。')
+        # 全ノード Ready シグナルを確認（ハンドシェイク方式）
+        if not self._all_nodes_ready:
+            self.get_logger().info(
+                '全ノード Ready 待機中... (/sim/all_ready)',
+                throttle_duration_sec=2.0
+            )
+            return
 
         if self.mission_complete:
             return
@@ -548,7 +582,7 @@ def main(args=None):
     """メインエントリポイント。"""
     rclpy.init(args=args)
 
-    node = UGVControllerNode()
+    node = TxControllerNode()
 
     try:
         rclpy.spin(node)

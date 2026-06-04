@@ -56,7 +56,7 @@ simulation:
     entity_spawn_interval: 0.5 # エンティティ間のスポーン間隔 [s]
     bridge_startup_delay: 1.0 # ブリッジ起動待機時間 [s]
     comms_node_delay: 3.0 # 通信ノード起動待機時間 [s]
-    ugv_controller_delay: 3.5 # UGVコントローラ起動待機時間 [s]
+    tx_controller_delay: 3.5 # TXコントローラ起動待機時間 [s]
 
 # -----------------------------------------------------------------------------
 # 通信シミュレータノードパラメータ (共通設定)
@@ -66,6 +66,9 @@ comms_simulator_node:
   ros__parameters:
     # 通信品質計算のサンプリングレート [Hz]
     sampling_rate: 4000.0
+
+    # パブリッシュレート [Hz]
+    publish_rate: 4000.0
 
     # AWGN分散 [dB]
     noise_variance: 0.0
@@ -116,10 +119,10 @@ comms_simulator_node:
     # logging_start_topic: "/logging/start"
 
     # -----------------------------------------------------------------------------
-    # UGVコントローラ共通パラメータ
+    # TXコントローラ共通パラメータ
     # 車両固有のウェイポイントは vehicles セクションで個別定義する
     # -----------------------------------------------------------------------------
-ugv_controller_common:
+tx_controller_common:
   # ウェイポイント到達判定距離 [m]
   waypoint_tolerance: 3.0
 

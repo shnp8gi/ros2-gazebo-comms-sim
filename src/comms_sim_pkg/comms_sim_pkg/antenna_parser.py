@@ -331,9 +331,9 @@ class AntennaPatternParser:
 
     def calculate_angles_from_orientation(
         self,
-        ugv_position: np.ndarray,
-        base_station_position: np.ndarray,
-        ugv_orientation_euler: np.ndarray
+        tx_position: np.ndarray,
+        rx_position: np.ndarray,
+        tx_orientation_euler: np.ndarray
     ) -> Tuple[float, float]:
         """後方互換API。
 
@@ -341,8 +341,8 @@ class AntennaPatternParser:
         roll/pitchは完全には反映しない。
         `calculate_antenna_frame_angles()` の使用を推奨。
         """
-        # UGVから基地局への方向ベクトル
-        direction = base_station_position - ugv_position
+        # TXから基地局への方向ベクトル
+        direction = rx_position - tx_position
 
         # XY平面での水平距離
         horizontal_dist = np.sqrt(direction[0]**2 + direction[1]**2)
@@ -353,8 +353,8 @@ class AntennaPatternParser:
         # 方位角（基地局への水平角度）
         azimuth_to_bs = np.arctan2(direction[1], direction[0])
 
-        # UGVのyawを考慮した相対方位角
-        yaw = ugv_orientation_euler[2]
+        # TXのyawを考慮した相対方位角
+        yaw = tx_orientation_euler[2]
         relative_azimuth = azimuth_to_bs - yaw
 
         # -180 ～ 180度に正規化

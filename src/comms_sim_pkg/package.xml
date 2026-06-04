@@ -6,7 +6,7 @@
   <description>
     ROS 2 Communication Simulation Package for Gazebo Harmonic.
     Simulates wireless communication quality (RSSI/Throughput) between
-    a mobile UGV and a fixed ground station using path loss models.
+    a mobile TX and a fixed rx station using path loss models.
   </description>
   
   <maintainer email="s.yagi.504@stn.nitech.ac.jp">Developer</maintainer>

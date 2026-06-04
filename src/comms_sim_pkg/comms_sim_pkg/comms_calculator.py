@@ -363,20 +363,20 @@ class CommsCalculator:
 
     def calculate_distance(
         self,
-        ugv_position: np.ndarray,
-        base_station_position: np.ndarray
+        tx_position: np.ndarray,
+        rx_position: np.ndarray
     ) -> float:
         """
         3Dユークリッド距離を計算する。
 
         Args:
-            ugv_position: UGV位置 [x, y, z]
-            base_station_position: 基地局位置 [x, y, z]
+            tx_position: TX位置 [x, y, z]
+            rx_position: 基地局位置 [x, y, z]
 
         Returns:
             距離 [m]
         """
-        return float(np.linalg.norm(ugv_position - base_station_position))
+        return float(np.linalg.norm(tx_position - rx_position))
 
     def calculate_rssi(
         self,
@@ -446,8 +446,8 @@ class CommsCalculator:
 
     def calculate_all(
         self,
-        ugv_position: np.ndarray,
-        base_station_position: np.ndarray,
+        tx_position: np.ndarray,
+        rx_position: np.ndarray,
         antenna_gain_db: float = 0.0,
         add_noise: bool = True
     ) -> dict:
@@ -455,15 +455,15 @@ class CommsCalculator:
         全通信メトリクスを一括計算する。
 
         Args:
-            ugv_position: UGV位置 [x, y, z]
-            base_station_position: 基地局位置 [x, y, z]
+            tx_position: TX位置 [x, y, z]
+            rx_position: 基地局位置 [x, y, z]
             antenna_gain_db: 合成アンテナゲイン [dBi]
             add_noise: AWGNを付加するかどうか
 
         Returns:
             全メトリクスを含む辞書
         """
-        distance = self.calculate_distance(ugv_position, base_station_position)
+        distance = self.calculate_distance(tx_position, rx_position)
         rssi, path_loss = self.calculate_rssi(distance, antenna_gain_db, add_noise)
         throughput = self.calculate_throughput(rssi)
 

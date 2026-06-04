@@ -370,19 +370,19 @@ class FeedforwardOptimalStrategy(LinkSchedulingStrategy):
         current_info = geometry_info.get(self.center_antenna_name, {})
         
         # もし指定された中心アンテナ情報に位置が含まれていなければ、他のアンテナから取得を試みる
-        if 'ugv_x' not in current_info:
+        if 'tx_x' not in current_info:
             for name in vehicle_names:
                 info = geometry_info.get(name, {})
-                if 'ugv_x' in info:
+                if 'tx_x' in info:
                     current_info = info
                     break
 
-        if 'ugv_x' not in current_info:
+        if 'tx_x' not in current_info:
             return current_active_idx, None
 
-        ux = current_info['ugv_x']
-        uy = current_info['ugv_y']
-        uz = current_info['ugv_z']
+        ux = current_info['tx_x']
+        uy = current_info['tx_y']
+        uz = current_info['tx_z']
 
         n_points = len(self.lut)
         best_idx = self._last_idx
