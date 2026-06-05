@@ -68,7 +68,7 @@ comms_simulator_node:
     sampling_rate: 4000.0
 
     # パブリッシュレート [Hz]
-    publish_rate: 4000.0
+    publish_rate: 100.0
 
     # AWGN分散 [dB]
     noise_variance: 0.0

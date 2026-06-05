@@ -34,6 +34,28 @@ struct VehicleAntenna {
   Eigen::Vector3d relative_rpy;
 };
 
+struct CommsLogRecord {
+  double time_s;
+  double vehicle_time_s;
+  std::string vehicle_name;
+  bool has_link_grant;
+  double distance_m;
+  double rssi_dBm;
+  double throughput_Gbps;
+  double total_data_MB;
+  double path_loss_dB;
+  double e_gain_dB;
+  double h_gain_dB;
+  bool comm_active;
+  double tx_x_m;
+  double tx_y_m;
+  double tx_z_m;
+  double bs_x_m;
+  double bs_y_m;
+  double bs_z_m;
+  std::string link_state;
+};
+
 class CommsSimulatorNode : public rclcpp::Node {
 public:
   CommsSimulatorNode();
@@ -54,6 +76,10 @@ private:
   bool get_current_segment_pose(double& best_px, double& best_py, double& best_yaw);
 
   static Eigen::Vector3d quat_to_rpy(double x, double y, double z, double w);
+
+  // Direct logging helper functions
+  std::string get_output_csv_path();
+  void save_log_to_csv();
 
   // Components
   AntennaPatternParser antenna_parser_;
@@ -130,6 +156,16 @@ private:
   double last_rssi_;
   double publish_rate_;
   double last_publish_time_;
+  std::optional<double> next_grid_time_;
+  int64_t step_count_ = 0;
+  std::optional<Eigen::Vector3d> last_odom_pos_;
+
+  // Logging specific members
+  std::vector<CommsLogRecord> log_records_;
+  double node_start_time_ = -1.0;
+  double vehicle_start_time_ = -1.0;
+  int logging_level_ = 1;
+  std::string config_file_path_;
 };
 
 }  // namespace comms_sim

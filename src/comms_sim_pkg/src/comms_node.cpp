@@ -6,6 +6,10 @@
 #include <fstream>
 #include <yaml-cpp/yaml.h>
 #include <ament_index_cpp/get_package_share_directory.hpp>
+#include <filesystem>
+#include <regex>
+#include <sstream>
+#include <iomanip>
 
 namespace comms_sim {
 
@@ -17,7 +21,9 @@ CommsSimulatorNode::CommsSimulatorNode()
   comm_active_(true),
   link_state_(LinkState::DISCONNECTED),
   has_link_grant_(false),
-  last_rssi_(0.0)
+  last_rssi_(0.0),
+  next_grid_time_(std::nullopt),
+  last_odom_pos_(std::nullopt)
 {
   this->declare_parameter("sampling_rate", 1.0);
   this->declare_parameter("noise_variance", 2.0);
@@ -156,8 +162,11 @@ CommsSimulatorNode::CommsSimulatorNode()
 
   // Load from YAML
   try {
-      std::string yaml_path = this->get_parameter("config_file_path").as_string();
-      YAML::Node config = YAML::LoadFile(yaml_path);
+      config_file_path_ = this->get_parameter("config_file_path").as_string();
+      YAML::Node config = YAML::LoadFile(config_file_path_);
+      if (config["simulation"]) {
+          logging_level_ = config["simulation"]["logging_level"].as<int>(1);
+      }
       if (config["vehicles"]) {
           for (auto v : config["vehicles"]) {
               bool is_match = false;
@@ -224,9 +233,9 @@ CommsSimulatorNode::CommsSimulatorNode()
       link_grant_sub_ = this->create_subscription<std_msgs::msg::Bool>(
         "/" + vehicle_name_ + "/link_grant", 10, std::bind(&CommsSimulatorNode::on_link_grant, this, std::placeholders::_1));
       link_request_pub_ = this->create_publisher<std_msgs::msg::Float64>("/" + vehicle_name_ + "/link_request", 10);
-      quality_pub_ = this->create_publisher<comms_sim_msgs::msg::CommsQuality>("/" + vehicle_name_ + "/comms/quality", 10);
+      quality_pub_ = this->create_publisher<comms_sim_msgs::msg::CommsQuality>("/" + vehicle_name_ + "/comms/quality", 1000);
   } else {
-      quality_pub_ = this->create_publisher<comms_sim_msgs::msg::CommsQuality>("/comms/quality", 10);
+      quality_pub_ = this->create_publisher<comms_sim_msgs::msg::CommsQuality>("/comms/quality", 1000);
   }
 
   // 通信ハードウェアの内部クロックを模擬:
@@ -259,7 +268,9 @@ CommsSimulatorNode::CommsSimulatorNode()
   }
 }
 
-CommsSimulatorNode::~CommsSimulatorNode() {}
+CommsSimulatorNode::~CommsSimulatorNode() {
+  save_log_to_csv();
+}
 
 Eigen::Vector3d CommsSimulatorNode::quat_to_rpy(double x, double y, double z, double w) {
   double sinr_cosp = 2.0 * (w * x + y * z);
@@ -370,17 +381,18 @@ void CommsSimulatorNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr 
           odom_offset_ = spawn - odom_pos;
       }
       odom_offset_set_ = true;
+      last_odom_pos_ = odom_pos;
   } else {
       // Validate that position did not jump suddenly (DDS residual messages from previous runs)
-      if (last_tx_pos_.has_value()) {
-          Eigen::Vector3d current_world_pos = odom_pos + odom_offset_;
-          double jump_dist = (current_world_pos - last_tx_pos_.value()).norm();
+      if (last_odom_pos_.has_value()) {
+          double jump_dist = (odom_pos - last_odom_pos_.value()).norm();
           if (jump_dist > 20.0) {
               RCLCPP_WARN(this->get_logger(), 
                   "Ignored odom message due to large position jump (%.2f m) - likely stale DDS message", jump_dist);
               return;
           }
       }
+      last_odom_pos_ = odom_pos;
   }
   tx_local_position_ = odom_pos + odom_offset_;
 
@@ -400,34 +412,62 @@ void CommsSimulatorNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr 
   }
 
   rclcpp::Time current_odom_time = msg->header.stamp;
+  double current_time_sec = current_odom_time.seconds();
+
   if (!last_odom_time_.has_value()) {
       last_odom_time_ = current_odom_time;
       last_tx_pos_ = tx_local_position_;
       last_tx_orientation_ = tx_orientation_;
+      
+      double T_s = 1.0 / sampling_rate_;
+      next_grid_time_ = std::ceil(current_time_sec / T_s) * T_s;
+      step_count_ = 0;
       return;
   }
 
-  double dt_odom = (current_odom_time - last_odom_time_.value()).seconds();
-  if (dt_odom <= 0.0) return;
+  double last_time_sec = rclcpp::Time(last_odom_time_.value()).seconds();
+  if (current_time_sec < last_time_sec - 1.0) {
+      RCLCPP_INFO(this->get_logger(), "Simulation time rewound (%.3f -> %.3f). Resetting grid and step count.", 
+          last_time_sec, current_time_sec);
+      last_odom_time_ = current_odom_time;
+      last_tx_pos_ = tx_local_position_;
+      last_tx_orientation_ = tx_orientation_;
+      
+      double T_s = 1.0 / sampling_rate_;
+      next_grid_time_ = std::ceil(current_time_sec / T_s) * T_s;
+      step_count_ = 0;
+      last_odom_pos_ = std::nullopt;
+      odom_offset_set_ = false;
+      return;
+  } else if (current_time_sec <= last_time_sec) {
+      return;
+  }
 
-  int num_steps = static_cast<int>(std::round(dt_odom * sampling_rate_));
-  if (num_steps <= 0) return;
+  double T_s = 1.0 / sampling_rate_;
+
+  if (!next_grid_time_.has_value() || next_grid_time_.value() < last_time_sec) {
+      next_grid_time_ = std::ceil(last_time_sec / T_s) * T_s;
+      step_count_ = 0;
+  }
 
   Eigen::Vector3d start_pos = last_tx_pos_.value_or(tx_local_position_.value());
   Eigen::Vector3d end_pos = tx_local_position_.value();
   Eigen::Vector3d start_ori = last_tx_orientation_.value_or(tx_orientation_.value());
   Eigen::Vector3d end_ori = tx_orientation_.value();
 
-  double step_dt = dt_odom / num_steps;
-  double base_time = last_odom_time_.value().nanoseconds() / 1e9;
+  double dt_odom = current_time_sec - last_time_sec;
 
-  for (int i = 1; i <= num_steps; ++i) {
-      double alpha = static_cast<double>(i) / num_steps;
+  while (next_grid_time_.value() <= current_time_sec + 1e-9) {
+      double t = next_grid_time_.value();
+      double alpha = (t - last_time_sec) / dt_odom;
+      alpha = std::max(0.0, std::min(1.0, alpha));
+
       Eigen::Vector3d pos = start_pos + alpha * (end_pos - start_pos);
       Eigen::Vector3d ori = start_ori + alpha * (end_ori - start_ori);
-      double current_time = base_time + alpha * dt_odom;
 
-      calculate_and_publish(pos, ori, step_dt, current_time);
+      calculate_and_publish(pos, ori, T_s, t);
+
+      next_grid_time_ = next_grid_time_.value() + T_s;
   }
 
   last_odom_time_ = current_odom_time;
@@ -576,13 +616,55 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
         }
     }
 
+    if (logging_ready_) {
+        if (node_start_time_ < 0.0) {
+            node_start_time_ = current_time;
+        }
+        if (vehicle_start_time_ < 0.0) {
+            vehicle_start_time_ = current_time;
+        }
+
+        if (logging_level_ >= 3) {
+            bool should_log = true;
+            if (logging_level_ == 3 && link_state_ != LinkState::CONNECTED) {
+                should_log = false;
+            }
+
+            if (should_log) {
+                CommsLogRecord record;
+                record.time_s = current_time - node_start_time_;
+                record.vehicle_time_s = current_time - vehicle_start_time_;
+                record.vehicle_name = vehicle_name_;
+                record.has_link_grant = local_has_link_grant;
+                record.distance_m = best_metrics.distance;
+                record.rssi_dBm = best_metrics.rssi;
+                record.throughput_Gbps = actual_throughput;
+                record.total_data_MB = total_data_transmitted_;
+                record.path_loss_dB = best_metrics.path_loss;
+                record.e_gain_dB = best_tx_total;
+                record.h_gain_dB = best_rx_total;
+                record.comm_active = comm_active_;
+                record.tx_x_m = pos.x();
+                record.tx_y_m = pos.y();
+                record.tx_z_m = pos.z();
+                record.bs_x_m = rx_nodes_[best_bs_idx].position.x();
+                record.bs_y_m = rx_nodes_[best_bs_idx].position.y();
+                record.bs_z_m = best_bs_pos.z();
+                record.link_state = link_state_ == LinkState::CONNECTED ? "CONNECTED" : (link_state_ == LinkState::ESTABLISHING ? "ESTABLISHING" : "DISCONNECTED");
+                
+                log_records_.push_back(record);
+            }
+        }
+    }
+
     bool should_publish = false;
-    if (last_publish_time_ < 0.0 || state_changed || 
-        (current_time - last_publish_time_) >= (1.0 / publish_rate_)) 
+    int publish_interval_steps = std::max(1, static_cast<int>(std::round(sampling_rate_ / publish_rate_)));
+    if (step_count_ == 0 || state_changed || (step_count_ % publish_interval_steps == 0)) 
     {
         should_publish = true;
         last_publish_time_ = current_time;
     }
+    step_count_++;
 
     if (should_publish) {
         if (link_request_pub_) {
@@ -613,6 +695,184 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
             msg.link_state = link_state_ == LinkState::CONNECTED ? "CONNECTED" : (link_state_ == LinkState::ESTABLISHING ? "ESTABLISHING" : "DISCONNECTED");
             quality_pub_->publish(msg);
         }
+    }
+}
+
+std::string CommsSimulatorNode::get_output_csv_path() {
+    std::string summary_filename = "sweep_summary.csv";
+    std::string output_subdir = "";
+    std::string output_dir = "/workspace/sim_results/";
+    double y_pos = 0.0;
+    double angle = 0.0;
+
+    try {
+        YAML::Node config = YAML::LoadFile(config_file_path_);
+        if (config["simulation"]) {
+            summary_filename = config["simulation"]["summary_filename"].as<std::string>("sweep_summary.csv");
+            output_subdir = config["simulation"]["output_subdir"].as<std::string>("");
+            output_dir = config["simulation"]["output_dir"].as<std::string>("/workspace/sim_results/");
+        }
+
+        if (config["spawn_entities"]) {
+            for (auto const& node : config["spawn_entities"]) {
+                std::string key = node.first.as<std::string>();
+                if (key.find("antenna") != std::string::npos || key.find("Antenna") != std::string::npos) {
+                    auto antenna_cfg = node.second;
+                    if (antenna_cfg["pose"]) {
+                        auto pose = antenna_cfg["pose"].as<std::vector<double>>();
+                        if (pose.size() >= 6) {
+                            y_pos = pose[1];
+                            double entity_yaw = pose[5];
+                            double entity_yaw_deg = entity_yaw * 180.0 / M_PI;
+                            double raw_yaw = 0.0;
+                            if (antenna_cfg["antenna_relative_rpy"]) {
+                                auto rel_rpy = antenna_cfg["antenna_relative_rpy"].as<std::vector<double>>();
+                                if (rel_rpy.size() >= 3) {
+                                    raw_yaw = rel_rpy[2];
+                                }
+                            }
+                            double raw_yaw_deg = raw_yaw * 180.0 / M_PI;
+                            angle = std::round(std::fmod(raw_yaw_deg + entity_yaw_deg + 180.0, 360.0) * 10.0) / 10.0;
+                            if (angle < 0) angle += 360.0;
+                        }
+                    }
+                    break;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        RCLCPP_WARN(this->get_logger(), "get_output_csv_path: Failed to parse YAML config: %s", e.what());
+    }
+
+    // Yポーズと角度の文字列表現
+    std::ostringstream y_ss;
+    y_ss << std::round(y_pos * 100.0) / 100.0;
+    std::string y_str = y_ss.str();
+
+    std::ostringstream a_ss;
+    a_ss << angle;
+    std::string angle_str = a_ss.str();
+
+    // パス構築
+    std::string run_dir = "";
+    std::regex sweep_regex("sweep_summary_(\\d{8}_\\d{6})_run(\\d+)");
+    std::smatch sweep_match;
+
+    // パスの末尾のスラッシュ等調整
+    if (!output_dir.empty() && output_dir.back() == '/') {
+        output_dir.pop_back();
+    }
+
+    if (std::regex_search(summary_filename, sweep_match, sweep_regex)) {
+        std::string sweep_timestamp = sweep_match[1].str();
+        int run_idx = std::stoi(sweep_match[2].str());
+        char run_name_buf[128];
+        std::snprintf(run_name_buf, sizeof(run_name_buf), "run_%03d_y%s_a%s", run_idx, y_str.c_str(), angle_str.c_str());
+        run_dir = output_dir + "/sweep_" + sweep_timestamp + "/runs/" + run_name_buf;
+    } else {
+        int run_idx = -1;
+        std::regex run_regex("run(\\d+)");
+        std::smatch run_match;
+        if (std::regex_search(summary_filename, run_match, run_regex)) {
+            run_idx = std::stoi(run_match[1].str());
+        }
+
+        char run_name_buf[128];
+        if (run_idx >= 0) {
+            std::snprintf(run_name_buf, sizeof(run_name_buf), "run_%03d_y%s_a%s", run_idx, y_str.c_str(), angle_str.c_str());
+        } else {
+            std::snprintf(run_name_buf, sizeof(run_name_buf), "run_fallback");
+        }
+
+        if (!output_subdir.empty()) {
+            run_dir = output_dir + "/" + output_subdir + "/runs/" + run_name_buf;
+        } else {
+            run_dir = output_dir + "/" + run_name_buf;
+        }
+    }
+
+    std::string suffix = (logging_level_ == 3) ? "_connected.csv" : "_full.csv";
+    return run_dir + "/comms/" + vehicle_name_ + suffix;
+}
+
+void CommsSimulatorNode::save_log_to_csv() {
+    if (logging_level_ < 3 || log_records_.empty()) {
+        return;
+    }
+
+    std::string csv_path = get_output_csv_path();
+    RCLCPP_INFO(this->get_logger(), "Saving %zu log records to CSV: %s", log_records_.size(), csv_path.c_str());
+
+    try {
+        std::filesystem::path p(csv_path);
+        std::filesystem::create_directories(p.parent_path());
+
+        std::ofstream file(csv_path);
+        if (!file.is_open()) {
+            RCLCPP_ERROR(this->get_logger(), "Failed to open CSV file for writing: %s", csv_path.c_str());
+            return;
+        }
+
+        // CSV ヘッダー
+        if (logging_level_ == 3) {
+            file << "time_s,vehicle_name,distance_m,rssi_dBm,throughput_Gbps,total_data_MB,"
+                 << "path_loss_dB,e_gain_dB,h_gain_dB,tx_x_m,tx_y_m,tx_z_m,bs_x_m,bs_y_m,bs_z_m\n";
+        } else {
+            file << "time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,"
+                 << "throughput_Gbps,total_data_MB,path_loss_dB,e_gain_dB,h_gain_dB,comm_active,"
+                 << "tx_x_m,tx_y_m,tx_z_m,bs_x_m,bs_y_m,bs_z_m,link_state\n";
+        }
+
+        // データ書き出し
+        file << std::fixed << std::setprecision(6);
+        for (const auto& rec : log_records_) {
+            if (logging_level_ == 3) {
+                file << rec.time_s << ","
+                     << rec.vehicle_name << ","
+                     << rec.distance_m << ","
+                     << rec.rssi_dBm << ","
+                     << rec.throughput_Gbps << ","
+                     << rec.total_data_MB << ","
+                     << rec.path_loss_dB << ","
+                     << rec.e_gain_dB << ","
+                     << rec.h_gain_dB << ","
+                     << rec.tx_x_m << ","
+                     << rec.tx_y_m << ","
+                     << rec.tx_z_m << ","
+                     << rec.bs_x_m << ","
+                     << rec.bs_y_m << ","
+                     << rec.bs_z_m << "\n";
+            } else {
+                file << rec.time_s << ","
+                     << rec.vehicle_time_s << ","
+                     << rec.vehicle_name << ","
+                     << (rec.has_link_grant ? "True" : "False") << ","
+                     << rec.distance_m << ","
+                     << rec.rssi_dBm << ","
+                     << rec.throughput_Gbps << ","
+                     << rec.total_data_MB << ","
+                     << rec.path_loss_dB << ","
+                     << rec.e_gain_dB << ","
+                     << rec.h_gain_dB << ","
+                     << (rec.comm_active ? "True" : "False") << ","
+                     << rec.tx_x_m << ","
+                     << rec.tx_y_m << ","
+                     << rec.tx_z_m << ","
+                     << rec.bs_x_m << ","
+                     << rec.bs_y_m << ","
+                     << rec.bs_z_m << ","
+                     << rec.link_state << "\n";
+            }
+        }
+        file.close();
+
+        try {
+            std::filesystem::permissions(csv_path, std::filesystem::perms::all);
+        } catch(...) {}
+
+        RCLCPP_INFO(this->get_logger(), "Successfully saved logs to %s", csv_path.c_str());
+    } catch (const std::exception& e) {
+        RCLCPP_ERROR(this->get_logger(), "Exception while saving logs to CSV: %s", e.what());
     }
 }
 

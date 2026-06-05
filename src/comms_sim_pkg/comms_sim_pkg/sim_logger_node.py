@@ -228,29 +228,29 @@ class SimLoggerNode(Node):
             self.event_writer.writeheader()
             self._set_file_ownership(event_path)
             
-        # Level 3/4: 時系列ログ用
+        # Level 3/4: 時系列ログ用 (C++側が直接出力するため、Python側では無効化)
         self.ts_files = {}
         self.ts_writers = {}
-        if self.logging_level >= 3:
-            suffix = 'connected' if self.logging_level == 3 else 'full'
-            for vn in self.vehicle_names:
-                path = os.path.join(comms_dir, f'{vn}_{suffix}.csv')
-                f = open(path, 'w', newline='', encoding='utf-8')
-                self.ts_files[vn] = f
-                
-                if self.logging_level == 3:
-                    fields = ['time_s', 'vehicle_name', 'distance_m', 'rssi_dBm', 'throughput_Gbps', 
-                              'total_data_MB', 'path_loss_dB', 'e_gain_dB', 'h_gain_dB',
-                              'tx_x_m', 'tx_y_m', 'tx_z_m', 'bs_x_m', 'bs_y_m', 'bs_z_m']
-                else: # Level 4
-                    fields = ['time_s', 'vehicle_time_s', 'vehicle_name', 'has_link_grant', 'distance_m', 
-                              'rssi_dBm', 'throughput_Gbps', 'total_data_MB', 'path_loss_dB', 'e_gain_dB', 
-                              'h_gain_dB', 'comm_active', 'tx_x_m', 'tx_y_m', 'tx_z_m', 
-                              'bs_x_m', 'bs_y_m', 'bs_z_m', 'link_state']
-                
-                self.ts_writers[vn] = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
-                self.ts_writers[vn].writeheader()
-                self._set_file_ownership(path)
+        # if self.logging_level >= 3:
+        #     suffix = 'connected' if self.logging_level == 3 else 'full'
+        #     for vn in self.vehicle_names:
+        #         path = os.path.join(comms_dir, f'{vn}_{suffix}.csv')
+        #         f = open(path, 'w', newline='', encoding='utf-8')
+        #         self.ts_files[vn] = f
+        #         
+        #         if self.logging_level == 3:
+        #             fields = ['time_s', 'vehicle_name', 'distance_m', 'rssi_dBm', 'throughput_Gbps', 
+        #                       'total_data_MB', 'path_loss_dB', 'e_gain_dB', 'h_gain_dB',
+        #                       'tx_x_m', 'tx_y_m', 'tx_z_m', 'bs_x_m', 'bs_y_m', 'bs_z_m']
+        #         else: # Level 4
+        #             fields = ['time_s', 'vehicle_time_s', 'vehicle_name', 'has_link_grant', 'distance_m', 
+        #                       'rssi_dBm', 'throughput_Gbps', 'total_data_MB', 'path_loss_dB', 'e_gain_dB', 
+        #                       'h_gain_dB', 'comm_active', 'tx_x_m', 'tx_y_m', 'tx_z_m', 
+        #                       'bs_x_m', 'bs_y_m', 'bs_z_m', 'link_state']
+        #         
+        #         self.ts_writers[vn] = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
+        #         self.ts_writers[vn].writeheader()
+        #         self._set_file_ownership(path)
 
         # 状態保持
         self.ts_buffers = {vn: [] for vn in self.vehicle_names}
@@ -276,7 +276,7 @@ class SimLoggerNode(Node):
         for name in self.vehicle_names:
             sub_grant = self.create_subscription(Bool, f'/{name}/link_grant', lambda msg, vn=name: self._on_link_grant(vn, msg), 10)
             self._grant_subs.append(sub_grant)
-            sub_quality = self.create_subscription(CommsQuality, f'/{name}/comms/quality', lambda msg, vn=name: self._on_quality(vn, msg), 10)
+            sub_quality = self.create_subscription(CommsQuality, f'/{name}/comms/quality', lambda msg, vn=name: self._on_quality(vn, msg), 1000)
             self._quality_subs.append(sub_quality)
 
         for name in self.base_vehicle_names:
@@ -392,36 +392,36 @@ class SimLoggerNode(Node):
                 self.last_state[vehicle_name]['link_state'] = msg.link_state
                 self.last_state[vehicle_name]['has_link_grant'] = has_grant
 
-        # --- Level 3 / 4: 時系列データの記録 ---
-        if self.logging_level >= 3:
-            if self.logging_level == 3 and msg.link_state != 'CONNECTED':
-                pass # Level 3 は CONNECTED のみ記録
-            else:
-                row = {
-                    'time_s': elapsed,
-                    'vehicle_name': vehicle_name,
-                    'distance_m': msg.distance,
-                    'rssi_dBm': msg.rssi,
-                    'throughput_Gbps': msg.throughput,
-                    'total_data_MB': msg.total_data_transmitted,
-                    'path_loss_dB': msg.path_loss,
-                    'e_gain_dB': msg.antenna_gain_e_plane,
-                    'h_gain_dB': msg.antenna_gain_h_plane,
-                    'tx_x_m': msg.tx_x,
-                    'tx_y_m': msg.tx_y,
-                    'tx_z_m': msg.tx_z,
-                    'bs_x_m': msg.rx_x,
-                    'bs_y_m': msg.rx_y,
-                    'bs_z_m': msg.rx_z
-                }
-                if self.logging_level >= 4:
-                    row.update({
-                        'vehicle_time_s': vehicle_elapsed,
-                        'has_link_grant': has_grant,
-                        'comm_active': msg.comm_active,
-                        'link_state': msg.link_state
-                    })
-                self.ts_buffers[vehicle_name].append(row)
+        # --- Level 3 / 4: 時系列データの記録 (C++側が直接出力するため、Python側では無効化)
+        # if self.logging_level >= 3:
+        #     if self.logging_level == 3 and msg.link_state != 'CONNECTED':
+        #         pass # Level 3 は CONNECTED のみ記録
+        #     else:
+        #         row = {
+        #             'time_s': elapsed,
+        #             'vehicle_name': vehicle_name,
+        #             'distance_m': msg.distance,
+        #             'rssi_dBm': msg.rssi,
+        #             'throughput_Gbps': msg.throughput,
+        #             'total_data_MB': msg.total_data_transmitted,
+        #             'path_loss_dB': msg.path_loss,
+        #             'e_gain_dB': msg.antenna_gain_e_plane,
+        #             'h_gain_dB': msg.antenna_gain_h_plane,
+        #             'tx_x_m': msg.tx_x,
+        #             'tx_y_m': msg.tx_y,
+        #             'tx_z_m': msg.tx_z,
+        #             'bs_x_m': msg.rx_x,
+        #             'bs_y_m': msg.rx_y,
+        #             'bs_z_m': msg.rx_z
+        #         }
+        #         if self.logging_level >= 4:
+        #             row.update({
+        #                 'vehicle_time_s': vehicle_elapsed,
+        #                 'has_link_grant': has_grant,
+        #                 'comm_active': msg.comm_active,
+        #                 'link_state': msg.link_state
+        #             })
+        #         self.ts_buffers[vehicle_name].append(row)
 
     def save_summary_and_close(self):
         if getattr(self, '_summary_saved', False):
@@ -431,11 +431,11 @@ class SimLoggerNode(Node):
         # 終了処理 (ファイルを閉じる)
         if self.event_file:
             self.event_file.close()
-        for vn, f in self.ts_files.items():
-            if vn in self.ts_buffers and self.ts_buffers[vn]:
-                self.ts_writers[vn].writerows(self.ts_buffers[vn])
-                self.ts_buffers[vn].clear()
-            f.close()
+        # for vn, f in self.ts_files.items():
+        #     if vn in self.ts_buffers and self.ts_buffers[vn]:
+        #         self.ts_writers[vn].writerows(self.ts_buffers[vn])
+        #         self.ts_buffers[vn].clear()
+        #     f.close()
 
         if self.output_subdir:
             summary_path = os.path.join(self.output_dir, self.output_subdir, self.summary_filename)
