@@ -480,13 +480,22 @@ class SimLoggerNode(Node):
                 shinkansen_vns = [vn for vn in self.vehicle_names if 'shinkansen' in vn]
                 if len(shinkansen_vns) >= 3:
                     total_data = sum(self.summary_stats[vn]['total_data'] for vn in shinkansen_vns)
+                    total_connected_time = sum(self.summary_stats[vn]['connected_time'] for vn in shinkansen_vns)
+                    total_connected_count = sum(self.summary_stats[vn]['connected_count'] for vn in shinkansen_vns)
+                    total_tp_sum = sum(self.summary_stats[vn]['tp_sum'] for vn in shinkansen_vns)
+                    total_rssi_sum = sum(self.summary_stats[vn]['rssi_sum'] for vn in shinkansen_vns)
+                    total_handover_count = sum(self.summary_stats[vn]['handover_count'] for vn in shinkansen_vns)
 
                     writer.writerow({
                         'run_id': self.timestamp,
                         'y_position': self.y_pos,
                         'antenna_angle': self.angle,
                         'vehicle_name': 'shinkansen_total',
-                        'total_data_MB': round(total_data, 3)
+                        'total_data_MB': round(total_data, 3),
+                        'connected_time_s': round(total_connected_time, 3),
+                        'average_throughput_Gbps': round(total_tp_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
+                        'average_rssi_dBm': round(total_rssi_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
+                        'handover_count': total_handover_count
                     })
             self.get_logger().info(f'サマリー結果を追記しました: {summary_path}')
         except Exception as e:
