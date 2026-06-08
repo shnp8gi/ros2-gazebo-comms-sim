@@ -373,13 +373,16 @@ class SimLoggerNode(Node):
             stats['connected_count'] += 1
             stats['connected_time'] += dt
 
-        # --- Level 2: イベントの記録 ---
-        if self.logging_level >= 2:
-            prev_state = self.last_state[vehicle_name]
-            # Handover判定 (Grantが付与/剥奪された) または LinkStateが変化した
-            if prev_state['link_state'] != msg.link_state or prev_state['has_link_grant'] != has_grant:
-                if prev_state['link_state'] == 'DISCONNECTED' and msg.link_state == 'CONNECTED':
-                    stats['handover_count'] += 1 # 接続確立をハンドオーバーとみなすか？ 一旦カウントする
+        # --- Handover判定 & 状態更新 (常に実行) ---
+        prev_state = self.last_state[vehicle_name]
+        state_changed = (prev_state['link_state'] != msg.link_state or prev_state['has_link_grant'] != has_grant)
+
+        if state_changed:
+            if prev_state['link_state'] != 'CONNECTED' and msg.link_state == 'CONNECTED':
+                stats['handover_count'] += 1
+
+            # --- Level 2: イベントの記録 ---
+            if self.logging_level >= 2 and self.event_writer is not None:
                 self.event_writer.writerow({
                     'time_s': elapsed,
                     'vehicle_name': vehicle_name,
@@ -389,8 +392,9 @@ class SimLoggerNode(Node):
                     'distance_m': msg.distance
                 })
                 self.event_file.flush()
-                self.last_state[vehicle_name]['link_state'] = msg.link_state
-                self.last_state[vehicle_name]['has_link_grant'] = has_grant
+
+            self.last_state[vehicle_name]['link_state'] = msg.link_state
+            self.last_state[vehicle_name]['has_link_grant'] = has_grant
 
         # --- Level 3 / 4: 時系列データの記録 (C++側が直接出力するため、Python側では無効化)
         # if self.logging_level >= 3:
