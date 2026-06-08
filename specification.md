@@ -15,8 +15,10 @@
 | 2026/05/01 | ver 6.0    | DockerでのNVIDIA GPUアクセラレーション対応、幾何学スコアや推定受信電力（physical_score_priority）に基づくスケジューリングポリシーの追加、切断時のプロアクティブハンドオーバー機能実装、および高速走行時のスリップ防止用加速度制限制御の追加 |
 | 2026/05/15 | ver 7.0    | カスタムモデルの追加要件（SDF記述ルール）の明文化、タイヤの空転による誤差を排除するGround Truthオドメトリ（`OdometryPublisher`）の採用、`VelocityControl`を用いた物理干渉なしの厳密な加速度制御の導入、複数アンテナ搭載時のロギング終了判定の修正、およびGazebo初期化時の座標ズレを自動修正する「初期位置検証・自己補正機能」の追加 |
 | 2026/05/21 | ver 8.0    | nominal RSSIヒートマップ事前計算に基づく車載アンテナのフィードフォワード制御ポリシー（`feedforward_optimal`）の追加、ロギングレベル5（ヒートマップ出力＋制御ログ）の導入、およびログ保存ディレクトリの3階層フォルダリング（`comms/`, `control/`, `heatmap/`）によるカプセル化（可視性向上）の実装 |
+| 2026/06/08 | ver 9.0    | メインローブフィルタリング機能の追加（ROSパラメータ `filter_main_lobe` およびアンテナ境界設定による足切り制御）、C++およびPythonのアンテナパーサーへのヌル点自動検出とメインローブ判定の移植、ならびに事前ヒートマップ（LUT）生成への連動を実装 |
 
 ---
+
 
 ## 1. プロジェクト概要
 
@@ -219,6 +221,13 @@ ros2-gazebo-comms-sim/
 | **アンテナゲイン** | **CSVファイル**（E面/H面ゲイン）を参照。アンテナ座標系に変換した方向ベクトルから、E面（仰角）/H面（方位角）ゲインを線形補間して取得する。                           |
 | **スループット**   | **MCSテーブル（CSV）を参照し、ステップ関数により決定**。（6.4.項を参照）                                                                                            |
 | **拡張性**         | 伝搬路モデルの計算ロジックは、**Strategyパターン**を適用し、将来のNLOS/反射波モデルへの差し替えを容易にする。                                                       |
+| **メインローブ判定** | 基地局から見た車両（TX）アンテナのオフボアサイト角（仰角・方位角）を算出し、アンテナパターンの第1ヌル点（マージン適用後）の範囲外であれば `in_main_lobe` フラグを `false` に設定。制御層（リンク権の割り当てや事前ヒートマップLUT作成）でこのフラグに基づく足切り（フィルタリング）が可能。 |
+
+#### 6.3.2 メインローブ境界の決定と足切り
+
+* **境界の自動検出**: アンテナパターンCSV（E面/H面）のピーク（0°）からスキャンし、ゲインがピークから -3dB 低下する角度（HPBW）を検出し、さらに外側にある最初の局所最小値（ヌル点） $\theta_{null}$ を検出します。メインローブの境界角度は $\theta_{main} = \theta_{null} - \delta$ （$\delta$ はマージン `mainlobe_angle_margin_deg`）と定義されます。
+* **フィルタリング**: `filter_main_lobe: true` が設定されている場合、`in_main_lobe` が `false` であるアンテナはリンク切替やプロアクティブハンドオーバーの候補から即座に除外され、事前ヒートマップのLUT作成時にはその座標におけるRSSIを極小値に設定して除外します。
+
 
 ### 6.4. スループット決定方式
 
@@ -340,7 +349,11 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 | `h_plane_path`                      | string         | `/workspace/config/h_plane.csv`               | H面ゲインCSVファイルへのパス。                                 |
 | `comm_data_limit_mb`                | float          | -1.0                                          | 通信データ量の上限 [Mb]。`-1.0`で無制限。                      |
 | `max_antenna_attenuation`           | float          | 30.0                                          | ゲイン低下時の最大減衰量クランプ値 [dB]。                      |
+| `mainlobe_angle_margin_deg`         | float          | 5.0                                           | メインローブの第1ヌル点からの境界角マージン [deg]。             |
+| `mainlobe_e_half_angle_deg`         | float          | -1.0                                          | E面メインローブ半値角の手動指定 [deg] (-1.0 で自動検出)。       |
+| `mainlobe_h_half_angle_deg`         | float          | -1.0                                          | H面メインローブ半値角の手動指定 [deg] (-1.0 で自動検出)。       |
 | `logging_start_trigger`             | string         | `on_movement`                                 | ログ記録開始条件 (`immediate`, `on_movement`, `on_topic`)。    |
+
 | `rx_position`             | list [x, y, z] | `spawn_entities.antenna.pose[0:3]`            | 基地局のワールド座標（スポーン設定から取得して起動時に反映）。 |
 | `rx_antenna_offset`       | list [x, y, z] | `[0.0, 0.0, 3.0]`                             | 基地局モデル原点からのアンテナ位置オフセット [m]。             |
 | `tx_spawn_pose`                    | list [x, y, z] | `spawn_entities.suv.pose[0:3]`                | TXスポーンワールド座標（/odom → ワールド補正に使用）。        |
@@ -360,6 +373,11 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 | `beam_gain_threshold`  | float  | 5.0                       | 幾何学ベースポリシー時のアンテナゲイン足切り閾値 [dBi]。                 |
 | `weight_distance`      | float  | 0.7                       | `geometric_weighted` ポリシー時の距離の重み係数。                        |
 | `weight_angle`         | float  | 0.3                       | `geometric_weighted` ポリシー時の角度の重み係数。                        |
+| `filter_main_lobe`     | bool   | true                      | スケジューリングおよびヒートマップ作成時にメインローブ外の候補を足切りするか。 |
+| `mainlobe_angle_margin_deg` | float | 5.0                   | ヒートマップ作成時のメインローブ境界マージン [deg]。                     |
+| `mainlobe_e_half_angle_deg` | float | -1.0                  | ヒートマップ作成時のE面メインローブ半値角 [deg] (-1.0 で自動検出)。      |
+| `mainlobe_h_half_angle_deg` | float | -1.0                  | ヒートマップ作成時のH面メインローブ半値角 [deg] (-1.0 で自動検出)。      |
+
 
 #### パスロスモデルパラメータ
 
@@ -438,9 +456,13 @@ tx_controller_node:
 | `e_gain_dB` | [dBi] | E面アンテナゲイン |
 | `h_gain_dB` | [dBi] | H面アンテナゲイン |
 | `comm_active` | bool | 通信可否フラグ（`full.csv`のみ） |
+| `in_main_lobe` | bool | メインローブ判定フラグ |
+| `off_boresight_e_deg` | [deg] | E面オフボアサイト角度 |
+| `off_boresight_h_deg` | [deg] | H面オフボアサイト角度 |
 | `tx_x_m`, `tx_y_m`, `tx_z_m` | [m] | TXアンテナ位置座標 |
 | `bs_x_m`, `bs_y_m`, `bs_z_m` | [m] | 基地局アンテナ位置座標 |
 | `link_state` | - | リンク状態 (`DISCONNECTED` / `ESTABLISHING` / `CONNECTED`、`full.csv`のみ) |
+
 
 #### 2. イベントCSV (`control/events.csv`)
 
@@ -589,6 +611,7 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 
 ---
 
-**Document Version**: 8.0<br>
-**Last Updated**: 2026年05月21日<br>
+**Document Version**: 9.0<br>
+**Last Updated**: 2026年06月08日<br>
 **Status**: Active Development
+

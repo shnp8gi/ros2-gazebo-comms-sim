@@ -31,17 +31,13 @@ class AntennaPatternParser:
         self,
         e_plane_path: Optional[str] = None,
         h_plane_path: Optional[str] = None,
-        max_antenna_attenuation: float = 30.0
+        max_antenna_attenuation: float = 30.0,
+        mainlobe_angle_margin_deg: float = 5.0,
+        mainlobe_e_half_angle_override_deg: float = -1.0,
+        mainlobe_h_half_angle_override_deg: float = -1.0
     ) -> None:
         """
         アンテナパターン解析クラスを初期化する。
-
-        Args:
-            e_plane_path: E面ゲインCSVファイルのパス
-            h_plane_path: H面ゲインCSVファイルのパス
-            max_antenna_attenuation: 各面の最大減衰量 [dB]。
-                パターン範囲外等で極端に低いゲイン値が得られた場合に
-                減衰をこの値でクランプする。旧C++実装と同等。
         """
         self.e_plane_interp: Optional[interp1d] = None
         self.h_plane_interp: Optional[interp1d] = None
@@ -53,10 +49,17 @@ class AntennaPatternParser:
         self.h_plane_peak: float = 0.0
         self.max_antenna_attenuation: float = max_antenna_attenuation
 
+        self.mainlobe_angle_margin_deg = mainlobe_angle_margin_deg
+        self.mainlobe_e_half_angle_override_deg = mainlobe_e_half_angle_override_deg
+        self.mainlobe_h_half_angle_override_deg = mainlobe_h_half_angle_override_deg
+        self.e_mainlobe_half_angle: float = 0.0
+        self.h_mainlobe_half_angle: float = 0.0
+
         if e_plane_path:
             self.load_e_plane(e_plane_path)
         if h_plane_path:
             self.load_h_plane(h_plane_path)
+
 
     def _load_pattern(self, filepath: str) -> Tuple[np.ndarray, np.ndarray, float]:
         """
@@ -141,6 +144,11 @@ class AntennaPatternParser:
             bounds_error=False,
             fill_value=-1000.0
         )
+        if self.mainlobe_e_half_angle_override_deg > 0.0:
+            self.e_mainlobe_half_angle = self.mainlobe_e_half_angle_override_deg
+        else:
+            null_ang = self.detect_first_null_angle(angles, gains)
+            self.e_mainlobe_half_angle = max(0.0, null_ang - self.mainlobe_angle_margin_deg)
 
     def load_h_plane(self, filepath: str) -> None:
         """
@@ -160,6 +168,12 @@ class AntennaPatternParser:
             bounds_error=False,
             fill_value=-1000.0
         )
+        if self.mainlobe_h_half_angle_override_deg > 0.0:
+            self.h_mainlobe_half_angle = self.mainlobe_h_half_angle_override_deg
+        else:
+            null_ang = self.detect_first_null_angle(angles, gains)
+            self.h_mainlobe_half_angle = max(0.0, null_ang - self.mainlobe_angle_margin_deg)
+
 
     def get_e_plane_gain(self, angle_deg: float) -> float:
         """
@@ -368,3 +382,33 @@ class AntennaPatternParser:
             azimuth_deg += 360
 
         return elevation_deg, azimuth_deg
+
+    def is_in_main_lobe(self, elevation_deg: float, azimuth_deg: float) -> bool:
+        abs_el = abs(elevation_deg)
+        abs_az = abs(azimuth_deg)
+        return (abs_el <= self.e_mainlobe_half_angle) and (abs_az <= self.h_mainlobe_half_angle)
+
+    def detect_first_null_angle(self, angles: np.ndarray, gains: np.ndarray) -> float:
+        if len(angles) == 0 or len(gains) == 0:
+            return 0.0
+        
+        # 0.0 (ボアサイト) に最も近いインデックスを探す
+        center_idx = int(np.argmin(np.abs(angles)))
+        peak_gain = gains[center_idx]
+
+        # ピークから 3dB 落ちる最初のインデックス (正の角度側)
+        hpbw_idx = center_idx
+        for i in range(center_idx, len(angles)):
+            if gains[i] <= peak_gain - 3.0:
+                hpbw_idx = i
+                break
+
+        # さらに外側で、最初の極小値 (null) を探す
+        null_idx = hpbw_idx
+        for i in range(hpbw_idx + 1, len(angles) - 1):
+            if gains[i] < gains[i - 1] and gains[i] < gains[i + 1]:
+                null_idx = i
+                break
+
+        return float(abs(angles[null_idx]))
+

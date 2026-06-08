@@ -221,6 +221,11 @@ class LinkControllerNode(Node):
         self.declare_parameter('run_timestamp', '')
         self.declare_parameter('config_file_path', resolve_path('/workspace/config/sim_params.yaml'))
         self.declare_parameter('output_subdir', '')
+        self.declare_parameter('filter_main_lobe', True)
+        self.declare_parameter('mainlobe_angle_margin_deg', 5.0)
+        self.declare_parameter('mainlobe_e_half_angle_deg', -1.0)
+        self.declare_parameter('mainlobe_h_half_angle_deg', -1.0)
+
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -268,6 +273,19 @@ class LinkControllerNode(Node):
         self.output_subdir: str = str(
             self.get_parameter('output_subdir').value
         )
+        self.filter_main_lobe: bool = bool(
+            self.get_parameter('filter_main_lobe').value
+        )
+        self.mainlobe_angle_margin_deg: float = float(
+            self.get_parameter('mainlobe_angle_margin_deg').value
+        )
+        self.mainlobe_e_half_angle_deg: float = float(
+            self.get_parameter('mainlobe_e_half_angle_deg').value
+        )
+        self.mainlobe_h_half_angle_deg: float = float(
+            self.get_parameter('mainlobe_h_half_angle_deg').value
+        )
+
 
         # 車両名リストのパース
         if isinstance(vehicle_names_raw, list):
@@ -459,8 +477,12 @@ class LinkControllerNode(Node):
                 parser = AntennaPatternParser(
                     e_plane_path=e_plane_path,
                     h_plane_path=h_plane_path,
-                    max_antenna_attenuation=max_att
+                    max_antenna_attenuation=max_att,
+                    mainlobe_angle_margin_deg=self.mainlobe_angle_margin_deg,
+                    mainlobe_e_half_angle_override_deg=self.mainlobe_e_half_angle_deg,
+                    mainlobe_h_half_angle_override_deg=self.mainlobe_h_half_angle_deg
                 )
+
                 
                 pl_params = comms_params.get('path_loss', {})
                 c = float(pl_params.get('c', 299792458.0))
@@ -485,17 +507,18 @@ class LinkControllerNode(Node):
                 )
                 
                 heatmap_rows = []
+                last_optimal_antenna = None
                 for pt, yaw in samples:
                     tx_orientation = np.array([0.0, 0.0, yaw])
                     
-                    max_rssi = float('-inf')
-                    optimal_antenna = None
                     row = {
                         'x_m': round(pt[0], 4),
                         'y_m': round(pt[1], 4),
                         'z_m': round(pt[2], 4),
                         'yaw_rad': round(yaw, 4)
                     }
+                    
+                    rssi_dict = {}
                     
                     # Rotate vehicle antenna offset by vehicle's orientation
                     R_veh = parser._rpy_to_rotmat(tx_orientation[0], tx_orientation[1], tx_orientation[2])
@@ -515,19 +538,53 @@ class LinkControllerNode(Node):
                             )
                             antenna_gain_db = float(tx_total + rx_total)
                             
-                            metrics = calculator.calculate_all(
-                                tx_antenna_pos,
-                                bs_antenna_pos,
-                                antenna_gain_db=antenna_gain_db,
-                                add_noise=False
-                            )
-                            rssi = metrics['rssi']
+                            in_main = True
+                            if self.filter_main_lobe:
+                                tx_el, tx_az = parser.calculate_antenna_frame_angles(bs_antenna_pos, tx_antenna_pos, bs_ant_rpy)
+                                rx_el, rx_az = parser.calculate_antenna_frame_angles(tx_antenna_pos, bs_antenna_pos, tx_ant_rpy)
+                                tx_in = parser.is_in_main_lobe(np.degrees(abs(tx_el)), np.degrees(abs(tx_az)))
+                                rx_in = parser.is_in_main_lobe(np.degrees(abs(rx_el)), np.degrees(abs(rx_az)))
+                                if not (tx_in and rx_in):
+                                    in_main = False
+
+                            if in_main:
+                                metrics = calculator.calculate_all(
+                                    tx_antenna_pos,
+                                    bs_antenna_pos,
+                                    antenna_gain_db=antenna_gain_db,
+                                    add_noise=False
+                                )
+                                rssi = metrics['rssi']
+                            else:
+                                rssi = -999.0
+
                             col_name = f"rssi_{bs['name']}_{va['name']}"
                             row[col_name] = round(rssi, 2)
                             
-                            if rssi > max_rssi:
-                                max_rssi = rssi
-                                optimal_antenna = va['name']
+                            # Track the best RSSI for each UGV antenna across all base stations
+                            va_name = va['name']
+                            if va_name not in rssi_dict or rssi > rssi_dict[va_name]:
+                                rssi_dict[va_name] = rssi
+
+                    # Determine optimal antenna at this point using hysteresis/memory
+                    best_antenna = max(rssi_dict, key=rssi_dict.get)
+                    max_rssi = rssi_dict[best_antenna]
+                    
+                    optimal_antenna = None
+                    if last_optimal_antenna is None:
+                        optimal_antenna = best_antenna
+                        last_optimal_antenna = best_antenna
+                    else:
+                        last_rssi = rssi_dict.get(last_optimal_antenna, -999.0)
+                        margin_db = 1.0
+                        # Switch only if the new candidate is significantly better
+                        # OR if the last optimal antenna has fallen out of main lobe and the new one is in the main lobe
+                        if (max_rssi > last_rssi + margin_db) or (last_rssi <= -900.0 and max_rssi > -900.0):
+                            optimal_antenna = best_antenna
+                            last_optimal_antenna = best_antenna
+                        else:
+                            optimal_antenna = last_optimal_antenna
+                            max_rssi = last_rssi
                                 
                     row['optimal_antenna'] = optimal_antenna
                     row['max_rssi'] = round(max_rssi, 2)
@@ -599,14 +656,16 @@ class LinkControllerNode(Node):
         elif self.scheduling_policy == 'rssi_priority':
             self.strategy = RssiPriorityStrategy()
         elif self.scheduling_policy == 'geometric_beam_priority':
-            self.strategy = GeometricBeamPriorityStrategy(self.beam_gain_threshold)
+            self.strategy = GeometricBeamPriorityStrategy(self.beam_gain_threshold, self.filter_main_lobe)
         elif self.scheduling_policy == 'physical_score_priority':
             self.strategy = PhysicalScorePriorityStrategy(
                 self.beam_gain_threshold,
                 self.min_hold_time_s,
                 self.switch_margin_db,
-                self.proactive_handover_score_threshold
+                self.proactive_handover_score_threshold,
+                self.filter_main_lobe
             )
+
         elif self.scheduling_policy == 'geometric_weighted':
             self.strategy = GeometricWeightedStrategy(self.weight_distance, self.weight_angle)
         elif self.scheduling_policy == 'feedforward_optimal':
@@ -654,10 +713,14 @@ class LinkControllerNode(Node):
             'comm_active': msg.comm_active,
             'link_state': msg.link_state,
             'rssi': msg.rssi,
+            'in_main_lobe': msg.in_main_lobe,
+            'off_boresight_e_deg': msg.off_boresight_e_deg,
+            'off_boresight_h_deg': msg.off_boresight_h_deg,
             'tx_x': msg.tx_x,
             'tx_y': msg.tx_y,
             'tx_z': msg.tx_z
         }
+
         
         # すべてのアンテナデータが一度揃ったら、基準アンテナ受信時にのみスケジューリングを実行して無駄な多重実行を防止する。
         # 揃う前は、全てのアンテナデータが集まった瞬間に一度実行する。
@@ -722,7 +785,7 @@ class LinkControllerNode(Node):
         grace_period_passed = (current_time - self._last_grant_change_time) > self.proactive_grace_period_s
         hold_time_passed = (current_time - self._last_grant_change_time) >= self.min_hold_time_s
 
-        if active_link_state == 'DISCONNECTED' and active_info and grace_period_passed and hold_time_passed:
+        if self.scheduling_policy != 'feedforward_optimal' and active_link_state == 'DISCONNECTED' and active_info and grace_period_passed and hold_time_passed:
             best_score = float('-inf')
             best_idx = None
             for i, name in enumerate(self.vehicle_names):
@@ -731,6 +794,9 @@ class LinkControllerNode(Node):
                 info = self._geometry_info.get(name, {})
                 if not info.get('comm_active', False):
                     continue
+                if self.filter_main_lobe and not info.get('in_main_lobe', True):
+                    continue
+
                 # 物理スコア = 送信側総ゲイン(E) + 受信側総ゲイン(H) - パスロス
                 # これは実質的にノイズを含まない理想的なRSSI(受信電力)に比例します
                 e_gain = info.get('antenna_gain_e_plane', -999.0)

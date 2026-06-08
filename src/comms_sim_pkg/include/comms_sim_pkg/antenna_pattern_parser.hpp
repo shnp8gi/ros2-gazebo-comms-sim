@@ -9,7 +9,10 @@ namespace comms_sim {
 
 class AntennaPatternParser {
 public:
-  explicit AntennaPatternParser(double max_antenna_attenuation = 30.0);
+  explicit AntennaPatternParser(double max_antenna_attenuation = 30.0,
+                                double mainlobe_angle_margin_deg = 5.0,
+                                double mainlobe_e_half_angle_override_deg = -1.0,
+                                double mainlobe_h_half_angle_override_deg = -1.0);
 
   void load_e_plane(const std::string& filepath);
   void load_h_plane(const std::string& filepath);
@@ -38,12 +41,24 @@ public:
   double e_plane_peak() const { return e_plane_peak_; }
   double h_plane_peak() const { return h_plane_peak_; }
 
+  bool is_in_main_lobe(double elevation_deg, double azimuth_deg) const;
+  double detect_first_null_angle(const std::vector<double>& angles,
+                                 const std::vector<double>& gains) const;
+
+  double e_mainlobe_half_angle() const { return e_mainlobe_half_angle_; }
+  double h_mainlobe_half_angle() const { return h_mainlobe_half_angle_; }
+
 private:
   std::vector<double> e_angles_, e_gains_;
   std::vector<double> h_angles_, h_gains_;
   double e_plane_peak_ = 0.0;
   double h_plane_peak_ = 0.0;
   double max_attenuation_;
+  double mainlobe_angle_margin_deg_ = 5.0;
+  double mainlobe_e_half_angle_override_deg_ = -1.0;
+  double mainlobe_h_half_angle_override_deg_ = -1.0;
+  double e_mainlobe_half_angle_ = 0.0;
+  double h_mainlobe_half_angle_ = 0.0;
 
   static double wrap_pi(double angle_rad);
   static double linear_interp(const std::vector<double>& xs,
@@ -53,6 +68,7 @@ private:
                     std::vector<double>& angles,
                     std::vector<double>& gains,
                     double& peak);
+
 };
 
 }  // namespace comms_sim

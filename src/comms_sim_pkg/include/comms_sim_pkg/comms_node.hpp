@@ -54,6 +54,9 @@ struct CommsLogRecord {
   double bs_y_m;
   double bs_z_m;
   std::string link_state;
+  bool in_main_lobe;
+  double off_boresight_e_deg;
+  double off_boresight_h_deg;
 };
 
 class CommsSimulatorNode : public rclcpp::Node {

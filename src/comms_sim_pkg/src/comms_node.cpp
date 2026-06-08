@@ -55,10 +55,14 @@ CommsSimulatorNode::CommsSimulatorNode()
   this->declare_parameter("logging_start_trigger", "on_movement");
   this->declare_parameter("logging_start_topic", "/logging/start");
   this->declare_parameter("max_antenna_attenuation", 30.0);
+  this->declare_parameter("mainlobe_angle_margin_deg", 5.0);
+  this->declare_parameter("mainlobe_e_half_angle_deg", -1.0);
+  this->declare_parameter("mainlobe_h_half_angle_deg", -1.0);
   this->declare_parameter("vehicle_name", "");
   this->declare_parameter("cmd_vel_topic", "/cmd_vel");
   this->declare_parameter("config_file_path", "/workspace/src/comms_sim_pkg/config/sim_params.yaml");
   this->declare_parameter("publish_rate", 100.0);
+
 
   sampling_rate_ = this->get_parameter("sampling_rate").as_double();
   publish_rate_ = this->get_parameter("publish_rate").as_double();
@@ -103,9 +107,13 @@ CommsSimulatorNode::CommsSimulatorNode()
   rssi_threshold_ = comms_calculator_->rssi_min;
 
   double max_att = this->get_parameter("max_antenna_attenuation").as_double();
-  antenna_parser_ = AntennaPatternParser(max_att);
+  double margin = this->get_parameter("mainlobe_angle_margin_deg").as_double();
+  double e_override = this->get_parameter("mainlobe_e_half_angle_deg").as_double();
+  double h_override = this->get_parameter("mainlobe_h_half_angle_deg").as_double();
+  antenna_parser_ = AntennaPatternParser(max_att, margin, e_override, h_override);
   if (!e_plane_path_.empty()) antenna_parser_.load_e_plane(e_plane_path_);
   if (!h_plane_path_.empty()) antenna_parser_.load_h_plane(h_plane_path_);
+
 
   auto bs_positions = this->get_parameter("rx_positions").as_double_array();
   auto bs_offsets = this->get_parameter("rx_antenna_offsets").as_double_array();
@@ -261,11 +269,24 @@ CommsSimulatorNode::CommsSimulatorNode()
                   ready_timer_->cancel();
                   return;
               }
-              auto ready_msg = std_msgs::msg::Bool();
+               auto ready_msg = std_msgs::msg::Bool();
               ready_msg.data = true;
               ready_pub_->publish(ready_msg);
           });
   }
+
+  RCLCPP_INFO(this->get_logger(), "=== Comms Simulator Node Config ===");
+  RCLCPP_INFO(this->get_logger(), "Vehicle Name: %s", vehicle_name_.c_str());
+  RCLCPP_INFO(this->get_logger(), "Sampling Rate: %.1f Hz, Publish Rate: %.1f Hz", sampling_rate_, publish_rate_);
+  RCLCPP_INFO(this->get_logger(), "TX Antenna Relative RPY: [%.4f, %.4f, %.4f]", 
+              tx_antenna_relative_rpy_.x(), tx_antenna_relative_rpy_.y(), tx_antenna_relative_rpy_.z());
+  for (size_t i = 0; i < rx_nodes_.size(); ++i) {
+      RCLCPP_INFO(this->get_logger(), "BS Antenna %zu (%s) Position: [%.2f, %.2f, %.2f], Relative RPY: [%.4f, %.4f, %.4f]",
+                  i, rx_nodes_[i].name.c_str(),
+                  rx_nodes_[i].position.x(), rx_nodes_[i].position.y(), rx_nodes_[i].position.z(),
+                  rx_nodes_[i].antenna_relative_rpy.x(), rx_nodes_[i].antenna_relative_rpy.y(), rx_nodes_[i].antenna_relative_rpy.z());
+  }
+  RCLCPP_INFO(this->get_logger(), "=====================================");
 }
 
 CommsSimulatorNode::~CommsSimulatorNode() {
@@ -562,10 +583,18 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
         }
     }
 
+    // Calculate off-boresight angles relative to the best BS
+    auto [best_el, best_az] = antenna_parser_.calculate_antenna_frame_angles(
+        tx_antenna_pos, best_bs_pos, tx_ant_rpy, &rx_rotmat);
+    double off_boresight_e_deg = std::abs(best_el * 180.0 / M_PI);
+    double off_boresight_h_deg = std::abs(best_az * 180.0 / M_PI);
+    bool in_main_lobe = antenna_parser_.is_in_main_lobe(off_boresight_e_deg, off_boresight_h_deg);
+
     last_rssi_ = best_metrics.rssi;
+
     bool local_has_link_grant = has_link_grant_;
 
-    if ((scheduling_policy_ == "feedforward_optimal" || scheduling_policy_ == "rssi_priority" || 
+    if ((scheduling_policy_ == "rssi_priority" || 
          scheduling_policy_ == "physical_score_priority" || scheduling_policy_ == "geometric_beam_priority" || 
          scheduling_policy_ == "geometric_weighted") && !vehicle_antennas_.empty()) 
     {
@@ -651,6 +680,9 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
                 record.bs_y_m = rx_nodes_[best_bs_idx].position.y();
                 record.bs_z_m = best_bs_pos.z();
                 record.link_state = link_state_ == LinkState::CONNECTED ? "CONNECTED" : (link_state_ == LinkState::ESTABLISHING ? "ESTABLISHING" : "DISCONNECTED");
+                record.in_main_lobe = in_main_lobe;
+                record.off_boresight_e_deg = off_boresight_e_deg;
+                record.off_boresight_h_deg = off_boresight_h_deg;
                 
                 log_records_.push_back(record);
             }
@@ -693,7 +725,11 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
             msg.path_loss = best_metrics.path_loss;
             msg.comm_active = comm_active_;
             msg.link_state = link_state_ == LinkState::CONNECTED ? "CONNECTED" : (link_state_ == LinkState::ESTABLISHING ? "ESTABLISHING" : "DISCONNECTED");
+            msg.in_main_lobe = in_main_lobe;
+            msg.off_boresight_e_deg = off_boresight_e_deg;
+            msg.off_boresight_h_deg = off_boresight_h_deg;
             quality_pub_->publish(msg);
+
         }
     }
 }
@@ -820,7 +856,8 @@ void CommsSimulatorNode::save_log_to_csv() {
         } else {
             file << "time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,"
                  << "throughput_Gbps,total_data_MB,path_loss_dB,e_gain_dB,h_gain_dB,comm_active,"
-                 << "tx_x_m,tx_y_m,tx_z_m,bs_x_m,bs_y_m,bs_z_m,link_state\n";
+                 << "tx_x_m,tx_y_m,tx_z_m,bs_x_m,bs_y_m,bs_z_m,link_state,"
+                 << "in_main_lobe,off_boresight_e_deg,off_boresight_h_deg\n";
         }
 
         // データ書き出し
@@ -861,7 +898,10 @@ void CommsSimulatorNode::save_log_to_csv() {
                      << rec.bs_x_m << ","
                      << rec.bs_y_m << ","
                      << rec.bs_z_m << ","
-                     << rec.link_state << "\n";
+                     << rec.link_state << ","
+                     << (rec.in_main_lobe ? "True" : "False") << ","
+                     << rec.off_boresight_e_deg << ","
+                     << rec.off_boresight_h_deg << "\n";
             }
         }
         file.close();

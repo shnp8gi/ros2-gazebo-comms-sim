@@ -7,15 +7,33 @@
 
 namespace comms_sim {
 
-AntennaPatternParser::AntennaPatternParser(double max_antenna_attenuation)
-    : max_attenuation_(max_antenna_attenuation) {}
+AntennaPatternParser::AntennaPatternParser(double max_antenna_attenuation,
+                                           double mainlobe_angle_margin_deg,
+                                           double mainlobe_e_half_angle_override_deg,
+                                           double mainlobe_h_half_angle_override_deg)
+    : max_attenuation_(max_antenna_attenuation),
+      mainlobe_angle_margin_deg_(mainlobe_angle_margin_deg),
+      mainlobe_e_half_angle_override_deg_(mainlobe_e_half_angle_override_deg),
+      mainlobe_h_half_angle_override_deg_(mainlobe_h_half_angle_override_deg) {}
 
 void AntennaPatternParser::load_e_plane(const std::string& filepath) {
   load_pattern(filepath, e_angles_, e_gains_, e_plane_peak_);
+  if (mainlobe_e_half_angle_override_deg_ > 0.0) {
+    e_mainlobe_half_angle_ = mainlobe_e_half_angle_override_deg_;
+  } else {
+    double null_ang = detect_first_null_angle(e_angles_, e_gains_);
+    e_mainlobe_half_angle_ = std::max(0.0, null_ang - mainlobe_angle_margin_deg_);
+  }
 }
 
 void AntennaPatternParser::load_h_plane(const std::string& filepath) {
   load_pattern(filepath, h_angles_, h_gains_, h_plane_peak_);
+  if (mainlobe_h_half_angle_override_deg_ > 0.0) {
+    h_mainlobe_half_angle_ = mainlobe_h_half_angle_override_deg_;
+  } else {
+    double null_ang = detect_first_null_angle(h_angles_, h_gains_);
+    h_mainlobe_half_angle_ = std::max(0.0, null_ang - mainlobe_angle_margin_deg_);
+  }
 }
 
 void AntennaPatternParser::load_pattern(const std::string& filepath,
@@ -202,6 +220,50 @@ AntennaPatternParser::TxRxGainResult AntennaPatternParser::get_tx_rx_gains(
 
   return {tx_res.e_gain, tx_res.h_gain, tx_res.total,
           rx_res.e_gain, rx_res.h_gain, rx_res.total};
+}
+
+bool AntennaPatternParser::is_in_main_lobe(double elevation_deg, double azimuth_deg) const {
+  double abs_el = std::abs(elevation_deg);
+  double abs_az = std::abs(azimuth_deg);
+  return (abs_el <= e_mainlobe_half_angle_) && (abs_az <= h_mainlobe_half_angle_);
+}
+
+double AntennaPatternParser::detect_first_null_angle(const std::vector<double>& angles,
+                                                     const std::vector<double>& gains) const {
+  if (angles.empty() || gains.empty()) return 0.0;
+  
+  // Find index closest to boresight (0.0)
+  size_t center_idx = 0;
+  double min_diff = 1e9;
+  for (size_t i = 0; i < angles.size(); ++i) {
+    double diff = std::abs(angles[i]);
+    if (diff < min_diff) {
+      min_diff = diff;
+      center_idx = i;
+    }
+  }
+
+  double peak_gain = gains[center_idx];
+
+  // Scan outward to find first index where gain drops below peak - 3dB
+  size_t hpbw_idx = center_idx;
+  for (size_t i = center_idx; i < angles.size(); ++i) {
+    if (gains[i] <= peak_gain - 3.0) {
+      hpbw_idx = i;
+      break;
+    }
+  }
+
+  // Scan further outward to find the first local minimum (null angle)
+  size_t null_idx = hpbw_idx;
+  for (size_t i = hpbw_idx + 1; i < angles.size() - 1; ++i) {
+    if (gains[i] < gains[i - 1] && gains[i] < gains[i + 1]) {
+      null_idx = i;
+      break;
+    }
+  }
+
+  return std::abs(angles[null_idx]);
 }
 
 } // namespace comms_sim

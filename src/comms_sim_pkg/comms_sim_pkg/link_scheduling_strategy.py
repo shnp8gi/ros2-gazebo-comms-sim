@@ -131,8 +131,9 @@ class GeometricBeamPriorityStrategy(LinkSchedulingStrategy):
     両端の角度を最小化し、双方向で最もアライメントが良い車両を選ぶ。
     （パスロスによる距離の減衰は意図的に考慮せず、ビームへの入り具合のみを評価する）
     """
-    def __init__(self, beam_gain_threshold: float):
+    def __init__(self, beam_gain_threshold: float, filter_main_lobe: bool = True):
         self.beam_gain_threshold = beam_gain_threshold
+        self.filter_main_lobe = filter_main_lobe
 
     def determine_active_link(
         self, 
@@ -152,12 +153,16 @@ class GeometricBeamPriorityStrategy(LinkSchedulingStrategy):
             if not info.get('comm_active', True):
                 continue
             
+            if self.filter_main_lobe and not info.get('in_main_lobe', True):
+                continue
+
             e_gain = info.get('antenna_gain_e_plane', -999.0)
             h_gain = info.get('antenna_gain_h_plane', -999.0)
             dist = info.get('distance', float('inf'))
             
             if e_gain < self.beam_gain_threshold or h_gain < self.beam_gain_threshold:
                 continue
+
                 
             # アライメント品質 = 三角形の両端のうち悪い方の角度に対応するゲイン
             alignment_quality = min(e_gain, h_gain)
@@ -198,11 +203,12 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
     geometry_infoの幾何学情報を使用する。これにより、3つのcomms_nodeの
     RSSI publish到着順序による非決定的なレースコンディションを排除する。
     """
-    def __init__(self, beam_gain_threshold: float, min_hold_time_s: float = 0.0, switch_margin_db: float = 0.0, score_threshold: float = -80.0):
+    def __init__(self, beam_gain_threshold: float, min_hold_time_s: float = 0.0, switch_margin_db: float = 0.0, score_threshold: float = -80.0, filter_main_lobe: bool = True):
         self.beam_gain_threshold = beam_gain_threshold
         self.min_hold_time_s = float(min_hold_time_s)
         self.switch_margin_db = float(switch_margin_db)
         self.score_threshold = float(score_threshold)
+        self.filter_main_lobe = filter_main_lobe
         self._last_switch_time: Optional[float] = None
 
     def determine_active_link(
@@ -223,6 +229,9 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
             if not info.get('comm_active', True):
                 continue
             
+            if self.filter_main_lobe and not info.get('in_main_lobe', True):
+                continue
+
             e_gain = info.get('antenna_gain_e_plane', -999.0)
             h_gain = info.get('antenna_gain_h_plane', -999.0)
             dist = info.get('distance', float('inf'))
@@ -230,6 +239,7 @@ class PhysicalScorePriorityStrategy(LinkSchedulingStrategy):
             
             if e_gain < self.beam_gain_threshold or h_gain < self.beam_gain_threshold:
                 continue
+
             
             # 物理スコア: geometry_infoの幾何学情報から算出（決定論的）
             phys_score = e_gain + h_gain - path_loss

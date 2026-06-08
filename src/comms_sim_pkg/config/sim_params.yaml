@@ -110,6 +110,13 @@ comms_simulator_node:
     # 減衰量をこの値でクランプする。
     max_antenna_attenuation: 30.0
 
+    # メインローブ境界検出のパラメータ [度]
+    mainlobe_angle_margin_deg: 5.0
+    # 手動オーバーライド角度 (-1.0 で自動検出)
+    mainlobe_e_half_angle_deg: -1.0
+    mainlobe_h_half_angle_deg: -1.0
+
+
     # ログ記録開始トリガー
     #   immediate   : ノード起動後すぐにデータ取得開始
     #   on_movement : /cmd_vel で非ゼロ速度指令を検知してから開始
@@ -197,6 +204,14 @@ link_controller_node:
     # （geometry_info 未到達時など、信頼できないデータによる誤切替を防ぐ）
     # 目安: -80.0 ≒ 通信限界付近のRSSI相当
     proactive_handover_score_threshold: -130
+
+    # メインローブフィルタリングの有効化
+    filter_main_lobe: true
+    # メインローブ境界検出のパラメータ [度] (事前ヒートマップ計算等で使用)
+    mainlobe_angle_margin_deg: 5.0
+    mainlobe_e_half_angle_deg: -1.0
+    mainlobe_h_half_angle_deg: -1.0
+
 
 # -----------------------------------------------------------------------------
 # スポーンエンティティ設定 (基地局等の静的エンティティ)

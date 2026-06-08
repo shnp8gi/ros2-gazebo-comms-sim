@@ -38,3 +38,11 @@ bool comm_active
 
 # リンク確立状態 (DISCONNECTED, ESTABLISHING, CONNECTED)
 string link_state
+
+# メインローブ内判定
+bool in_main_lobe
+
+# オフボアサイト角 (E面/H面) [deg]
+float64 off_boresight_e_deg
+float64 off_boresight_h_deg
+
