@@ -38,6 +38,107 @@ from lib.sweep_config import (
 from lib.sweep_kinematics import estimate_expected_duration
 from lib.sweep_data import average_summaries, get_completed_tasks
 
+# =========================================================================
+# 終了シグナルのハンドリングとアクティブプロセスの追跡
+# =========================================================================
+active_tasks_lock = threading.Lock()
+active_tasks = {}  # worker_id -> { 'proc': proc, 'tmp_config_path': tmp_config_path, 'ros_domain_id': ros_domain_id }
+shutdown_requested = False
+sweep_start_time = None
+
+def fix_ownership(start_time_str):
+    """結果ディレクトリの所有権をホストのユーザーに変更する"""
+    if not start_time_str:
+        return
+    is_docker = os.path.exists('/.dockerenv')
+    if not is_docker:
+        try:
+            uid = os.getuid()
+            gid = os.getgid()
+            sweep_dir = f"/workspace/sim_results/sweep_{start_time_str}"
+            print(f"[Sweep Sim] Fixing ownership of {sweep_dir} to {uid}:{gid}...")
+            subprocess.run(
+                ["docker", "compose", "exec", "-T", "sim", "chown", "-R", f"{uid}:{gid}", sweep_dir],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
+            )
+        except Exception as e:
+            print(f"[Sweep Sim] Warning: Failed to fix ownership: {e}")
+
+def handle_shutdown(signum, frame):
+    global shutdown_requested
+    if shutdown_requested:
+        return
+    shutdown_requested = True
+    print("\n\n[Sweep Sim] Interrupt received. Shutting down all simulation tasks cleanly...")
+    
+    # 全てのアクティブなプロセスを終了
+    with active_tasks_lock:
+        tasks_to_kill = list(active_tasks.items())
+        active_tasks.clear()
+        
+    is_docker = os.path.exists('/.dockerenv')
+    
+    for worker_id, task_data in tasks_to_kill:
+        proc = task_data.get('proc')
+        tmp_config_path = task_data.get('tmp_config_path')
+        ros_domain_id = task_data.get('ros_domain_id')
+        
+        if proc:
+            print(f"[Sweep Sim] Terminating local process group for Worker {worker_id} (PID {proc.pid})...")
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+            except ProcessLookupError:
+                pass
+            except Exception as e:
+                print(f"[Sweep Sim] Error killing process group: {e}")
+                
+        # ROS_DOMAIN_ID に関連するプロセスをコンテナ内外で完全にクリーンアップ
+        if is_docker:
+            try:
+                subprocess.run(
+                    f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
+                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(
+                    ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
+                )
+            except Exception:
+                pass
+                
+        # 一時設定ファイルの削除
+        if tmp_config_path and os.path.exists(tmp_config_path):
+            try:
+                os.remove(tmp_config_path)
+            except Exception:
+                pass
+
+    # その他の残存する一時ファイルを削除
+    for f in glob.glob("tools/sweep_build/sim_params_tmp_*.yaml"):
+        try:
+            os.remove(f)
+        except Exception:
+            pass
+
+    # オリジナル設定ファイルの復元
+    if os.path.exists(BACKUP_PATH):
+        print(f"[Sweep Sim] Restoring original configuration to {CONFIG_PATH}...")
+        try:
+            shutil.copy2(BACKUP_PATH, CONFIG_PATH)
+        except Exception as e:
+            print(f"[Sweep Sim] Error restoring config: {e}")
+
+    # 成果物の所有権をホストユーザーに変更
+    if sweep_start_time:
+        fix_ownership(sweep_start_time)
+
+    print("[Sweep Sim] Shutdown completed. Exiting.")
+    os._exit(1)
+
 def get_optimal_concurrency() -> int:
     """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する"""
     try:
@@ -124,6 +225,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
 
     max_retries = 3
     for attempt in range(max_retries):
+        if shutdown_requested:
+            return False
         try:
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 content = f.read()
@@ -190,11 +293,27 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                    f"source /opt/ros/humble/setup.bash && source install/setup.bash && "
                    f"ros2 launch comms_sim_pkg sim_launch.py config_file:=/workspace/{tmp_config_path}"]
      
+        if shutdown_requested:
+            return False
+
         start_time = time.time()
         proc = subprocess.Popen(
             cmd,
             preexec_fn=os.setsid
         )
+        
+        with active_tasks_lock:
+            if shutdown_requested:
+                try:
+                    os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+                except Exception:
+                    pass
+                return False
+            active_tasks[worker_id] = {
+                'proc': proc,
+                'tmp_config_path': tmp_config_path,
+                'ros_domain_id': ros_domain_id
+            }
         
         timed_out = False
         try:
@@ -203,15 +322,31 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             timed_out = True
             print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation TIMEOUT ({task_timeout}s): Y={y}, Angle={angle_deg}")
         finally:
+            with active_tasks_lock:
+                if worker_id in active_tasks:
+                    del active_tasks[worker_id]
+
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
             except ProcessLookupError:
                 pass
+            except Exception:
+                pass
      
-            if not is_docker:
+            if is_docker:
                 try:
-                    subprocess.run(["docker", "compose", "exec", "-T", "sim", "pkill", "-9", "-f", f"sim_params_tmp_{worker_id}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
-                    subprocess.run(["docker", "compose", "exec", "-T", "sim", "pkill", "-9", "-f", f"ROS_DOMAIN_ID={ros_domain_id}"], stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+                    subprocess.run(
+                        f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
+                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    subprocess.run(
+                        ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
+                    )
                 except Exception:
                     pass
      
@@ -253,6 +388,9 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     return False
 
 def main():
+    global sweep_start_time
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
     parser = argparse.ArgumentParser(description="Parallel Parameter Sweep Simulation")
     parser.add_argument("-j", "--concurrency", type=int, default=0, help="Number of parallel workers (0 for auto)")
     parser.add_argument("--start-angle", type=float, default=None, help="Start angle of sweep in degrees (default from config)")
@@ -384,6 +522,8 @@ def main():
         futures = {executor.submit(worker_thread_fn, t): t for t in tasks_list}
         concurrent.futures.wait(futures.keys())
 
+    fix_ownership(sweep_start_time)
+
     print("\nMerging worker results...")
     for run_idx in range(1, num_runs + 1):
         merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv")
@@ -434,6 +574,9 @@ def main():
         print(f"Averaged summary successfully saved to: {final_summary_file}")
     except Exception as e:
         print(f"Failed to average summaries: {e}")
+
+    # すべてのファイル生成が完了したため、再度所有権を修正
+    fix_ownership(sweep_start_time)
 
     log_progress(f"DONE task={total_runs_tasks} y=- angle=- status=SWEEP_COMPLETE ts={datetime.datetime.now().isoformat()}")
     print("\nSweep completed! Restoring original config...")

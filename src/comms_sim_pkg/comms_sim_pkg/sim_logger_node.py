@@ -257,11 +257,11 @@ class SimLoggerNode(Node):
         self._link_grants: Dict[str, bool] = {name: False for name in self.vehicle_names}
         self._mission_status: Dict[str, bool] = {name: False for name in self.base_vehicle_names}
         self._last_time = {name: None for name in self.vehicle_names}
+        self._last_vehicle_pos: Dict[str, tuple] = {}
         
         self._quality_subs = []
         self._grant_subs = []
         self._mission_subs = []
-        self._cmd_vel_subs = []
         
         # タイマー代わりの最新時刻
         self._start_time = None
@@ -288,8 +288,6 @@ class SimLoggerNode(Node):
                 _MISSION_QOS
             )
             self._mission_subs.append(sub_mission)
-            sub_cmd = self.create_subscription(Twist, f'/{name}/cmd_vel', lambda msg, vn=name: self._on_cmd_vel(vn, msg), 10)
-            self._cmd_vel_subs.append(sub_cmd)
 
         self.get_logger().info(f'SimLoggerNode (Level {self.logging_level}) 初期化完了')
         atexit.register(self.save_summary_and_close)
@@ -333,18 +331,6 @@ class SimLoggerNode(Node):
             )
             sys.exit(0)
 
-    def _on_cmd_vel(self, vehicle_name: str, msg: Twist):
-        import time as _time
-        if abs(msg.linear.x) > 0.001 or abs(msg.linear.y) > 0.001:
-            current_time = self.get_clock().now().nanoseconds / 1e9
-            if self._start_time is None:
-                self._start_time = current_time
-            if vehicle_name not in self._vehicle_start_times:
-                self._vehicle_start_times[vehicle_name] = current_time
-            # ウォッチドッグ更新
-            self._vehicle_ever_moved = True
-            self._last_moving_wall_time = _time.monotonic()
-
     def _on_quality(self, vehicle_name: str, msg: CommsQuality):
         current_time = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
         if self._start_time is None: self._start_time = current_time
@@ -353,6 +339,20 @@ class SimLoggerNode(Node):
         elapsed = current_time - self._start_time
         vehicle_elapsed = current_time - self._vehicle_start_times[vehicle_name]
         has_grant = self._link_grants.get(vehicle_name, False)
+
+        # 実際の車両位置変化から移動を検出し、ウォッチドッグを更新する
+        pos = (msg.tx_x, msg.tx_y, msg.tx_z)
+        if vehicle_name in self._last_vehicle_pos:
+            last_pos = self._last_vehicle_pos[vehicle_name]
+            dx = pos[0] - last_pos[0]
+            dy = pos[1] - last_pos[1]
+            dz = pos[2] - last_pos[2]
+            dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+            if dist > 0.01:  # 前回の品質メッセージから1cm以上移動している場合
+                import time as _time
+                self._vehicle_ever_moved = True
+                self._last_moving_wall_time = _time.monotonic()
+        self._last_vehicle_pos[vehicle_name] = pos
         
         # msg.header.stamp を基に動的かつ決定論的に時間差を計算
         prev_time = self._last_time.get(vehicle_name)

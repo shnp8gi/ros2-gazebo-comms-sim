@@ -64,8 +64,8 @@ simulation:
 # -----------------------------------------------------------------------------
 comms_simulator_node:
   ros__parameters:
-    # 通信品質計算のサンプリングレート [Hz]
-    sampling_rate: 4000.0
+    # 通信品質計算のサンプリングレート [kHz]
+    sampling_rate: 1000.0
 
     # パブリッシュレート [Hz]
     publish_rate: 100.0
@@ -115,7 +115,6 @@ comms_simulator_node:
     # 手動オーバーライド角度 (-1.0 で自動検出)
     mainlobe_e_half_angle_deg: -1.0
     mainlobe_h_half_angle_deg: -1.0
-
 
     # ログ記録開始トリガー
     #   immediate   : ノード起動後すぐにデータ取得開始
@@ -211,7 +210,6 @@ link_controller_node:
     mainlobe_angle_margin_deg: 5.0
     mainlobe_e_half_angle_deg: -1.0
     mainlobe_h_half_angle_deg: -1.0
-
 
 # -----------------------------------------------------------------------------
 # スポーンエンティティ設定 (基地局等の静的エンティティ)

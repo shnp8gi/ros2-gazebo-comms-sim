@@ -525,9 +525,18 @@ class TxControllerNode(Node):
         msg.data = True
         self.mission_complete_pub.publish(msg)
 
+        # ミッション完了後、VOLATILE QoSでのパケットロス対策として定期的に再送するタイマーを開始
+        self._complete_pub_timer = self.create_timer(1.0, self._publish_mission_complete)
+
         # 完了コールバック呼び出し
         if self.on_mission_complete:
             self.on_mission_complete()
+
+    def _publish_mission_complete(self) -> None:
+        """ミッション完了通知を定期的にパブリッシュする。"""
+        msg = Bool()
+        msg.data = True
+        self.mission_complete_pub.publish(msg)
 
     @staticmethod
     def normalize_angle(angle: float) -> float:

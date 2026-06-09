@@ -130,7 +130,7 @@ class CommsSimulatorNode(Node):
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
 
         # パラメータ取得
-        self.sampling_rate = self.get_parameter('sampling_rate').value
+        self.sampling_rate = self.get_parameter('sampling_rate').value * 1000.0
         self.noise_variance = self.get_parameter('noise_variance').value
         self.e_plane_path = self.get_parameter('e_plane_path').value
         self.h_plane_path = self.get_parameter('h_plane_path').value

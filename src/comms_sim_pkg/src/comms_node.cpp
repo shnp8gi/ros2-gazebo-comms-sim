@@ -64,7 +64,7 @@ CommsSimulatorNode::CommsSimulatorNode()
   this->declare_parameter("publish_rate", 100.0);
 
 
-  sampling_rate_ = this->get_parameter("sampling_rate").as_double();
+  sampling_rate_ = this->get_parameter("sampling_rate").as_double() * 1000.0;
   publish_rate_ = this->get_parameter("publish_rate").as_double();
   last_publish_time_ = -1.0;
   noise_variance_ = this->get_parameter("noise_variance").as_double();
