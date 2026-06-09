@@ -407,9 +407,16 @@ void CommsSimulatorNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr 
       // Validate that position did not jump suddenly (DDS residual messages from previous runs)
       if (last_odom_pos_.has_value()) {
           double jump_dist = (odom_pos - last_odom_pos_.value()).norm();
-          if (jump_dist > 20.0) {
+          double dt = 0.02; // default odom period
+          if (last_odom_time_.has_value()) {
+              double current_time_sec = rclcpp::Time(msg->header.stamp).seconds();
+              double last_time_sec = rclcpp::Time(last_odom_time_.value()).seconds();
+              dt = current_time_sec - last_time_sec;
+          }
+          double max_dist = std::max(50.0, 120.0 * dt); // allow up to 120 m/s (432 km/h) velocity, with a minimum fallback of 50m
+          if (jump_dist > max_dist) {
               RCLCPP_WARN(this->get_logger(), 
-                  "Ignored odom message due to large position jump (%.2f m) - likely stale DDS message", jump_dist);
+                  "Ignored odom message due to large position jump (%.2f m, dt: %.3f s) - likely stale DDS message", jump_dist, dt);
               return;
           }
       }
