@@ -287,6 +287,7 @@ CommsSimulatorNode::CommsSimulatorNode()
                   rx_nodes_[i].antenna_relative_rpy.x(), rx_nodes_[i].antenna_relative_rpy.y(), rx_nodes_[i].antenna_relative_rpy.z());
   }
   RCLCPP_INFO(this->get_logger(), "=====================================");
+  output_csv_path_ = get_output_csv_path();
 }
 
 CommsSimulatorNode::~CommsSimulatorNode() {
@@ -843,7 +844,7 @@ void CommsSimulatorNode::save_log_to_csv() {
         return;
     }
 
-    std::string csv_path = get_output_csv_path();
+    std::string csv_path = output_csv_path_;
     RCLCPP_INFO(this->get_logger(), "Saving %zu log records to CSV: %s", log_records_.size(), csv_path.c_str());
 
     try {

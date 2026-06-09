@@ -169,6 +169,7 @@ private:
   double vehicle_start_time_ = -1.0;
   int logging_level_ = 1;
   std::string config_file_path_;
+  std::string output_csv_path_;
 };
 
 }  // namespace comms_sim

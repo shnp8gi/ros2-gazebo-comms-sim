@@ -46,6 +46,60 @@ active_tasks = {}  # worker_id -> { 'proc': proc, 'tmp_config_path': tmp_config_
 shutdown_requested = False
 sweep_start_time = None
 
+def terminate_process_cleanly(proc, ros_domain_id, is_docker, timeout=2.0):
+    if not proc:
+        return
+
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+    except Exception:
+        pass
+
+    if is_docker:
+        try:
+            subprocess.run(
+                f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2",
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+            )
+        except Exception:
+            pass
+
+    t_start = time.time()
+    while time.time() - t_start < timeout:
+        if proc.poll() is not None:
+            break
+        time.sleep(0.1)
+
+    if proc.poll() is None:
+        try:
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+        except Exception:
+            pass
+        if is_docker:
+            try:
+                subprocess.run(
+                    f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
+                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+                )
+            except Exception:
+                pass
+        else:
+            try:
+                subprocess.run(
+                    ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
+                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+                )
+            except Exception:
+                pass
+
 def fix_ownership(start_time_str):
     """結果ディレクトリの所有権をホストのユーザーに変更する"""
     if not start_time_str:
@@ -78,38 +132,65 @@ def handle_shutdown(signum, frame):
         
     is_docker = os.path.exists('/.dockerenv')
     
+    # 全プロセスに並列で SIGINT を送信
     for worker_id, task_data in tasks_to_kill:
         proc = task_data.get('proc')
-        tmp_config_path = task_data.get('tmp_config_path')
         ros_domain_id = task_data.get('ros_domain_id')
-        
         if proc:
-            print(f"[Sweep Sim] Terminating local process group for Worker {worker_id} (PID {proc.pid})...")
+            print(f"[Sweep Sim] Requesting clean shutdown (SIGINT) for Worker {worker_id} (PID {proc.pid})...")
+            try:
+                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
+            except Exception:
+                pass
+            if is_docker:
+                try:
+                    subprocess.run(
+                        f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2",
+                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    subprocess.run(
+                        ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+                    )
+                except Exception:
+                    pass
+
+    # デストラクタでのCSV書き込みを待つ
+    time.sleep(2.0)
+
+    # 終了していないものを SIGKILL
+    for worker_id, task_data in tasks_to_kill:
+        proc = task_data.get('proc')
+        ros_domain_id = task_data.get('ros_domain_id')
+        tmp_config_path = task_data.get('tmp_config_path')
+        
+        if proc and proc.poll() is None:
+            print(f"[Sweep Sim] Killing remaining process group for Worker {worker_id} (PID {proc.pid})...")
             try:
                 os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except Exception as e:
-                print(f"[Sweep Sim] Error killing process group: {e}")
-                
-        # ROS_DOMAIN_ID に関連するプロセスをコンテナ内外で完全にクリーンアップ
-        if is_docker:
-            try:
-                subprocess.run(
-                    f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
-                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
-                )
             except Exception:
                 pass
-        else:
-            try:
-                subprocess.run(
-                    ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=5
-                )
-            except Exception:
-                pass
-                
+            if is_docker:
+                try:
+                    subprocess.run(
+                        f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
+                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+                    )
+                except Exception:
+                    pass
+            else:
+                try:
+                    subprocess.run(
+                        ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
+                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+                    )
+                except Exception:
+                    pass
+                    
         # 一時設定ファイルの削除
         if tmp_config_path and os.path.exists(tmp_config_path):
             try:
@@ -326,29 +407,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 if worker_id in active_tasks:
                     del active_tasks[worker_id]
 
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except ProcessLookupError:
-                pass
-            except Exception:
-                pass
-     
-            if is_docker:
-                try:
-                    subprocess.run(
-                        f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
-                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                except Exception:
-                    pass
-            else:
-                try:
-                    subprocess.run(
-                        ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL
-                    )
-                except Exception:
-                    pass
+            terminate_process_cleanly(proc, ros_domain_id, is_docker)
      
             if os.path.exists(tmp_config_path):
                 try:
