@@ -432,6 +432,61 @@ class SimLoggerNode(Node):
             return
         self._summary_saved = True
         
+        # C++ノードがCSVを書き終えるまで少し待つ
+        import time
+        time.sleep(1.0)
+
+        # C++側が出力したデータ欠損のないCSVファイルがあれば、それに基づいて正確な統計値を再計算する
+        for vn in self.vehicle_names:
+            stats = self.summary_stats[vn]
+            suffix = '_connected.csv' if self.logging_level == 3 else '_full.csv'
+            csv_path = os.path.join(self.run_dir, 'comms', f'{vn}{suffix}')
+            if os.path.exists(csv_path):
+                try:
+                    with open(csv_path, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        rows = list(reader)
+                    if rows:
+                        if self.logging_level == 3:
+                            connected_rows = rows
+                        else:
+                            connected_rows = [r for r in rows if r.get('link_state') == 'CONNECTED']
+                        
+                        cnt = len(connected_rows)
+                        if cnt > 0:
+                            stats['rssi_sum'] = sum(float(r['rssi_dBm']) for r in connected_rows)
+                            stats['tp_sum'] = sum(float(r['throughput_Gbps']) for r in connected_rows)
+                            stats['connected_count'] = cnt
+                            
+                            if self.logging_level >= 4:
+                                conn_time = 0.0
+                                prev_t = None
+                                for r in rows:
+                                    t = float(r['time_s'])
+                                    state = r.get('link_state')
+                                    if prev_t is not None:
+                                        dt = t - prev_t
+                                        if state == 'CONNECTED':
+                                            conn_time += dt
+                                    prev_t = t
+                                stats['connected_time'] = conn_time
+                            
+                            stats['total_data'] = max(float(r['total_data_MB']) for r in rows)
+                            
+                            if self.logging_level >= 4:
+                                ho_count = 0
+                                prev_s = 'DISCONNECTED'
+                                for r in rows:
+                                    s = r.get('link_state', 'DISCONNECTED')
+                                    if prev_s != 'CONNECTED' and s == 'CONNECTED':
+                                        ho_count += 1
+                                    prev_s = s
+                                stats['handover_count'] = ho_count
+                            
+                            self.get_logger().info(f"[{vn}] Recalculated summary stats from C++ CSV (no drops)")
+                except Exception as e:
+                    self.get_logger().warn(f"Failed to read C++ CSV for summary recalculation: {e}")
+        
         # 終了処理 (ファイルを閉じる)
         if self.event_file:
             self.event_file.close()
@@ -509,15 +564,7 @@ def main(args=None):
     rclpy.init(args=args)
     node = SimLoggerNode()
     try:
-        while rclpy.ok():
-            try:
-                rclpy.spin_once(node, timeout_sec=0.1)
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                node.get_logger().error(f"Error during spin (ignored to prevent crash): {e}")
-                import time
-                time.sleep(0.01)
+        rclpy.spin(node)
     except KeyboardInterrupt:
         pass
     finally:

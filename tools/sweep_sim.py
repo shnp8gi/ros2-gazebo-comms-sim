@@ -402,8 +402,26 @@ def main():
     parser.add_argument("--rtf", "--real-time-factor", type=float, default=None, help="Acceleration factor (default from config)")
     parser.add_argument("--timeout", type=int, default=None, help="Timeout in seconds per task (default from config)")
     parser.add_argument("--resume", type=str, default=None, help="Resume a previous sweep using its timestamp or directory path")
+    parser.add_argument("--no-build", action="store_true", help="Skip automatic colcon build at start")
     
     args, unknown = parser.parse_known_args()
+
+    is_docker = os.path.exists('/.dockerenv')
+
+    if not args.no_build:
+        print("[Sweep Sim] Running automatic build (colcon build)...")
+        if is_docker:
+            build_cmd = ["bash", "-c", "source /opt/ros/humble/setup.bash && cd /workspace && colcon build --symlink-install"]
+        else:
+            build_cmd = ["docker", "compose", "exec", "-T", "sim", "bash", "-c", "source /opt/ros/humble/setup.bash && cd /workspace && colcon build --symlink-install"]
+        
+        try:
+            subprocess.run(build_cmd, check=True)
+            print("[Sweep Sim] Build completed successfully.\n")
+        except subprocess.CalledProcessError as e:
+            print(f"[Sweep Sim] Build failed. Exiting.")
+            sys.exit(1)
+
     concurrency = args.concurrency
     if concurrency <= 0:
         concurrency = get_optimal_concurrency()
