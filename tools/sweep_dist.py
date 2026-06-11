@@ -29,18 +29,35 @@ from lib.sweep_data import average_summaries
 
 def fix_ownership(sweep_dir):
     is_docker = os.path.exists('/.dockerenv')
-    if not is_docker:
-        import subprocess
-        try:
+    import subprocess
+    try:
+        if is_docker:
+            # Container side: read host user's UID/GID from /workspace mount
+            if os.path.exists('/workspace'):
+                stat_info = os.stat('/workspace')
+                uid = stat_info.st_uid
+                gid = stat_info.st_gid
+                if os.path.exists(sweep_dir):
+                    subprocess.run(
+                        ["chown", "-R", f"{uid}:{gid}", sweep_dir],
+                        stdout=subprocess.DEVNULL,
+                        stderr=subprocess.DEVNULL,
+                        timeout=10
+                    )
+        else:
+            # Host side
             uid = os.getuid()
             gid = os.getgid()
-            print(f"[Sweep Dist] Fixing ownership of {sweep_dir} to {uid}:{gid}...")
+            container_dir = sweep_dir
+            if not sweep_dir.startswith('/workspace'):
+                container_dir = os.path.join('/workspace', sweep_dir)
+            print(f"[Sweep Dist] Fixing ownership of {container_dir} to {uid}:{gid}...")
             subprocess.run(
-                ["docker", "compose", "exec", "-T", "sim", "chown", "-R", f"{uid}:{gid}", sweep_dir],
+                ["docker", "compose", "exec", "-T", "sim", "chown", "-R", f"{uid}:{gid}", container_dir],
                 stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
             )
-        except Exception as e:
-            print(f"[Sweep Dist] Warning: Failed to fix ownership: {e}")
+    except Exception as e:
+        print(f"[Sweep Dist] Warning: Failed to fix ownership: {e}")
 
 def handle_split(args):
     num_splits = args.splits

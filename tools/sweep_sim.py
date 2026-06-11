@@ -134,18 +134,43 @@ def fix_ownership(start_time_str):
     if not start_time_str:
         return
     is_docker = os.path.exists('/.dockerenv')
-    if not is_docker:
-        try:
+    try:
+        if is_docker:
+            # Container side: read host user's UID/GID from /workspace mount
+            if os.path.exists('/workspace'):
+                stat_info = os.stat('/workspace')
+                uid = stat_info.st_uid
+                gid = stat_info.st_gid
+                
+                paths_to_fix = [
+                    f"/workspace/sim_results/sweep_{start_time_str}",
+                    f"/workspace/tools/log/{start_time_str}"
+                ]
+                for p in paths_to_fix:
+                    if os.path.exists(p):
+                        subprocess.run(
+                            ["chown", "-R", f"{uid}:{gid}", p],
+                            stdout=subprocess.DEVNULL,
+                            stderr=subprocess.DEVNULL,
+                            timeout=10
+                        )
+        else:
+            # Host side
             uid = os.getuid()
             gid = os.getgid()
-            sweep_dir = f"/workspace/sim_results/sweep_{start_time_str}"
-            print(f"[Sweep Sim] Fixing ownership of {sweep_dir} to {uid}:{gid}...")
-            subprocess.run(
-                ["docker", "compose", "exec", "-T", "sim", "chown", "-R", f"{uid}:{gid}", sweep_dir],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=10
-            )
-        except Exception as e:
-            print(f"[Sweep Sim] Warning: Failed to fix ownership: {e}")
+            paths_to_fix = [
+                f"/workspace/sim_results/sweep_{start_time_str}",
+                f"/workspace/tools/log/{start_time_str}"
+            ]
+            for p in paths_to_fix:
+                subprocess.run(
+                    ["docker", "compose", "exec", "-T", "sim", "chown", "-R", f"{uid}:{gid}", p],
+                    stdout=subprocess.DEVNULL,
+                    stderr=subprocess.DEVNULL,
+                    timeout=10
+                )
+    except Exception as e:
+        print(f"[Sweep Sim] Warning: Failed to fix ownership: {e}")
 
 def handle_shutdown(signum, frame):
     global shutdown_requested
@@ -264,30 +289,217 @@ def get_worker_processes(proc, worker_id, all_system_procs=None) -> list:
     return procs
 
 # =========================================================================
-# Completed Tasks Counter for Warm-up Phase
+# Completed Tasks Counter and Resource Profiling state
 # =========================================================================
 completed_tasks_lock = threading.Lock()
 completed_tasks_count = 0
-
-def increment_completed_tasks():
-    global completed_tasks_count
-    with completed_tasks_lock:
-        completed_tasks_count += 1
-        if completed_tasks_count == 4:
-            print("\n[Sweep Sim] Warm-up phase completed. Transitioning to full dynamic resource concurrency profiling.\n")
+first_task_cpu_samples = []
+first_task_mem_samples = []
+first_task_samples_lock = threading.Lock()
+first_task_profiled = False
+monitor_running = False
 
 # =========================================================================
-# Resource Measurement Cache to prevent concurrent psutil measurement conflicts
+# Resource Measurement Cache and Monitor Thread
 # =========================================================================
 resource_cache_lock = threading.Lock()
-last_resource_check_time = 0.0
 cached_system_load = 0.0
 cached_dyn_cpu_per_sim = DEFAULT_CPU_PER_SIM
 cached_dyn_mem_per_sim = DEFAULT_MEM_PER_SIM_GIB
 
+def increment_completed_tasks():
+    global completed_tasks_count, first_task_profiled, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
+    global first_task_cpu_samples, first_task_mem_samples
+    
+    with completed_tasks_lock:
+        completed_tasks_count += 1
+        current_completed = completed_tasks_count
+
+    if current_completed == 1:
+        with first_task_samples_lock:
+            cpu_samples = list(first_task_cpu_samples)
+            mem_samples = list(first_task_mem_samples)
+            
+        if cpu_samples and mem_samples:
+            avg_cpu = sum(cpu_samples) / len(cpu_samples)
+            avg_mem_gib = (sum(mem_samples) / len(mem_samples)) / (1024**3)
+            peak_cpu = max(cpu_samples)
+            peak_mem_gib = max(mem_samples) / (1024**3)
+            
+            # Enforce safety clips on calculated resource values
+            avg_cpu = max(1.0, min(avg_cpu, 4.0))
+            avg_mem_gib = max(0.3, min(avg_mem_gib, 3.0))
+            
+            with resource_cache_lock:
+                cached_dyn_cpu_per_sim = avg_cpu
+                cached_dyn_mem_per_sim = avg_mem_gib
+                
+            first_task_profiled = True
+            print(f"\n[Resource Profiling] ========================================================")
+            print(f"[Resource Profiling] First instance execution profiling completed successfully!")
+            print(f"[Resource Profiling] - Samples collected: {len(cpu_samples)}")
+            print(f"[Resource Profiling] - Measured CPU Load: {avg_cpu:.2f} cores (Peak: {peak_cpu:.2f} cores)")
+            print(f"[Resource Profiling] - Measured Memory: {avg_mem_gib:.2f} GiB (Peak: {peak_mem_gib:.2f} GiB)")
+            print(f"[Resource Profiling] Updated dynamic resource parameters to CPU: {avg_cpu:.2f} cores, Mem: {avg_mem_gib:.2f} GiB")
+            print(f"[Resource Profiling] ========================================================\n")
+        else:
+            print(f"\n[Resource Profiling] Warning: No resource samples collected during first execution. Using defaults.\n")
+
+def measure_resources():
+    global cached_system_load, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
+    global first_task_cpu_samples, first_task_mem_samples
+    
+    try:
+        cpu_count = os.cpu_count() or 4
+    except Exception:
+        cpu_count = 4
+
+    # 1. Measure system CPU load
+    system_load = 0.0
+    if psutil:
+        try:
+            sys_cpu_pct = psutil.cpu_percent(interval=None)
+            system_load = (sys_cpu_pct / 100.0) * cpu_count
+        except Exception:
+            pass
+    if system_load == 0.0:
+        loadavg_path = "/proc/loadavg"
+        if os.path.exists(loadavg_path):
+            try:
+                with open(loadavg_path, "r") as f:
+                    system_load = float(f.read().split()[0])
+            except Exception:
+                pass
+    
+    with resource_cache_lock:
+        cached_system_load = system_load
+
+    # 2. Measure active tasks metrics (CPU/Mem per sim)
+    measured_cpu = 0.0
+    measured_mem_bytes = 0.0
+    measured_count = 0
+    
+    try:
+        all_system_procs = list(psutil.process_iter(['pid', 'cmdline', 'environ']))
+    except Exception:
+        all_system_procs = []
+        
+    active_pids = []
+    with active_tasks_lock:
+        for w_id, task_data in active_tasks.items():
+            proc = task_data.get('proc')
+            if proc and proc.poll() is None:
+                active_pids.append((w_id, proc))
+                
+    for w_id, proc in active_pids:
+        with active_tasks_lock:
+            task_data = active_tasks.get(w_id, {})
+            ps_procs = task_data.get('ps_procs', [])
+        
+        # Check / resolve processes
+        if not ps_procs:
+            procs = get_worker_processes(proc, w_id, all_system_procs)
+            if procs:
+                for p in procs:
+                    try:
+                        p.cpu_percent(interval=None)
+                    except Exception:
+                        pass
+                with active_tasks_lock:
+                    if w_id in active_tasks:
+                        active_tasks[w_id]['ps_procs'] = procs
+                ps_procs = procs
+        else:
+            has_sim_proc = False
+            for p in ps_procs:
+                try:
+                    if p.is_running():
+                        name = p.name().lower()
+                        if any(x in name for x in ["gz", "python", "comms_sim", "ruby"]):
+                            has_sim_proc = True
+                            break
+                except Exception:
+                    pass
+            
+            if not has_sim_proc:
+                procs = get_worker_processes(proc, w_id, all_system_procs)
+                if procs:
+                    for p in procs:
+                        try:
+                            p.cpu_percent(interval=None)
+                        except Exception:
+                            pass
+                    with active_tasks_lock:
+                        if w_id in active_tasks:
+                            active_tasks[w_id]['ps_procs'] = procs
+                    ps_procs = procs
+            else:
+                try:
+                    parent_proc = ps_procs[0]
+                    current_children = parent_proc.children(recursive=True)
+                    for child in current_children:
+                        if not any(x.pid == child.pid for x in ps_procs):
+                            child.cpu_percent(interval=None)
+                            ps_procs.append(child)
+                except Exception:
+                    pass
+                    
+        # Calculate metrics for this worker
+        w_cpu = 0.0
+        w_mem = 0.0
+        for p in ps_procs:
+            try:
+                if p.is_running():
+                    w_cpu += p.cpu_percent(interval=None) / 100.0
+                    w_mem += p.memory_info().rss
+            except Exception:
+                pass
+        
+        if w_cpu > 0.1 and w_mem > 100 * 1024 * 1024:
+            measured_cpu += w_cpu
+            measured_mem_bytes += w_mem
+            measured_count += 1
+            
+            # If we are in the first task execution, collect samples
+            with completed_tasks_lock:
+                current_completed = completed_tasks_count
+            if current_completed < 1:
+                with first_task_samples_lock:
+                    first_task_cpu_samples.append(w_cpu)
+                    first_task_mem_samples.append(w_mem)
+
+    # Dynamic resource caching (only update if we are not in first execution)
+    with completed_tasks_lock:
+        current_completed = completed_tasks_count
+    
+    if current_completed >= 1:
+        if measured_count > 0:
+            cpu_val = measured_cpu / measured_count
+            mem_val = (measured_mem_bytes / measured_count) / (1024**3)
+            # Clip safety values
+            cpu_val = max(1.0, min(cpu_val, 4.0))
+            mem_val = max(0.3, min(mem_val, 3.0))
+            with resource_cache_lock:
+                cached_dyn_cpu_per_sim = cpu_val
+                cached_dyn_mem_per_sim = mem_val
+
+def resource_monitor_loop():
+    # Initialize CPU reference
+    try:
+        psutil.cpu_percent(interval=None)
+    except Exception:
+        pass
+    
+    while not shutdown_requested:
+        try:
+            measure_resources()
+        except Exception:
+            pass
+        time.sleep(1.0)
+
 def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: bool = False) -> int:
     """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する"""
-    global last_resource_check_time, cached_system_load, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
+    global cached_system_load, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
 
     try:
         cpu_count = os.cpu_count()
@@ -296,126 +508,6 @@ def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: b
     if cpu_count is None:
         cpu_count = 4
 
-    now = time.time()
-    with resource_cache_lock:
-        if now - last_resource_check_time >= 1.5:
-            # 1. Measure system CPU load
-            system_load = 0.0
-            if psutil:
-                try:
-                    sys_cpu_pct = psutil.cpu_percent(interval=None)
-                    system_load = (sys_cpu_pct / 100.0) * cpu_count
-                except Exception:
-                    pass
-            if system_load == 0.0:
-                loadavg_path = "/proc/loadavg"
-                if os.path.exists(loadavg_path):
-                    try:
-                        with open(loadavg_path, "r") as f:
-                            system_load = float(f.read().split()[0])
-                    except Exception:
-                        pass
-            cached_system_load = system_load
-
-            # 2. Measure active tasks metrics (CPU/Mem per sim)
-            measured_cpu = 0.0
-            measured_mem_bytes = 0.0
-            measured_count = 0
-            
-            try:
-                all_system_procs = list(psutil.process_iter(['pid', 'cmdline', 'environ']))
-            except Exception:
-                all_system_procs = []
-                
-            active_pids = []
-            with active_tasks_lock:
-                for w_id, task_data in active_tasks.items():
-                    proc = task_data.get('proc')
-                    if proc and proc.poll() is None:
-                        active_pids.append((w_id, proc))
-                        
-            for w_id, proc in active_pids:
-                with active_tasks_lock:
-                    task_data = active_tasks.get(w_id, {})
-                    ps_procs = task_data.get('ps_procs', [])
-                
-                # Check / resolve processes
-                if not ps_procs:
-                    procs = get_worker_processes(proc, w_id, all_system_procs)
-                    if procs:
-                        for p in procs:
-                            try:
-                                p.cpu_percent(interval=None)
-                            except Exception:
-                                pass
-                        with active_tasks_lock:
-                            if w_id in active_tasks:
-                                active_tasks[w_id]['ps_procs'] = procs
-                        ps_procs = procs
-                else:
-                    has_sim_proc = False
-                    for p in ps_procs:
-                        try:
-                            if p.is_running():
-                                name = p.name().lower()
-                                if any(x in name for x in ["gz", "python", "comms_sim", "ruby"]):
-                                    has_sim_proc = True
-                                    break
-                        except Exception:
-                            pass
-                    
-                    if not has_sim_proc:
-                        procs = get_worker_processes(proc, w_id, all_system_procs)
-                        if procs:
-                            for p in procs:
-                                try:
-                                    p.cpu_percent(interval=None)
-                                except Exception:
-                                    pass
-                            with active_tasks_lock:
-                                if w_id in active_tasks:
-                                    active_tasks[w_id]['ps_procs'] = procs
-                            ps_procs = procs
-                    else:
-                        try:
-                            parent_proc = ps_procs[0]
-                            current_children = parent_proc.children(recursive=True)
-                            for child in current_children:
-                                if not any(x.pid == child.pid for x in ps_procs):
-                                    child.cpu_percent(interval=None)
-                                    ps_procs.append(child)
-                        except Exception:
-                            pass
-                            
-                # Calculate metrics for this worker
-                w_cpu = 0.0
-                w_mem = 0.0
-                for p in ps_procs:
-                    try:
-                        if p.is_running():
-                            w_cpu += p.cpu_percent(interval=None) / 100.0
-                            w_mem += p.memory_info().rss
-                    except Exception:
-                        pass
-                
-                if w_cpu > 0.1 and w_mem > 100 * 1024 * 1024:
-                    measured_cpu += w_cpu
-                    measured_mem_bytes += w_mem
-                    measured_count += 1
-            
-            if measured_count > 0:
-                cached_dyn_cpu_per_sim = measured_cpu / measured_count
-                cached_dyn_mem_per_sim = (measured_mem_bytes / measured_count) / (1024**3)
-            else:
-                cached_dyn_cpu_per_sim = DEFAULT_CPU_PER_SIM
-                cached_dyn_mem_per_sim = DEFAULT_MEM_PER_SIM_GIB
-                
-            # Safety clips (CPU: 1.0 to 4.0 cores, Mem: 0.3 to 3.0 GiB)
-            cached_dyn_cpu_per_sim = max(1.0, min(cached_dyn_cpu_per_sim, 4.0))
-            cached_dyn_mem_per_sim = max(0.3, min(cached_dyn_mem_per_sim, 3.0))
-            
-            last_resource_check_time = now
-            
     load_1min = cached_system_load
     dyn_cpu_per_sim = cached_dyn_cpu_per_sim
     dyn_mem_per_sim = cached_dyn_mem_per_sim
@@ -449,21 +541,20 @@ def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: b
     optimal = min(max_by_cpu, max_by_mem)
     optimal = max(1, min(optimal, max_limit))
     
-    # Warm-up phase: cap concurrency at 4 for the first 4 completed tasks
-    # to collect stable dynamic resource measurements under controlled conditions
+    # Force concurrency to 1 during the first task execution for load measurement
     global completed_tasks_count
     with completed_tasks_lock:
         current_completed = completed_tasks_count
         
-    if current_completed < 4:
-        optimal = min(optimal, 4)
+    if current_completed < 1:
+        optimal = 1
     
     if not silent:
         print(f"[Auto-detect] CPU Count: {cpu_count}, System Load (RT): {load_1min:.2f} (External: {external_load:.2f}, Our Sims: {our_sims_load:.2f})")
         print(f"[Auto-detect] Estimated Resource per Sim -> CPU: {dyn_cpu_per_sim:.2f} cores, Mem: {dyn_mem_per_sim:.2f} GiB")
         print(f"[Auto-detect] Max workers by CPU: {max_by_cpu}, Mem: {max_by_mem}")
-        if current_completed < 4:
-            print(f"[Auto-detect] Warm-up phase active (completed: {current_completed}/4). Concurrency capped at 4.")
+        if current_completed < 1:
+            print(f"[Auto-detect] Profiling phase active (completed: {current_completed}/1). Concurrency forced to 1.")
         print(f"[Auto-detect] Optimal Concurrency (capped at {max_limit}): {optimal}")
     
     return optimal
@@ -708,8 +799,7 @@ def main():
     parser.add_argument("--resume", type=str, default=None, help="Resume a previous sweep using its timestamp or directory path")
     parser.add_argument("--no-build", action="store_true", help="Skip automatic colcon build at start")
     parser.add_argument("--manifest", type=str, default=None, help="Path to a JSON manifest file for split sweep execution")
-    
-    args, unknown = parser.parse_known_args()
+    args = parser.parse_args()
 
     is_docker = os.path.exists('/.dockerenv')
 
@@ -914,6 +1004,12 @@ def main():
 
     is_docker = os.path.exists('/.dockerenv')
 
+    # Start resource monitor thread in background
+    global monitor_running
+    monitor_running = True
+    monitor_thread = threading.Thread(target=resource_monitor_loop, daemon=True)
+    monitor_thread.start()
+
     def worker_thread_fn(task_info):
         worker_id = worker_queue.get()
         try:
@@ -923,9 +1019,12 @@ def main():
             worker_queue.put(worker_id)
             time.sleep(0.5)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-        futures = {executor.submit(worker_thread_fn, t): t for t in tasks_list}
-        concurrent.futures.wait(futures.keys())
+    try:
+        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+            futures = {executor.submit(worker_thread_fn, t): t for t in tasks_list}
+            concurrent.futures.wait(futures.keys())
+    finally:
+        monitor_running = False
 
     fix_ownership(sweep_start_time)
 
