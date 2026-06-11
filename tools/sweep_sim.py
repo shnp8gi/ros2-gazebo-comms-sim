@@ -22,7 +22,13 @@ except Exception:
     pass
 
 # スクリプトがあるディレクトリをパスに追加し、サブディレクトリ lib からのインポートを保証する
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
+_script_dir = os.path.dirname(os.path.realpath(__file__))
+if _script_dir not in sys.path:
+    sys.path.insert(0, _script_dir)
+# フォールバック: /workspace/tools を明示的に追加（Docker内で相対パス実行時の対策）
+_tools_dir = os.path.join(os.path.dirname(_script_dir), "tools") if os.path.basename(_script_dir) != "tools" else _script_dir
+if _tools_dir != _script_dir and _tools_dir not in sys.path and os.path.isdir(os.path.join(_tools_dir, "lib")):
+    sys.path.insert(0, _tools_dir)
 
 # =========================================================================
 # パラメータスイープ設定のインポート (Single Responsibility Principle)
