@@ -65,7 +65,7 @@ simulation:
 comms_simulator_node:
   ros__parameters:
     # 通信品質計算のサンプリングレート [kHz]
-    sampling_rate: 1.0
+    sampling_rate: 10.0
 
     # パブリッシュレート [Hz]
     publish_rate: 100.0

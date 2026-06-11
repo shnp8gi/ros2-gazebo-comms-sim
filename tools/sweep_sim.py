@@ -13,6 +13,13 @@ import queue
 import argparse
 import sys
 import glob
+import psutil
+
+# Initialize psutil CPU measurement reference point
+try:
+    psutil.cpu_percent(interval=None)
+except Exception:
+    pass
 
 # スクリプトがあるディレクトリをパスに追加し、サブディレクトリ lib からのインポートを保証する
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
@@ -38,18 +45,27 @@ from lib.sweep_config import (
 from lib.sweep_kinematics import estimate_expected_duration
 from lib.sweep_data import average_summaries, get_completed_tasks
 
+# 動的プロファイリングがまだ十分に機能していない場合の初期想定負荷パラメータ
+DEFAULT_CPU_PER_SIM = 1.5
+DEFAULT_MEM_PER_SIM_GIB = 1.2
+CPU_SAFE_RATIO = 0.95  # システム全体のCPUコアを使い切らないよう、5%の最小限のマージンを残す (95%ターゲット)
+LAUNCH_COOLDOWN_SEC = 10.0  # 起動時の負荷スパイクとロードアベレージ遅延を防ぐため、新規起動の間隔を最低10秒空ける
+
 # =========================================================================
 # 終了シグナルのハンドリングとアクティブプロセスの追跡
 # =========================================================================
-active_tasks_lock = threading.Lock()
+active_tasks_lock = threading.RLock()
 active_tasks = {}  # worker_id -> { 'proc': proc, 'tmp_config_path': tmp_config_path, 'ros_domain_id': ros_domain_id }
 shutdown_requested = False
 sweep_start_time = None
 
-def terminate_process_cleanly(proc, ros_domain_id, is_docker, timeout=2.0):
+launch_lock = threading.Lock()
+last_launch_time = 0.0
+
+def send_sigint_to_worker(proc, ros_domain_id, is_docker):
+    """Sends SIGINT to the process group and ROS nodes matching the domain ID."""
     if not proc:
         return
-
     try:
         os.killpg(os.getpgid(proc.pid), signal.SIGINT)
     except Exception:
@@ -72,33 +88,46 @@ def terminate_process_cleanly(proc, ros_domain_id, is_docker, timeout=2.0):
         except Exception:
             pass
 
+def send_sigkill_to_worker(proc, ros_domain_id, is_docker):
+    """Sends SIGKILL to the process group and ROS nodes matching the domain ID."""
+    if not proc:
+        return
+    try:
+        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
+    except Exception:
+        pass
+
+    if is_docker:
+        try:
+            subprocess.run(
+                f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
+                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+            )
+        except Exception:
+            pass
+    else:
+        try:
+            subprocess.run(
+                ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
+                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
+            )
+        except Exception:
+            pass
+
+def terminate_process_cleanly(proc, ros_domain_id, is_docker, timeout=2.0):
+    if not proc:
+        return
+
+    send_sigint_to_worker(proc, ros_domain_id, is_docker)
+
     t_start = time.time()
     while time.time() - t_start < timeout:
         if proc.poll() is not None:
-            break
+            return
         time.sleep(0.1)
 
     if proc.poll() is None:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except Exception:
-            pass
-        if is_docker:
-            try:
-                subprocess.run(
-                    f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
-                    shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-                )
-            except Exception:
-                pass
-        else:
-            try:
-                subprocess.run(
-                    ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
-                    stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-                )
-            except Exception:
-                pass
+        send_sigkill_to_worker(proc, ros_domain_id, is_docker)
 
 def fix_ownership(start_time_str):
     """結果ディレクトリの所有権をホストのユーザーに変更する"""
@@ -123,6 +152,13 @@ def handle_shutdown(signum, frame):
     if shutdown_requested:
         return
     shutdown_requested = True
+    
+    # Log abortion to sweep_progress.log
+    try:
+        log_progress(f"ABORT ts={datetime.datetime.now().isoformat()}")
+    except Exception:
+        pass
+        
     print("\n\n[Sweep Sim] Interrupt received. Shutting down all simulation tasks cleanly...")
     
     # 全てのアクティブなプロセスを終了
@@ -138,26 +174,7 @@ def handle_shutdown(signum, frame):
         ros_domain_id = task_data.get('ros_domain_id')
         if proc:
             print(f"[Sweep Sim] Requesting clean shutdown (SIGINT) for Worker {worker_id} (PID {proc.pid})...")
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-            except Exception:
-                pass
-            if is_docker:
-                try:
-                    subprocess.run(
-                        f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2",
-                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-                    )
-                except Exception:
-                    pass
-            else:
-                try:
-                    subprocess.run(
-                        ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-                    )
-                except Exception:
-                    pass
+            send_sigint_to_worker(proc, ros_domain_id, is_docker)
 
     # デストラクタでのCSV書き込みを待つ
     time.sleep(2.0)
@@ -170,26 +187,7 @@ def handle_shutdown(signum, frame):
         
         if proc and proc.poll() is None:
             print(f"[Sweep Sim] Killing remaining process group for Worker {worker_id} (PID {proc.pid})...")
-            try:
-                os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-            except Exception:
-                pass
-            if is_docker:
-                try:
-                    subprocess.run(
-                        f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
-                        shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-                    )
-                except Exception:
-                    pass
-            else:
-                try:
-                    subprocess.run(
-                        ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
-                        stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-                    )
-                except Exception:
-                    pass
+            send_sigkill_to_worker(proc, ros_domain_id, is_docker)
                     
         # 一時設定ファイルの削除
         if tmp_config_path and os.path.exists(tmp_config_path):
@@ -220,8 +218,77 @@ def handle_shutdown(signum, frame):
     print("[Sweep Sim] Shutdown completed. Exiting.")
     os._exit(1)
 
-def get_optimal_concurrency() -> int:
+def get_worker_processes(proc, worker_id, all_system_procs=None) -> list:
+    """Finds all processes associated with a worker, using child-tree and command line matching."""
+    procs = []
+    # 1. Add subprocess and its local children (handles is_docker=True)
+    if proc:
+        try:
+            parent = psutil.Process(proc.pid)
+            procs.append(parent)
+            procs.extend(parent.children(recursive=True))
+        except Exception:
+            pass
+            
+    # 2. Search system processes for command line keywords (handles is_docker=False)
+    cfg_keyword = f"sim_params_tmp_{worker_id}.yaml"
+    part_keyword = f"comms_sim_partition_{worker_id}"
+    gz_port_keyword = str(11345 + worker_id)
+    
+    proc_list = all_system_procs if all_system_procs is not None else psutil.process_iter(['pid', 'cmdline', 'environ'])
+    
+    for p in proc_list:
+        try:
+            # Skip if already in the list
+            if any(x.pid == p.pid for x in procs):
+                continue
+            
+            cmdline = p.info['cmdline']
+            if cmdline:
+                cmdline_str = " ".join(cmdline)
+                if (cfg_keyword in cmdline_str or 
+                    part_keyword in cmdline_str or 
+                    gz_port_keyword in cmdline_str):
+                    procs.append(p)
+                    continue
+                    
+            # Check environment if available
+            env = p.info['environ']
+            if env:
+                if env.get('ROS_DOMAIN_ID') == str(10 + worker_id) or env.get('GZ_PARTITION') == part_keyword:
+                    procs.append(p)
+                    continue
+        except Exception:
+            pass
+            
+    return procs
+
+# =========================================================================
+# Completed Tasks Counter for Warm-up Phase
+# =========================================================================
+completed_tasks_lock = threading.Lock()
+completed_tasks_count = 0
+
+def increment_completed_tasks():
+    global completed_tasks_count
+    with completed_tasks_lock:
+        completed_tasks_count += 1
+        if completed_tasks_count == 4:
+            print("\n[Sweep Sim] Warm-up phase completed. Transitioning to full dynamic resource concurrency profiling.\n")
+
+# =========================================================================
+# Resource Measurement Cache to prevent concurrent psutil measurement conflicts
+# =========================================================================
+resource_cache_lock = threading.Lock()
+last_resource_check_time = 0.0
+cached_system_load = 0.0
+cached_dyn_cpu_per_sim = DEFAULT_CPU_PER_SIM
+cached_dyn_mem_per_sim = DEFAULT_MEM_PER_SIM_GIB
+
+def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: bool = False) -> int:
     """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する"""
+    global last_resource_check_time, cached_system_load, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
+
     try:
         cpu_count = os.cpu_count()
     except Exception:
@@ -229,20 +296,140 @@ def get_optimal_concurrency() -> int:
     if cpu_count is None:
         cpu_count = 4
 
-    load_1min = 0.0
-    loadavg_path = "/proc/loadavg"
-    if os.path.exists(loadavg_path):
-        try:
-            with open(loadavg_path, "r") as f:
-                load_1min = float(f.read().split()[0])
-        except Exception:
-            pass
+    now = time.time()
+    with resource_cache_lock:
+        if now - last_resource_check_time >= 1.5:
+            # 1. Measure system CPU load
+            system_load = 0.0
+            if psutil:
+                try:
+                    sys_cpu_pct = psutil.cpu_percent(interval=None)
+                    system_load = (sys_cpu_pct / 100.0) * cpu_count
+                except Exception:
+                    pass
+            if system_load == 0.0:
+                loadavg_path = "/proc/loadavg"
+                if os.path.exists(loadavg_path):
+                    try:
+                        with open(loadavg_path, "r") as f:
+                            system_load = float(f.read().split()[0])
+                    except Exception:
+                        pass
+            cached_system_load = system_load
 
-    effective_load = load_1min * 0.5
-    avail_cpus = cpu_count - effective_load
-    max_by_cpu = max(2, int(math.floor(avail_cpus)))
+            # 2. Measure active tasks metrics (CPU/Mem per sim)
+            measured_cpu = 0.0
+            measured_mem_bytes = 0.0
+            measured_count = 0
+            
+            try:
+                all_system_procs = list(psutil.process_iter(['pid', 'cmdline', 'environ']))
+            except Exception:
+                all_system_procs = []
+                
+            active_pids = []
+            with active_tasks_lock:
+                for w_id, task_data in active_tasks.items():
+                    proc = task_data.get('proc')
+                    if proc and proc.poll() is None:
+                        active_pids.append((w_id, proc))
+                        
+            for w_id, proc in active_pids:
+                with active_tasks_lock:
+                    task_data = active_tasks.get(w_id, {})
+                    ps_procs = task_data.get('ps_procs', [])
+                
+                # Check / resolve processes
+                if not ps_procs:
+                    procs = get_worker_processes(proc, w_id, all_system_procs)
+                    if procs:
+                        for p in procs:
+                            try:
+                                p.cpu_percent(interval=None)
+                            except Exception:
+                                pass
+                        with active_tasks_lock:
+                            if w_id in active_tasks:
+                                active_tasks[w_id]['ps_procs'] = procs
+                        ps_procs = procs
+                else:
+                    has_sim_proc = False
+                    for p in ps_procs:
+                        try:
+                            if p.is_running():
+                                name = p.name().lower()
+                                if any(x in name for x in ["gz", "python", "comms_sim", "ruby"]):
+                                    has_sim_proc = True
+                                    break
+                        except Exception:
+                            pass
+                    
+                    if not has_sim_proc:
+                        procs = get_worker_processes(proc, w_id, all_system_procs)
+                        if procs:
+                            for p in procs:
+                                try:
+                                    p.cpu_percent(interval=None)
+                                except Exception:
+                                    pass
+                            with active_tasks_lock:
+                                if w_id in active_tasks:
+                                    active_tasks[w_id]['ps_procs'] = procs
+                            ps_procs = procs
+                    else:
+                        try:
+                            parent_proc = ps_procs[0]
+                            current_children = parent_proc.children(recursive=True)
+                            for child in current_children:
+                                if not any(x.pid == child.pid for x in ps_procs):
+                                    child.cpu_percent(interval=None)
+                                    ps_procs.append(child)
+                        except Exception:
+                            pass
+                            
+                # Calculate metrics for this worker
+                w_cpu = 0.0
+                w_mem = 0.0
+                for p in ps_procs:
+                    try:
+                        if p.is_running():
+                            w_cpu += p.cpu_percent(interval=None) / 100.0
+                            w_mem += p.memory_info().rss
+                    except Exception:
+                        pass
+                
+                if w_cpu > 0.1 and w_mem > 100 * 1024 * 1024:
+                    measured_cpu += w_cpu
+                    measured_mem_bytes += w_mem
+                    measured_count += 1
+            
+            if measured_count > 0:
+                cached_dyn_cpu_per_sim = measured_cpu / measured_count
+                cached_dyn_mem_per_sim = (measured_mem_bytes / measured_count) / (1024**3)
+            else:
+                cached_dyn_cpu_per_sim = DEFAULT_CPU_PER_SIM
+                cached_dyn_mem_per_sim = DEFAULT_MEM_PER_SIM_GIB
+                
+            # Safety clips (CPU: 1.0 to 4.0 cores, Mem: 0.3 to 3.0 GiB)
+            cached_dyn_cpu_per_sim = max(1.0, min(cached_dyn_cpu_per_sim, 4.0))
+            cached_dyn_mem_per_sim = max(0.3, min(cached_dyn_mem_per_sim, 3.0))
+            
+            last_resource_check_time = now
+            
+    load_1min = cached_system_load
+    dyn_cpu_per_sim = cached_dyn_cpu_per_sim
+    dyn_mem_per_sim = cached_dyn_mem_per_sim
 
-    mem_per_worker = 1.2 * (1024**3)  # bytes
+    our_sims_load = active_count * dyn_cpu_per_sim
+    
+    # 全体負荷から自分たちのシミュレーション負荷を引くことで「外部負荷」を切り分ける
+    external_load = max(0.0, load_1min - our_sims_load)
+    
+    # 外部負荷を引いた「シミュレーションで利用可能な残りのCPUコア数」を計算（マージン比率を考慮）
+    avail_cpus = max(0.0, (cpu_count * CPU_SAFE_RATIO) - external_load)
+    max_by_cpu = max(1, int(math.floor(avail_cpus / dyn_cpu_per_sim)))
+
+    mem_per_worker = dyn_mem_per_sim * (1024**3)  # bytes
     mem_available = 8 * (1024**3)     # 8 GiB fallback
     
     meminfo_path = "/proc/meminfo"
@@ -260,18 +447,27 @@ def get_optimal_concurrency() -> int:
     max_by_mem = max(1, int(math.floor(safe_mem_available / mem_per_worker)))
 
     optimal = min(max_by_cpu, max_by_mem)
+    optimal = max(1, min(optimal, max_limit))
     
-    # Gazebo has a significant CPU/GPU footprint even in headless mode.
-    # Running too many parallel instances causes thread starvation, DDS message drops,
-    # and inconsistent telemetry logging. We cap the default auto-detected concurrency to 4.
-    MAX_CONCURRENCY = 4
-    optimal = min(optimal, MAX_CONCURRENCY)
+    # Warm-up phase: cap concurrency at 4 for the first 4 completed tasks
+    # to collect stable dynamic resource measurements under controlled conditions
+    global completed_tasks_count
+    with completed_tasks_lock:
+        current_completed = completed_tasks_count
+        
+    if current_completed < 4:
+        optimal = min(optimal, 4)
     
-    print(f"[Auto-detect] CPU Count: {cpu_count}, Load 1min: {load_1min:.2f} -> Max by CPU: {max_by_cpu}")
-    print(f"[Auto-detect] Available Memory: {mem_available / (1024**3):.2f} GiB -> Max by Mem: {max_by_mem}")
-    print(f"[Auto-detect] Optimal Concurrency (capped at {MAX_CONCURRENCY}): {optimal}")
+    if not silent:
+        print(f"[Auto-detect] CPU Count: {cpu_count}, System Load (RT): {load_1min:.2f} (External: {external_load:.2f}, Our Sims: {our_sims_load:.2f})")
+        print(f"[Auto-detect] Estimated Resource per Sim -> CPU: {dyn_cpu_per_sim:.2f} cores, Mem: {dyn_mem_per_sim:.2f} GiB")
+        print(f"[Auto-detect] Max workers by CPU: {max_by_cpu}, Mem: {max_by_mem}")
+        if current_completed < 4:
+            print(f"[Auto-detect] Warm-up phase active (completed: {current_completed}/4). Concurrency capped at 4.")
+        print(f"[Auto-detect] Optimal Concurrency (capped at {max_limit}): {optimal}")
     
     return optimal
+
 
 progress_lock = threading.Lock()
 
@@ -282,8 +478,12 @@ def log_progress(line: str):
             lf.write(line + "\n")
             lf.flush()
 
-def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, base_station_yaw_deg=-90.0):
-    run_idx, y, angle_deg, overall_task_no = task_info
+def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, base_station_yaw_deg=-90.0, max_concurrency=4):
+    if len(task_info) == 5:
+        run_idx, y, angle_deg, overall_task_no, local_task_no = task_info
+    else:
+        run_idx, y, angle_deg, overall_task_no = task_info
+        local_task_no = overall_task_no
     
     world_yaw = math.radians(angle_deg) - math.pi
     entity_yaw = math.radians(base_station_yaw_deg)
@@ -291,12 +491,12 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
  
     summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_w{worker_id}.csv"
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
+    ros_domain_id = 10 + worker_id
  
-    pct = (overall_task_no - 1) / total_runs_tasks * 100
+    pct = (local_task_no - 1) / total_runs_tasks * 100
     print(f"\n=======================================================")
     print(f"[Worker {worker_id}] [Run {run_idx}/{NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) Y = {y} m, Angle = {angle_deg} deg")
     print(f"=======================================================")
-    log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()}")
  
     t_expected = estimate_expected_duration(CONFIG_PATH, rtf)
     
@@ -309,6 +509,46 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         if shutdown_requested:
             return False
         try:
+            # Wait until the system is not too busy and launch cooldown has elapsed
+            last_wait_log_time = 0
+            while True:
+                if shutdown_requested:
+                    return False
+                
+                # Check launch cooldown first to prevent feedback lag overshoot
+                now_time = time.time()
+                global last_launch_time
+                with launch_lock:
+                    elapsed = now_time - last_launch_time
+                
+                if elapsed < LAUNCH_COOLDOWN_SEC:
+                    time.sleep(1.0)
+                    continue
+                
+                with active_tasks_lock:
+                    current_active = len(active_tasks)
+                
+                current_optimal = get_optimal_concurrency(max_limit=max_concurrency, active_count=current_active, silent=True)
+                
+                with active_tasks_lock:
+                    current_active = len(active_tasks)
+                    if current_active < current_optimal:
+                        # Reserve slot with placeholder
+                        active_tasks[worker_id] = {
+                            'proc': None,
+                            'tmp_config_path': tmp_config_path,
+                            'ros_domain_id': ros_domain_id
+                        }
+                        # Update launch time immediately to block other workers
+                        with launch_lock:
+                            last_launch_time = time.time()
+                        break
+                
+                if now_time - last_wait_log_time > 15.0:
+                    print(f"[Worker {worker_id}] System is busy (Active tasks: {current_active}/{current_optimal}). Waiting for system load/memory to decrease...")
+                    last_wait_log_time = now_time
+                time.sleep(2.0)
+
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 content = f.read()
      
@@ -377,12 +617,14 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         if shutdown_requested:
             return False
 
+        log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()}")
+
         start_time = time.time()
         proc = subprocess.Popen(
             cmd,
             preexec_fn=os.setsid
         )
-        
+
         with active_tasks_lock:
             if shutdown_requested:
                 try:
@@ -393,7 +635,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             active_tasks[worker_id] = {
                 'proc': proc,
                 'tmp_config_path': tmp_config_path,
-                'ros_domain_id': ros_domain_id
+                'ros_domain_id': ros_domain_id,
+                'ps_procs': []
             }
         
         timed_out = False
@@ -436,6 +679,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             expected_str = f"{t_expected:.1f}s" if t_expected is not None else "Unknown"
             print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation finished successfully in {actual_duration:.1f}s (Expected: {expected_str}): Y={y}, Angle={angle_deg}")
             log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=OK ts={datetime.datetime.now().isoformat()}")
+            increment_completed_tasks()
             return True
         else:
             attempt_info = f"Attempt {attempt + 1}/{max_retries}"
@@ -444,6 +688,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
 
     print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} All {max_retries} attempts failed: Y={y}, Angle={angle_deg}")
     log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()}")
+    increment_completed_tasks()
     return False
 
 def main():
@@ -462,6 +707,7 @@ def main():
     parser.add_argument("--timeout", type=int, default=None, help="Timeout in seconds per task (default from config)")
     parser.add_argument("--resume", type=str, default=None, help="Resume a previous sweep using its timestamp or directory path")
     parser.add_argument("--no-build", action="store_true", help="Skip automatic colcon build at start")
+    parser.add_argument("--manifest", type=str, default=None, help="Path to a JSON manifest file for split sweep execution")
     
     args, unknown = parser.parse_known_args()
 
@@ -481,32 +727,77 @@ def main():
             print(f"[Sweep Sim] Build failed. Exiting.")
             sys.exit(1)
 
-    concurrency = args.concurrency
-    if concurrency <= 0:
-        concurrency = get_optimal_concurrency()
-
-    num_runs = args.num_runs if args.num_runs is not None else NUM_RUNS
-    rtf = args.rtf if args.rtf is not None else SWEEP_REAL_TIME_FACTOR
-    timeout = args.timeout if args.timeout is not None else TASK_TIMEOUT_SEC
-    base_station_yaw_deg = args.base_station_yaw if args.base_station_yaw is not None else BASE_STATION_YAW_DEG
-
-    if args.y_positions is not None:
-        y_positions = [float(y.strip()) for y in args.y_positions.split(',') if y.strip()]
+    try:
+        cpu_count = os.cpu_count() or 4
+    except Exception:
+        cpu_count = 4
+    MAX_CONCURRENCY_CAP = cpu_count
+    concurrency_arg = args.concurrency
+    if concurrency_arg <= 0:
+        # In auto mode, we set the pool capacity to MAX_CONCURRENCY_CAP,
+        # but check and print the initial optimal concurrency level.
+        initial_optimal = get_optimal_concurrency(max_limit=MAX_CONCURRENCY_CAP)
+        concurrency = MAX_CONCURRENCY_CAP
+        print(f"[Sweep Sim] Dynamic concurrency enabled (Initial optimal: {initial_optimal}, Limit: {MAX_CONCURRENCY_CAP})")
     else:
-        y_positions = Y_POSITIONS
+        concurrency = concurrency_arg
+        print(f"[Sweep Sim] Concurrency manually set to limit: {concurrency}")
+
+    manifest_data = None
+    chunk_idx = None
+    if args.manifest:
+        import json
+        if not os.path.exists(args.manifest):
+            print(f"Error: Manifest file {args.manifest} does not exist.")
+            sys.exit(1)
+        with open(args.manifest, 'r', encoding='utf-8') as f:
+            manifest_data = json.load(f)
         
-    if args.start_angle is not None or args.end_angle is not None or args.step_angle is not None:
-        start_angle = args.start_angle if args.start_angle is not None else min(ANGLES_DEG)
-        end_angle = args.end_angle if args.end_angle is not None else max(ANGLES_DEG)
-        step_angle = args.step_angle if args.step_angle is not None else 0.2
-        
-        angles_deg = []
-        curr_angle = start_angle
-        while curr_angle <= end_angle + 1e-5:
-            angles_deg.append(round(curr_angle, 1))
-            curr_angle += step_angle
+        sweep_start_time = manifest_data['sweep_id']
+        chunk_idx = manifest_data['chunk_idx']
+        print(f"[Sweep Sim] Running chunk {chunk_idx} of distributed sweep {sweep_start_time} from manifest.")
+
+    if manifest_data:
+        cfg = manifest_data['config']
+        num_runs = cfg.get('NUM_RUNS', NUM_RUNS)
+        rtf = cfg.get('SWEEP_REAL_TIME_FACTOR', SWEEP_REAL_TIME_FACTOR)
+        timeout = cfg.get('TASK_TIMEOUT_SEC', TASK_TIMEOUT_SEC)
+        base_station_yaw_deg = cfg.get('RX_YAW_DEG', BASE_STATION_YAW_DEG)
+        y_positions = cfg.get('Y_POSITIONS', Y_POSITIONS)
+        if 'ANGLES_DEG' in cfg:
+            angles_deg = cfg['ANGLES_DEG']
+        else:
+            start_ang = cfg.get('START_ANGLE', START_ANGLE)
+            end_ang = cfg.get('END_ANGLE', END_ANGLE)
+            step_ang = cfg.get('STEP_ANGLE', STEP_ANGLE)
+            angles_deg = []
+            curr_ang = start_ang
+            while curr_ang <= end_ang + 1e-5:
+                angles_deg.append(round(curr_ang, 1))
+                curr_ang += step_ang
     else:
-        angles_deg = ANGLES_DEG
+        num_runs = args.num_runs if args.num_runs is not None else NUM_RUNS
+        rtf = args.rtf if args.rtf is not None else SWEEP_REAL_TIME_FACTOR
+        timeout = args.timeout if args.timeout is not None else TASK_TIMEOUT_SEC
+        base_station_yaw_deg = args.base_station_yaw if args.base_station_yaw is not None else BASE_STATION_YAW_DEG
+
+        if args.y_positions is not None:
+            y_positions = [float(y.strip()) for y in args.y_positions.split(',') if y.strip()]
+        else:
+            y_positions = Y_POSITIONS
+            
+        if args.start_angle is not None or args.end_angle is not None or args.step_angle is not None:
+            start_angle = args.start_angle if args.start_angle is not None else min(ANGLES_DEG)
+            end_angle = args.end_angle if args.end_angle is not None else max(ANGLES_DEG)
+            step_angle = args.step_angle if args.step_angle is not None else 0.2
+            
+            angles_deg = []
+            curr_angle = start_angle
+            while curr_angle <= end_angle + 1e-5:
+                angles_deg.append(round(curr_angle, 1))
+                curr_angle += step_angle
+        else:
+            angles_deg = ANGLES_DEG
 
     os.makedirs("tools/sweep_build", exist_ok=True)
 
@@ -534,8 +825,11 @@ def main():
             sys.exit(1)
         print(f"Resuming parameter sweep from existing directory: {sweep_dir}")
     else:
-        sweep_start_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-        sweep_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
+        if manifest_data:
+            sweep_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
+        else:
+            sweep_start_time = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
+            sweep_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
 
     global PROGRESS_LOG
     PROGRESS_LOG = f"tools/log/{sweep_start_time}/sweep_progress.log"
@@ -544,31 +838,65 @@ def main():
     if not args.resume and os.path.exists(PROGRESS_LOG):
         os.remove(PROGRESS_LOG)
 
+    # Copy manifest to results folder if chunk_idx is not None
+    if chunk_idx is not None and args.manifest:
+        os.makedirs(sweep_dir, exist_ok=True)
+        dest_manifest = os.path.join(sweep_dir, f"manifest_chunk_{chunk_idx}.json")
+        try:
+            shutil.copy2(args.manifest, dest_manifest)
+            print(f"[Sweep Sim] Preserved manifest to results directory: {dest_manifest}")
+        except Exception as e:
+            print(f"[Sweep Sim] Warning: Failed to copy manifest: {e}")
+
     tasks_list = []
-    overall_task_no = 1
     skipped_count = 0
     
-    for run_idx in range(1, num_runs + 1):
-        completed_set = set()
-        if args.resume:
-            completed_set = get_completed_tasks(sweep_dir, run_idx)
+    if manifest_data:
+        manifest_tasks = manifest_data.get('tasks', [])
+        completed_cache = {}
+        for local_idx, task in enumerate(manifest_tasks):
+            r_idx = task['run_idx']
+            y_val = task['y']
+            ang_val = task['angle_deg']
+            t_no = task['overall_task_no']
             
-        for y in y_positions:
-            for angle_deg in angles_deg:
-                is_completed = False
-                for cy, cang in completed_set:
-                    if abs(cy - y) < 0.01 and abs(cang - angle_deg) < 0.05:
+            is_completed = False
+            if args.resume:
+                if r_idx not in completed_cache:
+                    completed_cache[r_idx] = get_completed_tasks(sweep_dir, r_idx)
+                for cy, cang in completed_cache[r_idx]:
+                    if abs(cy - y_val) < 0.01 and abs(cang - ang_val) < 0.05:
                         is_completed = True
                         break
+            
+            if is_completed:
+                skipped_count += 1
+            else:
+                tasks_list.append((r_idx, y_val, ang_val, t_no, local_idx + 1))
+        
+        total_runs_tasks = len(manifest_tasks)
+    else:
+        overall_task_no = 1
+        for run_idx in range(1, num_runs + 1):
+            completed_set = set()
+            if args.resume:
+                completed_set = get_completed_tasks(sweep_dir, run_idx)
                 
-                if is_completed:
-                    skipped_count += 1
-                else:
-                    tasks_list.append((run_idx, y, angle_deg, overall_task_no))
-                overall_task_no += 1
-
-    total_tasks_per_run = len(y_positions) * len(angles_deg)
-    total_runs_tasks = total_tasks_per_run * num_runs
+            for y in y_positions:
+                for angle_deg in angles_deg:
+                    is_completed = False
+                    for cy, cang in completed_set:
+                        if abs(cy - y) < 0.01 and abs(cang - angle_deg) < 0.05:
+                            is_completed = True
+                            break
+                    
+                    if is_completed:
+                        skipped_count += 1
+                    else:
+                        tasks_list.append((run_idx, y, angle_deg, overall_task_no, overall_task_no))
+                    overall_task_no += 1
+        total_tasks_per_run = len(y_positions) * len(angles_deg)
+        total_runs_tasks = total_tasks_per_run * num_runs
 
     log_progress(f"START {datetime.datetime.now().isoformat()} TOTAL={total_runs_tasks} CONCURRENCY={concurrency}")
 
@@ -589,7 +917,7 @@ def main():
     def worker_thread_fn(task_info):
         worker_id = worker_queue.get()
         try:
-            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=rtf, timeout=timeout, base_station_yaw_deg=base_station_yaw_deg)
+            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=rtf, timeout=timeout, base_station_yaw_deg=base_station_yaw_deg, max_concurrency=concurrency)
             return success
         finally:
             worker_queue.put(worker_id)
@@ -603,7 +931,10 @@ def main():
 
     print("\nMerging worker results...")
     for run_idx in range(1, num_runs + 1):
-        merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv")
+        if chunk_idx is not None:
+            merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}_chunk{chunk_idx}.csv")
+        else:
+            merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv")
         os.makedirs(os.path.dirname(merged_summary_file), exist_ok=True)
         
         merged_rows = []
@@ -643,14 +974,19 @@ def main():
                 outfile.write(header)
                 outfile.writelines(merged_rows)
 
-    print("\nAveraging results across all runs...")
-    try:
-        final_summary_file = f"sim_results/sweep_{sweep_start_time}/sweep_summary.csv"
-        summary_files = [os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv") for run_idx in range(1, num_runs + 1)]
-        average_summaries(summary_files, final_summary_file)
-        print(f"Averaged summary successfully saved to: {final_summary_file}")
-    except Exception as e:
-        print(f"Failed to average summaries: {e}")
+    if chunk_idx is None:
+        print("\nAveraging results across all runs...")
+        try:
+            final_summary_file = f"sim_results/sweep_{sweep_start_time}/sweep_summary.csv"
+            summary_files = [os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv") for run_idx in range(1, num_runs + 1)]
+            average_summaries(summary_files, final_summary_file)
+            print(f"Averaged summary successfully saved to: {final_summary_file}")
+        except Exception as e:
+            print(f"Failed to average summaries: {e}")
+    else:
+        print(f"\nChunk {chunk_idx} execution finished. Results merged into chunk-specific files.")
+        print(f"Please copy the directory 'sim_results/sweep_{sweep_start_time}' back to your primary PC and run the merge tool:")
+        print(f"  python3 tools/sweep_dist.py merge --sweep-dir sim_results/sweep_{sweep_start_time}")
 
     # すべてのファイル生成が完了したため、再度所有権を修正
     fix_ownership(sweep_start_time)
