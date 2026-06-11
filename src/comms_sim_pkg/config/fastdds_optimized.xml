@@ -1,0 +1,32 @@
+<?xml version="1.0" encoding="UTF-8" ?>
+<!--
+  FastDDS 最適化プロファイル
+  車載バス相当の低遅延プロセス間通信を実現するため、
+  共有メモリ (SHM) 通信を有効化する。
+
+  SHM: 同一ホスト内のプロセス間で直接メモリを共有（μsオーダー）
+  UDP: プロセスディスカバリのフォールバック
+-->
+<profiles xmlns="http://www.eprosima.com/XMLSchemas/fastRTPS_Profiles" >
+    <transport_descriptors>
+        <transport_descriptor>
+            <transport_id>ShmTransport</transport_id>
+            <type>SHM</type>
+            <segment_size>1048576</segment_size>
+            <port_queue_capacity>512</port_queue_capacity>
+        </transport_descriptor>
+        <transport_descriptor>
+            <transport_id>UdpTransport</transport_id>
+            <type>UDPv4</type>
+        </transport_descriptor>
+    </transport_descriptors>
+    <participant profile_name="participant_profile" is_default_profile="true">
+        <rtps>
+            <userTransports>
+                <transport_id>ShmTransport</transport_id>
+                <transport_id>UdpTransport</transport_id>
+            </userTransports>
+            <useBuiltinTransports>false</useBuiltinTransports>
+        </rtps>
+    </participant>
+</profiles>

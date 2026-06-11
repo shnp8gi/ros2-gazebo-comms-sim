@@ -56,7 +56,7 @@ simulation:
     entity_spawn_interval: 0.5 # エンティティ間のスポーン間隔 [s]
     bridge_startup_delay: 1.0 # ブリッジ起動待機時間 [s]
     comms_node_delay: 3.0 # 通信ノード起動待機時間 [s]
-    ugv_controller_delay: 3.5 # UGVコントローラ起動待機時間 [s]
+    tx_controller_delay: 3.5 # TXコントローラ起動待機時間 [s]
 
 # -----------------------------------------------------------------------------
 # 通信シミュレータノードパラメータ (共通設定)
@@ -64,8 +64,11 @@ simulation:
 # -----------------------------------------------------------------------------
 comms_simulator_node:
   ros__parameters:
-    # 通信品質計算のサンプリングレート [Hz]
-    sampling_rate: 100.0
+    # 通信品質計算のサンプリングレート [kHz]
+    sampling_rate: 10.0
+
+    # パブリッシュレート [Hz]
+    publish_rate: 100.0
 
     # AWGN分散 [dB]
     noise_variance: 0.0
@@ -78,7 +81,7 @@ comms_simulator_node:
     mcs_table_path: "/workspace/config/MCStable.csv"
 
     # リンク確立（Association）時間 [ms]
-    # RSSIが閾値を超えた後、通信リンクの確立に要する時間
+    # RSSIが閾値を超えた後、通信リンクの確立に要する時間(平均的なIEEE 802.15.3eをオフセットとして付与)
     link_establishment_time_ms: 2.0
 
     # 通信データ上限 [MB] (-1.0 で無制限)
@@ -107,6 +110,12 @@ comms_simulator_node:
     # 減衰量をこの値でクランプする。
     max_antenna_attenuation: 30.0
 
+    # メインローブ境界検出のパラメータ [度]
+    mainlobe_angle_margin_deg: 5.0
+    # 手動オーバーライド角度 (-1.0 で自動検出)
+    mainlobe_e_half_angle_deg: -1.0
+    mainlobe_h_half_angle_deg: -1.0
+
     # ログ記録開始トリガー
     #   immediate   : ノード起動後すぐにデータ取得開始
     #   on_movement : /cmd_vel で非ゼロ速度指令を検知してから開始
@@ -116,10 +125,10 @@ comms_simulator_node:
     # logging_start_topic: "/logging/start"
 
     # -----------------------------------------------------------------------------
-    # UGVコントローラ共通パラメータ
+    # TXコントローラ共通パラメータ
     # 車両固有のウェイポイントは vehicles セクションで個別定義する
     # -----------------------------------------------------------------------------
-ugv_controller_common:
+tx_controller_common:
   # ウェイポイント到達判定距離 [m]
   waypoint_tolerance: 3.0
 
@@ -141,7 +150,7 @@ ugv_controller_common:
 link_controller_node:
   ros__parameters:
     # スケジューリング処理を実行する周期 (Hz)
-    scheduling_rate_hz: 100.0
+    scheduling_rate_hz: 4000.0
 
     # スケジューリングポリシー
     #   sequential: 車両順に通信、ミッション完了で次へ切替
@@ -193,7 +202,14 @@ link_controller_node:
     # best_score がこの値を下回る場合は強制切替を行わない
     # （geometry_info 未到達時など、信頼できないデータによる誤切替を防ぐ）
     # 目安: -80.0 ≒ 通信限界付近のRSSI相当
-    proactive_handover_score_threshold: -80
+    proactive_handover_score_threshold: -130
+
+    # メインローブフィルタリングの有効化
+    filter_main_lobe: true
+    # メインローブ境界検出のパラメータ [度] (事前ヒートマップ計算等で使用)
+    mainlobe_angle_margin_deg: 5.0
+    mainlobe_e_half_angle_deg: -1.0
+    mainlobe_h_half_angle_deg: -1.0
 
 # -----------------------------------------------------------------------------
 # スポーンエンティティ設定 (基地局等の静的エンティティ)
@@ -279,7 +295,7 @@ spawn_entities:
     model_uri: "models://antenna"
     name: "antenna_0"
     # ポーズ: [x, y, z, roll, pitch, yaw]
-    pose: [-5.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+    pose: [-5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
     static: true
     # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
     # （通信計算に使用: アンテナ位置 = pose + antenna_offset）
@@ -350,11 +366,11 @@ vehicles:
       - [100.0, 0.0, 0.0, 83.33]
     antennas:
       - name: "shinkansen_front"
-        offset: [10.0, 1.7, 1.0]
+        offset: [10.0, 1.5, 1.0]
         relative_rpy: [0.0, 0.0, 0.0593]
       - name: "shinkansen_mid"
-        offset: [0.0, 1.7, 1.0]
+        offset: [0.0, 1.5, 1.0]
         relative_rpy: [0.0, 0.0, 0.0593]
       - name: "shinkansen_rear"
-        offset: [-10.0, 1.7, 1.0]
+        offset: [-10.0, 1.5, 1.0]
         relative_rpy: [0.0, 0.0, 0.0593]

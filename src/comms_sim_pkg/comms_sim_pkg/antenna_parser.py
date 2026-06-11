@@ -31,30 +31,37 @@ class AntennaPatternParser:
         self,
         e_plane_path: Optional[str] = None,
         h_plane_path: Optional[str] = None,
-        max_antenna_attenuation: float = 30.0
+        max_antenna_attenuation: float = 30.0,
+        mainlobe_angle_margin_deg: float = 5.0,
+        mainlobe_e_half_angle_override_deg: float = -1.0,
+        mainlobe_h_half_angle_override_deg: float = -1.0
     ) -> None:
         """
         アンテナパターン解析クラスを初期化する。
-
-        Args:
-            e_plane_path: E面ゲインCSVファイルのパス
-            h_plane_path: H面ゲインCSVファイルのパス
-            max_antenna_attenuation: 各面の最大減衰量 [dB]。
-                パターン範囲外等で極端に低いゲイン値が得られた場合に
-                減衰をこの値でクランプする。旧C++実装と同等。
         """
         self.e_plane_interp: Optional[interp1d] = None
         self.h_plane_interp: Optional[interp1d] = None
+        self.e_plane_angles: Optional[np.ndarray] = None
+        self.e_plane_gains: Optional[np.ndarray] = None
+        self.h_plane_angles: Optional[np.ndarray] = None
+        self.h_plane_gains: Optional[np.ndarray] = None
         self.e_plane_peak: float = 0.0
         self.h_plane_peak: float = 0.0
         self.max_antenna_attenuation: float = max_antenna_attenuation
+
+        self.mainlobe_angle_margin_deg = mainlobe_angle_margin_deg
+        self.mainlobe_e_half_angle_override_deg = mainlobe_e_half_angle_override_deg
+        self.mainlobe_h_half_angle_override_deg = mainlobe_h_half_angle_override_deg
+        self.e_mainlobe_half_angle: float = 0.0
+        self.h_mainlobe_half_angle: float = 0.0
 
         if e_plane_path:
             self.load_e_plane(e_plane_path)
         if h_plane_path:
             self.load_h_plane(h_plane_path)
 
-    def _load_pattern(self, filepath: str) -> Tuple[interp1d, float]:
+
+    def _load_pattern(self, filepath: str) -> Tuple[np.ndarray, np.ndarray, float]:
         """
         CSVファイルからアンテナパターンを読み込む。
 
@@ -68,7 +75,7 @@ class AntennaPatternParser:
             filepath: CSVファイルのパス
 
         Returns:
-            (補間関数, ピークゲイン [dBi]) のタプル
+            (angles, gains, ピークゲイン [dBi]) のタプル
 
         Raises:
             FileNotFoundError: ファイルが存在しない場合
@@ -117,17 +124,7 @@ class AntennaPatternParser:
         gains = gains[sort_idx]
 
         peak_gain = float(np.max(gains))
-
-        # 補間関数を作成
-        # 範囲外の角度には非常に大きな負のゲイン (-1000 dBi) を割り当て、
-        # アンテナパターンの角度範囲外では事実上通信不可能であることを表現。
-        interp_func = interp1d(
-            angles, gains,
-            kind='linear',
-            bounds_error=False,
-            fill_value=-1000.0
-        )
-        return interp_func, peak_gain
+        return angles, gains, peak_gain
 
     def load_e_plane(self, filepath: str) -> None:
         """
@@ -136,9 +133,22 @@ class AntennaPatternParser:
         Args:
             filepath: E面CSVファイルのパス
         """
-        interp, peak = self._load_pattern(filepath)
-        self.e_plane_interp = interp
+        angles, gains, peak = self._load_pattern(filepath)
+        self.e_plane_angles = angles
+        self.e_plane_gains = gains
         self.e_plane_peak = peak
+        # 後方互換性のために interp1d も作成
+        self.e_plane_interp = interp1d(
+            angles, gains,
+            kind='linear',
+            bounds_error=False,
+            fill_value=-1000.0
+        )
+        if self.mainlobe_e_half_angle_override_deg > 0.0:
+            self.e_mainlobe_half_angle = self.mainlobe_e_half_angle_override_deg
+        else:
+            null_ang = self.detect_first_null_angle(angles, gains)
+            self.e_mainlobe_half_angle = max(0.0, null_ang - self.mainlobe_angle_margin_deg)
 
     def load_h_plane(self, filepath: str) -> None:
         """
@@ -147,9 +157,23 @@ class AntennaPatternParser:
         Args:
             filepath: H面CSVファイルのパス
         """
-        interp, peak = self._load_pattern(filepath)
-        self.h_plane_interp = interp
+        angles, gains, peak = self._load_pattern(filepath)
+        self.h_plane_angles = angles
+        self.h_plane_gains = gains
         self.h_plane_peak = peak
+        # 後方互換性のために interp1d も作成
+        self.h_plane_interp = interp1d(
+            angles, gains,
+            kind='linear',
+            bounds_error=False,
+            fill_value=-1000.0
+        )
+        if self.mainlobe_h_half_angle_override_deg > 0.0:
+            self.h_mainlobe_half_angle = self.mainlobe_h_half_angle_override_deg
+        else:
+            null_ang = self.detect_first_null_angle(angles, gains)
+            self.h_mainlobe_half_angle = max(0.0, null_ang - self.mainlobe_angle_margin_deg)
+
 
     def get_e_plane_gain(self, angle_deg: float) -> float:
         """
@@ -161,9 +185,9 @@ class AntennaPatternParser:
         Returns:
             ゲイン [dBi]
         """
-        if self.e_plane_interp is None:
+        if self.e_plane_angles is None or self.e_plane_gains is None:
             return 0.0
-        return float(self.e_plane_interp(angle_deg))
+        return float(np.interp(angle_deg, self.e_plane_angles, self.e_plane_gains, left=-1000.0, right=-1000.0))
 
     def get_h_plane_gain(self, angle_deg: float) -> float:
         """
@@ -175,9 +199,9 @@ class AntennaPatternParser:
         Returns:
             ゲイン [dBi]
         """
-        if self.h_plane_interp is None:
+        if self.h_plane_angles is None or self.h_plane_gains is None:
             return 0.0
-        return float(self.h_plane_interp(angle_deg))
+        return float(np.interp(angle_deg, self.h_plane_angles, self.h_plane_gains, left=-1000.0, right=-1000.0))
 
     def get_combined_gain(
         self,
@@ -209,23 +233,15 @@ class AntennaPatternParser:
 
         アンテナ/ボディフレーム → ワールドフレームへの変換に使用。
         """
-        cr, sr = float(np.cos(roll)), float(np.sin(roll))
-        cp, sp = float(np.cos(pitch)), float(np.sin(pitch))
-        cy, sy = float(np.cos(yaw)), float(np.sin(yaw))
+        cr, sr = np.cos(roll), np.sin(roll)
+        cp, sp = np.cos(pitch), np.sin(pitch)
+        cy, sy = np.cos(yaw), np.sin(yaw)
 
-        rx = np.array(
-            [[1.0, 0.0, 0.0], [0.0, cr, -sr], [0.0, sr, cr]],
-            dtype=float,
-        )
-        ry = np.array(
-            [[cp, 0.0, sp], [0.0, 1.0, 0.0], [-sp, 0.0, cp]],
-            dtype=float,
-        )
-        rz = np.array(
-            [[cy, -sy, 0.0], [sy, cy, 0.0], [0.0, 0.0, 1.0]],
-            dtype=float,
-        )
-        return rz @ ry @ rx
+        return np.array([
+            [cy*cp, cy*sp*sr - sy*cr, cy*sp*cr + sy*sr],
+            [sy*cp, sy*sp*sr + cy*cr, sy*sp*cr - cy*sr],
+            [-sp,   cp*sr,            cp*cr           ]
+        ], dtype=float)
 
     @staticmethod
     def _wrap_pi(angle_rad: float) -> float:
@@ -237,6 +253,7 @@ class AntennaPatternParser:
         antenna_pos_world: np.ndarray,
         target_pos_world: np.ndarray,
         antenna_rpy_world: np.ndarray,
+        rotmat: Optional[np.ndarray] = None,
     ) -> Tuple[float, float]:
         """アンテナフレームにおけるターゲット方向の (仰角, 方位角) を計算する。
 
@@ -254,12 +271,15 @@ class AntennaPatternParser:
         # 単位ベクトルに正規化
         v_world /= norm
 
-        # 回転行列を生成
-        r = self._rpy_to_rotmat(
-            float(antenna_rpy_world[0]),
-            float(antenna_rpy_world[1]),
-            float(antenna_rpy_world[2]),
-        )
+        # 回転行列を取得（渡されていない場合は計算）
+        if rotmat is None:
+            r = self._rpy_to_rotmat(
+                float(antenna_rpy_world[0]),
+                float(antenna_rpy_world[1]),
+                float(antenna_rpy_world[2]),
+            )
+        else:
+            r = rotmat
 
         # ワールド → アンテナフレーム: 逆回転（転置）
         v_ant = r.T @ v_world
@@ -305,6 +325,8 @@ class AntennaPatternParser:
         tx_rpy_world: np.ndarray,
         rx_pos_world: np.ndarray,
         rx_rpy_world: np.ndarray,
+        tx_rotmat: Optional[np.ndarray] = None,
+        rx_rotmat: Optional[np.ndarray] = None,
     ) -> Tuple[float, float, float, float, float, float]:
         """送信側・受信側のアンテナゲインを個別に計算する。
 
@@ -312,9 +334,9 @@ class AntennaPatternParser:
             (tx_e, tx_h, tx_total, rx_e, rx_h, rx_total) [dB]
         """
         # 送信側: アンテナから受信側方向の角度を計算
-        tx_el, tx_az = self.calculate_antenna_frame_angles(tx_pos_world, rx_pos_world, tx_rpy_world)
+        tx_el, tx_az = self.calculate_antenna_frame_angles(tx_pos_world, rx_pos_world, tx_rpy_world, tx_rotmat)
         # 受信側: アンテナから送信側方向の角度を計算
-        rx_el, rx_az = self.calculate_antenna_frame_angles(rx_pos_world, tx_pos_world, rx_rpy_world)
+        rx_el, rx_az = self.calculate_antenna_frame_angles(rx_pos_world, tx_pos_world, rx_rpy_world, rx_rotmat)
 
         tx_e, tx_h, tx_total = self.get_gain_from_angles(tx_el, tx_az)
         rx_e, rx_h, rx_total = self.get_gain_from_angles(rx_el, rx_az)
@@ -323,9 +345,9 @@ class AntennaPatternParser:
 
     def calculate_angles_from_orientation(
         self,
-        ugv_position: np.ndarray,
-        base_station_position: np.ndarray,
-        ugv_orientation_euler: np.ndarray
+        tx_position: np.ndarray,
+        rx_position: np.ndarray,
+        tx_orientation_euler: np.ndarray
     ) -> Tuple[float, float]:
         """後方互換API。
 
@@ -333,8 +355,8 @@ class AntennaPatternParser:
         roll/pitchは完全には反映しない。
         `calculate_antenna_frame_angles()` の使用を推奨。
         """
-        # UGVから基地局への方向ベクトル
-        direction = base_station_position - ugv_position
+        # TXから基地局への方向ベクトル
+        direction = rx_position - tx_position
 
         # XY平面での水平距離
         horizontal_dist = np.sqrt(direction[0]**2 + direction[1]**2)
@@ -345,8 +367,8 @@ class AntennaPatternParser:
         # 方位角（基地局への水平角度）
         azimuth_to_bs = np.arctan2(direction[1], direction[0])
 
-        # UGVのyawを考慮した相対方位角
-        yaw = ugv_orientation_euler[2]
+        # TXのyawを考慮した相対方位角
+        yaw = tx_orientation_euler[2]
         relative_azimuth = azimuth_to_bs - yaw
 
         # -180 ～ 180度に正規化
@@ -360,3 +382,33 @@ class AntennaPatternParser:
             azimuth_deg += 360
 
         return elevation_deg, azimuth_deg
+
+    def is_in_main_lobe(self, elevation_deg: float, azimuth_deg: float) -> bool:
+        abs_el = abs(elevation_deg)
+        abs_az = abs(azimuth_deg)
+        return (abs_el <= self.e_mainlobe_half_angle) and (abs_az <= self.h_mainlobe_half_angle)
+
+    def detect_first_null_angle(self, angles: np.ndarray, gains: np.ndarray) -> float:
+        if len(angles) == 0 or len(gains) == 0:
+            return 0.0
+        
+        # 0.0 (ボアサイト) に最も近いインデックスを探す
+        center_idx = int(np.argmin(np.abs(angles)))
+        peak_gain = gains[center_idx]
+
+        # ピークから 3dB 落ちる最初のインデックス (正の角度側)
+        hpbw_idx = center_idx
+        for i in range(center_idx, len(angles)):
+            if gains[i] <= peak_gain - 3.0:
+                hpbw_idx = i
+                break
+
+        # さらに外側で、最初の極小値 (null) を探す
+        null_idx = hpbw_idx
+        for i in range(hpbw_idx + 1, len(angles) - 1):
+            if gains[i] < gains[i - 1] and gains[i] < gains[i + 1]:
+                null_idx = i
+                break
+
+        return float(abs(angles[null_idx]))
+

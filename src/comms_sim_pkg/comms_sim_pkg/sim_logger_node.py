@@ -23,18 +23,18 @@ from geometry_msgs.msg import Twist
 
 from comms_sim_msgs.msg import CommsQuality
 
-# mission_complete はラッチ（TRANSIENT_LOCAL）で受信する
-# ugv_controller_node より sim_logger_node が遅く起動した場合でも受信できる
+# mission_complete は VOLATILE で受信する
+# 以前の実行での古いキャッシュメッセージを誤って受信するのを防ぐため、ラッチしない
 _MISSION_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
-    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    durability=DurabilityPolicy.VOLATILE,
     history=HistoryPolicy.KEEP_LAST,
     depth=1
 )
 
 # 車両停止を検知してから強制シャットダウンするまでの猶予時間 [壁時計秒]
-# RTF=10（固定）なら 3s壁時計 = 30s シミュレーション時間
-_WATCHDOG_STOP_TIMEOUT_SEC = 3.0
+# RTF=10（固定）なら 30s壁時計 = 300s シミュレーション時間
+_WATCHDOG_STOP_TIMEOUT_SEC = 30.0
 
 def get_workspace_root() -> str:
     if os.path.exists('/workspace'):
@@ -145,7 +145,9 @@ class SimLoggerNode(Node):
                 antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
                 self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
                 raw_yaw = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
-                self.angle = round((270.0 - math.degrees(raw_yaw)) % 360.0, 1)
+                entity_yaw = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[5])
+                entity_yaw_deg = math.degrees(entity_yaw)
+                self.angle = round((math.degrees(raw_yaw) + entity_yaw_deg + 180.0) % 360.0, 1)
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
                 # YAML内でも output_subdir が定義されているかチェック（フォールバック）
                 if not self.output_subdir:
@@ -226,39 +228,40 @@ class SimLoggerNode(Node):
             self.event_writer.writeheader()
             self._set_file_ownership(event_path)
             
-        # Level 3/4: 時系列ログ用
+        # Level 3/4: 時系列ログ用 (C++側が直接出力するため、Python側では無効化)
         self.ts_files = {}
         self.ts_writers = {}
-        if self.logging_level >= 3:
-            suffix = 'connected' if self.logging_level == 3 else 'full'
-            for vn in self.vehicle_names:
-                path = os.path.join(comms_dir, f'{vn}_{suffix}.csv')
-                f = open(path, 'w', newline='', encoding='utf-8')
-                self.ts_files[vn] = f
-                
-                if self.logging_level == 3:
-                    fields = ['time_s', 'vehicle_name', 'distance_m', 'rssi_dBm', 'throughput_Gbps', 
-                              'total_data_MB', 'path_loss_dB', 'e_gain_dB', 'h_gain_dB',
-                              'ugv_x_m', 'ugv_y_m', 'ugv_z_m', 'bs_x_m', 'bs_y_m', 'bs_z_m']
-                else: # Level 4
-                    fields = ['time_s', 'vehicle_time_s', 'vehicle_name', 'has_link_grant', 'distance_m', 
-                              'rssi_dBm', 'throughput_Gbps', 'total_data_MB', 'path_loss_dB', 'e_gain_dB', 
-                              'h_gain_dB', 'comm_active', 'ugv_x_m', 'ugv_y_m', 'ugv_z_m', 
-                              'bs_x_m', 'bs_y_m', 'bs_z_m', 'link_state']
-                
-                self.ts_writers[vn] = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
-                self.ts_writers[vn].writeheader()
-                self._set_file_ownership(path)
+        # if self.logging_level >= 3:
+        #     suffix = 'connected' if self.logging_level == 3 else 'full'
+        #     for vn in self.vehicle_names:
+        #         path = os.path.join(comms_dir, f'{vn}_{suffix}.csv')
+        #         f = open(path, 'w', newline='', encoding='utf-8')
+        #         self.ts_files[vn] = f
+        #         
+        #         if self.logging_level == 3:
+        #             fields = ['time_s', 'vehicle_name', 'distance_m', 'rssi_dBm', 'throughput_Gbps', 
+        #                       'total_data_MB', 'path_loss_dB', 'e_gain_dB', 'h_gain_dB',
+        #                       'tx_x_m', 'tx_y_m', 'tx_z_m', 'bs_x_m', 'bs_y_m', 'bs_z_m']
+        #         else: # Level 4
+        #             fields = ['time_s', 'vehicle_time_s', 'vehicle_name', 'has_link_grant', 'distance_m', 
+        #                       'rssi_dBm', 'throughput_Gbps', 'total_data_MB', 'path_loss_dB', 'e_gain_dB', 
+        #                       'h_gain_dB', 'comm_active', 'tx_x_m', 'tx_y_m', 'tx_z_m', 
+        #                       'bs_x_m', 'bs_y_m', 'bs_z_m', 'link_state']
+        #         
+        #         self.ts_writers[vn] = csv.DictWriter(f, fieldnames=fields, extrasaction='ignore')
+        #         self.ts_writers[vn].writeheader()
+        #         self._set_file_ownership(path)
 
         # 状態保持
+        self.ts_buffers = {vn: [] for vn in self.vehicle_names}
         self._link_grants: Dict[str, bool] = {name: False for name in self.vehicle_names}
         self._mission_status: Dict[str, bool] = {name: False for name in self.base_vehicle_names}
         self._last_time = {name: None for name in self.vehicle_names}
+        self._last_vehicle_pos: Dict[str, tuple] = {}
         
         self._quality_subs = []
         self._grant_subs = []
         self._mission_subs = []
-        self._cmd_vel_subs = []
         
         # タイマー代わりの最新時刻
         self._start_time = None
@@ -273,11 +276,11 @@ class SimLoggerNode(Node):
         for name in self.vehicle_names:
             sub_grant = self.create_subscription(Bool, f'/{name}/link_grant', lambda msg, vn=name: self._on_link_grant(vn, msg), 10)
             self._grant_subs.append(sub_grant)
-            sub_quality = self.create_subscription(CommsQuality, f'/{name}/comms/quality', lambda msg, vn=name: self._on_quality(vn, msg), 10)
+            sub_quality = self.create_subscription(CommsQuality, f'/{name}/comms/quality', lambda msg, vn=name: self._on_quality(vn, msg), 1000)
             self._quality_subs.append(sub_quality)
 
         for name in self.base_vehicle_names:
-            # TRANSIENT_LOCAL: ugv_controller より遅く起動しても最後のメッセージを受信できる
+            # TRANSIENT_LOCAL: tx_controller より遅く起動しても最後のメッセージを受信できる
             sub_mission = self.create_subscription(
                 Bool,
                 f'/{name}/mission_complete',
@@ -285,8 +288,6 @@ class SimLoggerNode(Node):
                 _MISSION_QOS
             )
             self._mission_subs.append(sub_mission)
-            sub_cmd = self.create_subscription(Twist, f'/{name}/cmd_vel', lambda msg, vn=name: self._on_cmd_vel(vn, msg), 10)
-            self._cmd_vel_subs.append(sub_cmd)
 
         self.get_logger().info(f'SimLoggerNode (Level {self.logging_level}) 初期化完了')
         atexit.register(self.save_summary_and_close)
@@ -305,10 +306,13 @@ class SimLoggerNode(Node):
         if msg.data and not self._mission_status[vehicle_name]:
             self._mission_status[vehicle_name] = True
             if all(self._mission_status.values()):
-                self.get_logger().info('=== ミッション完了。シミュレーションを終了します ===')
-                import time
-                time.sleep(0.5)
-                sys.exit(0)
+                self.get_logger().info('=== ミッション完了。すべてのデータを受信するため 3 秒後にシミュレーションを終了します ===')
+                self._exit_timer = self.create_timer(3.0, self._exit_now)
+
+    def _exit_now(self):
+        self.get_logger().info('=== 終了タイマー満了。シミュレーションを終了します ===')
+        self._exit_timer.cancel()
+        sys.exit(0)
 
     def _watchdog_tick(self) -> None:
         """車両が停止してから _WATCHDOG_STOP_TIMEOUT_SEC 秒後に強制シャットダウン。"""
@@ -327,18 +331,6 @@ class SimLoggerNode(Node):
             )
             sys.exit(0)
 
-    def _on_cmd_vel(self, vehicle_name: str, msg: Twist):
-        import time as _time
-        if abs(msg.linear.x) > 0.001 or abs(msg.linear.y) > 0.001:
-            current_time = self.get_clock().now().nanoseconds / 1e9
-            if self._start_time is None:
-                self._start_time = current_time
-            if vehicle_name not in self._vehicle_start_times:
-                self._vehicle_start_times[vehicle_name] = current_time
-            # ウォッチドッグ更新
-            self._vehicle_ever_moved = True
-            self._last_moving_wall_time = _time.monotonic()
-
     def _on_quality(self, vehicle_name: str, msg: CommsQuality):
         current_time = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
         if self._start_time is None: self._start_time = current_time
@@ -347,9 +339,29 @@ class SimLoggerNode(Node):
         elapsed = current_time - self._start_time
         vehicle_elapsed = current_time - self._vehicle_start_times[vehicle_name]
         has_grant = self._link_grants.get(vehicle_name, False)
+
+        # 実際の車両位置変化から移動を検出し、ウォッチドッグを更新する
+        pos = (msg.tx_x, msg.tx_y, msg.tx_z)
+        if vehicle_name in self._last_vehicle_pos:
+            last_pos = self._last_vehicle_pos[vehicle_name]
+            dx = pos[0] - last_pos[0]
+            dy = pos[1] - last_pos[1]
+            dz = pos[2] - last_pos[2]
+            dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+            if dist > 0.01:  # 前回の品質メッセージから1cm以上移動している場合
+                import time as _time
+                self._vehicle_ever_moved = True
+                self._last_moving_wall_time = _time.monotonic()
+        self._last_vehicle_pos[vehicle_name] = pos
         
-        # 各comms_nodeのサンプリング周波数(100Hz)に合わせた決定論的な固定時間ステップを使用
-        dt = 0.01
+        # msg.header.stamp を基に動的かつ決定論的に時間差を計算
+        prev_time = self._last_time.get(vehicle_name)
+        if prev_time is not None:
+            dt = current_time - prev_time
+            if dt < 0.0:
+                dt = 0.0
+        else:
+            dt = 0.0
         self._last_time[vehicle_name] = current_time
 
         # --- Level 1: サマリーの集計 ---
@@ -361,13 +373,16 @@ class SimLoggerNode(Node):
             stats['connected_count'] += 1
             stats['connected_time'] += dt
 
-        # --- Level 2: イベントの記録 ---
-        if self.logging_level >= 2:
-            prev_state = self.last_state[vehicle_name]
-            # Handover判定 (Grantが付与/剥奪された) または LinkStateが変化した
-            if prev_state['link_state'] != msg.link_state or prev_state['has_link_grant'] != has_grant:
-                if prev_state['link_state'] == 'DISCONNECTED' and msg.link_state == 'CONNECTED':
-                    stats['handover_count'] += 1 # 接続確立をハンドオーバーとみなすか？ 一旦カウントする
+        # --- Handover判定 & 状態更新 (常に実行) ---
+        prev_state = self.last_state[vehicle_name]
+        state_changed = (prev_state['link_state'] != msg.link_state or prev_state['has_link_grant'] != has_grant)
+
+        if state_changed:
+            if prev_state['link_state'] != 'CONNECTED' and msg.link_state == 'CONNECTED':
+                stats['handover_count'] += 1
+
+            # --- Level 2: イベントの記録 ---
+            if self.logging_level >= 2 and self.event_writer is not None:
                 self.event_writer.writerow({
                     'time_s': elapsed,
                     'vehicle_name': vehicle_name,
@@ -377,50 +392,109 @@ class SimLoggerNode(Node):
                     'distance_m': msg.distance
                 })
                 self.event_file.flush()
-                self.last_state[vehicle_name]['link_state'] = msg.link_state
-                self.last_state[vehicle_name]['has_link_grant'] = has_grant
 
-        # --- Level 3 / 4: 時系列データの記録 ---
-        if self.logging_level >= 3:
-            if self.logging_level == 3 and msg.link_state != 'CONNECTED':
-                pass # Level 3 は CONNECTED のみ記録
-            else:
-                row = {
-                    'time_s': elapsed,
-                    'vehicle_name': vehicle_name,
-                    'distance_m': msg.distance,
-                    'rssi_dBm': msg.rssi,
-                    'throughput_Gbps': msg.throughput,
-                    'total_data_MB': msg.total_data_transmitted,
-                    'path_loss_dB': msg.path_loss,
-                    'e_gain_dB': msg.antenna_gain_e_plane,
-                    'h_gain_dB': msg.antenna_gain_h_plane,
-                    'ugv_x_m': msg.ugv_x,
-                    'ugv_y_m': msg.ugv_y,
-                    'ugv_z_m': msg.ugv_z,
-                    'bs_x_m': msg.base_station_x,
-                    'bs_y_m': msg.base_station_y,
-                    'bs_z_m': msg.base_station_z
-                }
-                if self.logging_level >= 4:
-                    row.update({
-                        'vehicle_time_s': vehicle_elapsed,
-                        'has_link_grant': has_grant,
-                        'comm_active': msg.comm_active,
-                        'link_state': msg.link_state
-                    })
-                self.ts_writers[vehicle_name].writerow(row)
+            self.last_state[vehicle_name]['link_state'] = msg.link_state
+            self.last_state[vehicle_name]['has_link_grant'] = has_grant
+
+        # --- Level 3 / 4: 時系列データの記録 (C++側が直接出力するため、Python側では無効化)
+        # if self.logging_level >= 3:
+        #     if self.logging_level == 3 and msg.link_state != 'CONNECTED':
+        #         pass # Level 3 は CONNECTED のみ記録
+        #     else:
+        #         row = {
+        #             'time_s': elapsed,
+        #             'vehicle_name': vehicle_name,
+        #             'distance_m': msg.distance,
+        #             'rssi_dBm': msg.rssi,
+        #             'throughput_Gbps': msg.throughput,
+        #             'total_data_MB': msg.total_data_transmitted,
+        #             'path_loss_dB': msg.path_loss,
+        #             'e_gain_dB': msg.antenna_gain_e_plane,
+        #             'h_gain_dB': msg.antenna_gain_h_plane,
+        #             'tx_x_m': msg.tx_x,
+        #             'tx_y_m': msg.tx_y,
+        #             'tx_z_m': msg.tx_z,
+        #             'bs_x_m': msg.rx_x,
+        #             'bs_y_m': msg.rx_y,
+        #             'bs_z_m': msg.rx_z
+        #         }
+        #         if self.logging_level >= 4:
+        #             row.update({
+        #                 'vehicle_time_s': vehicle_elapsed,
+        #                 'has_link_grant': has_grant,
+        #                 'comm_active': msg.comm_active,
+        #                 'link_state': msg.link_state
+        #             })
+        #         self.ts_buffers[vehicle_name].append(row)
 
     def save_summary_and_close(self):
         if getattr(self, '_summary_saved', False):
             return
         self._summary_saved = True
         
+        # C++ノードがCSVを書き終えるまで少し待つ
+        import time
+        time.sleep(1.0)
+
+        # C++側が出力したデータ欠損のないCSVファイルがあれば、それに基づいて正確な統計値を再計算する
+        for vn in self.vehicle_names:
+            stats = self.summary_stats[vn]
+            suffix = '_connected.csv' if self.logging_level == 3 else '_full.csv'
+            csv_path = os.path.join(self.run_dir, 'comms', f'{vn}{suffix}')
+            if os.path.exists(csv_path):
+                try:
+                    with open(csv_path, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        rows = list(reader)
+                    if rows:
+                        if self.logging_level == 3:
+                            connected_rows = rows
+                        else:
+                            connected_rows = [r for r in rows if r.get('link_state') == 'CONNECTED']
+                        
+                        cnt = len(connected_rows)
+                        if cnt > 0:
+                            stats['rssi_sum'] = sum(float(r['rssi_dBm']) for r in connected_rows)
+                            stats['tp_sum'] = sum(float(r['throughput_Gbps']) for r in connected_rows)
+                            stats['connected_count'] = cnt
+                            
+                            if self.logging_level >= 4:
+                                conn_time = 0.0
+                                prev_t = None
+                                for r in rows:
+                                    t = float(r['time_s'])
+                                    state = r.get('link_state')
+                                    if prev_t is not None:
+                                        dt = t - prev_t
+                                        if state == 'CONNECTED':
+                                            conn_time += dt
+                                    prev_t = t
+                                stats['connected_time'] = conn_time
+                            
+                            stats['total_data'] = max(float(r['total_data_MB']) for r in rows)
+                            
+                            if self.logging_level >= 4:
+                                ho_count = 0
+                                prev_s = 'DISCONNECTED'
+                                for r in rows:
+                                    s = r.get('link_state', 'DISCONNECTED')
+                                    if prev_s != 'CONNECTED' and s == 'CONNECTED':
+                                        ho_count += 1
+                                    prev_s = s
+                                stats['handover_count'] = ho_count
+                            
+                            self.get_logger().info(f"[{vn}] Recalculated summary stats from C++ CSV (no drops)")
+                except Exception as e:
+                    self.get_logger().warn(f"Failed to read C++ CSV for summary recalculation: {e}")
+        
         # 終了処理 (ファイルを閉じる)
         if self.event_file:
             self.event_file.close()
-        for f in self.ts_files.values():
-            f.close()
+        # for vn, f in self.ts_files.items():
+        #     if vn in self.ts_buffers and self.ts_buffers[vn]:
+        #         self.ts_writers[vn].writerows(self.ts_buffers[vn])
+        #         self.ts_buffers[vn].clear()
+        #     f.close()
 
         if self.output_subdir:
             summary_path = os.path.join(self.output_dir, self.output_subdir, self.summary_filename)
@@ -465,13 +539,22 @@ class SimLoggerNode(Node):
                 shinkansen_vns = [vn for vn in self.vehicle_names if 'shinkansen' in vn]
                 if len(shinkansen_vns) >= 3:
                     total_data = sum(self.summary_stats[vn]['total_data'] for vn in shinkansen_vns)
+                    total_connected_time = sum(self.summary_stats[vn]['connected_time'] for vn in shinkansen_vns)
+                    total_connected_count = sum(self.summary_stats[vn]['connected_count'] for vn in shinkansen_vns)
+                    total_tp_sum = sum(self.summary_stats[vn]['tp_sum'] for vn in shinkansen_vns)
+                    total_rssi_sum = sum(self.summary_stats[vn]['rssi_sum'] for vn in shinkansen_vns)
+                    total_handover_count = sum(self.summary_stats[vn]['handover_count'] for vn in shinkansen_vns)
 
                     writer.writerow({
                         'run_id': self.timestamp,
                         'y_position': self.y_pos,
                         'antenna_angle': self.angle,
                         'vehicle_name': 'shinkansen_total',
-                        'total_data_MB': round(total_data, 3)
+                        'total_data_MB': round(total_data, 3),
+                        'connected_time_s': round(total_connected_time, 3),
+                        'average_throughput_Gbps': round(total_tp_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
+                        'average_rssi_dBm': round(total_rssi_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
+                        'handover_count': total_handover_count
                     })
             self.get_logger().info(f'サマリー結果を追記しました: {summary_path}')
         except Exception as e:

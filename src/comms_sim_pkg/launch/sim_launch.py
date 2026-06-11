@@ -13,7 +13,7 @@
 3. 設定に基づきエンティティ（基地局等）をスポーンする
 4. 複数車両をスポーンする（各車両固有のトピック名を持つSDF生成）
 5. センサトピック用のROS-Gazeboブリッジを起動する
-6. 各車両ごとに comms_simulator_node と ugv_controller_node を起動する
+6. 各車両ごとに comms_simulator_node と tx_controller_node を起動する
 
 全設定は sim_params.yaml で定義:
 - ヘッドレスモード（GUI有無）
@@ -241,7 +241,7 @@ def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str) -> str:
 
 def _build_vehicles_from_legacy(config: dict) -> list:
     """
-    旧形式の設定（spawn_entities.suv + ugv_controller_node）から
+    旧形式の設定（spawn_entities.suv + tx_controller_node）から
     vehiclesリスト形式に変換する。後方互換用。
 
     Args:
@@ -255,7 +255,7 @@ def _build_vehicles_from_legacy(config: dict) -> list:
     if not isinstance(suv_cfg, dict):
         return []
 
-    ugv_params = config.get('ugv_controller_node', {}).get('ros__parameters', {})
+    tx_params = config.get('tx_controller_node', {}).get('ros__parameters', {})
 
     vehicle = {
         'name': suv_cfg.get('name', 'suv'),
@@ -263,7 +263,7 @@ def _build_vehicles_from_legacy(config: dict) -> list:
         'pose': suv_cfg.get('pose', [-60.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
         'antenna_offset': suv_cfg.get('antenna_offset', [0.0, 0.0, 2.23]),
         'antenna_relative_rpy': suv_cfg.get('antenna_relative_rpy', [0.0, 0.0, 0.0]),
-        'waypoints': ugv_params.get('waypoints', []),
+        'waypoints': tx_params.get('waypoints', []),
     }
 
     return [vehicle]
@@ -333,7 +333,7 @@ def launch_setup(context, *args, **kwargs):
     entity_spawn_interval = timing.get('entity_spawn_interval', 1.0)
     bridge_startup_delay = timing.get('bridge_startup_delay', 2.0)
     comms_node_delay = timing.get('comms_node_delay', 5.0)
-    ugv_controller_delay = timing.get('ugv_controller_delay', 6.0)
+    tx_controller_delay = timing.get('tx_controller_delay', 6.0)
 
     # YAMLからスポーンエンティティ設定を取得（基地局等）
     spawn_entities = config.get('spawn_entities', {})
@@ -343,23 +343,23 @@ def launch_setup(context, *args, **kwargs):
     # =====================================================================
     vehicles = config.get('vehicles', None)
     if vehicles is None or not isinstance(vehicles, list) or len(vehicles) == 0:
-        # 旧形式フォールバック: spawn_entities.suv + ugv_controller_node から生成
+        # 旧形式フォールバック: spawn_entities.suv + tx_controller_node から生成
         vehicles = _build_vehicles_from_legacy(config)
         if vehicles:
             # 旧形式の suv を spawn_entities から除外（車両は vehicles で処理する）
             spawn_entities = {k: v for k, v in spawn_entities.items()
                               if k.lower() != 'suv'}
 
-    # UGVコントローラ共通パラメータ
-    ugv_common = config.get('ugv_controller_common', {})
+    # TXコントローラ共通パラメータ
+    tx_common = config.get('tx_controller_common', {})
     # 旧形式フォールバック
-    if not ugv_common:
-        ugv_common = config.get('ugv_controller_node', {}).get('ros__parameters', {})
-    waypoint_tolerance = float(ugv_common.get('waypoint_tolerance', 2.0))
-    control_rate = float(ugv_common.get('control_rate', 10.0))
-    max_angular_velocity = float(ugv_common.get('max_angular_velocity', 1.0))
-    heading_gain = float(ugv_common.get('heading_gain', 1.5))
-    max_acceleration = float(ugv_common.get('max_acceleration', 0.5))
+    if not tx_common:
+        tx_common = config.get('tx_controller_node', {}).get('ros__parameters', {})
+    waypoint_tolerance = float(tx_common.get('waypoint_tolerance', 2.0))
+    control_rate = float(tx_common.get('control_rate', 10.0))
+    max_angular_velocity = float(tx_common.get('max_angular_velocity', 1.0))
+    heading_gain = float(tx_common.get('heading_gain', 1.5))
+    max_acceleration = float(tx_common.get('max_acceleration', 0.5))
 
     actions = []
 
@@ -632,7 +632,7 @@ def launch_setup(context, *args, **kwargs):
         antenna_base_rpy = [0.0, 0.0, 0.0]
 
     # =========================================================================
-    # 各車両ごとの通信ノード＆UGVコントローラノードの起動
+    # 各車両ごとの通信ノード＆TXコントローラノードの起動
     # =========================================================================
     comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
 
@@ -674,13 +674,14 @@ def launch_setup(context, *args, **kwargs):
                 actions=[
                     Node(
                         package='comms_sim_pkg',
-                        executable='comms_node.py',
+                        executable='comms_node_cpp',
                         name=f'comms_simulator_{ant_name}',
                         output='screen',
                         parameters=[
                             {
                                 'vehicle_name': ant_name,
                                 'sampling_rate': float(comms_params.get('sampling_rate', 1.0)),
+                                'publish_rate': float(comms_params.get('publish_rate', 100.0)),
                                 'noise_variance': float(comms_params.get('noise_variance', 2.0)),
                                 'e_plane_path': resolve_path(comms_params.get('e_plane_path', ''), pkg_share),
                                 'h_plane_path': resolve_path(comms_params.get('h_plane_path', ''), pkg_share),
@@ -696,21 +697,22 @@ def launch_setup(context, *args, **kwargs):
                                 'max_antenna_attenuation': float(comms_params.get('max_antenna_attenuation', 30.0)),
                                 'logging_start_trigger': str(comms_params.get('logging_start_trigger', 'on_movement')),
                                 'logging_start_topic': str(comms_params.get('logging_start_topic', '/logging/start')),
-                                'ugv_spawn_pose': suv_pose,
-                                'base_station_position': antenna_base_position,
-                                'base_station_antenna_offset': antenna_antenna_offset,
-                                'base_station_rpy': antenna_base_rpy,
-                                'ugv_antenna_offset': v_antenna_offset,
-                                'base_station_antenna_relative_rpy': antenna_relative_rpy,
-                                'ugv_antenna_relative_rpy': v_antenna_relative_rpy,
-                                'base_station_positions': bs_positions,
-                                'base_station_antenna_offsets': bs_antenna_offsets,
-                                'base_station_rpys': bs_rpys,
-                                'base_station_antenna_relative_rpys': bs_relative_rpys,
+                                'tx_spawn_pose': suv_pose,
+                                'rx_position': antenna_base_position,
+                                'rx_antenna_offset': antenna_antenna_offset,
+                                'rx_rpy': antenna_base_rpy,
+                                'tx_antenna_offset': v_antenna_offset,
+                                'rx_antenna_relative_rpy': antenna_relative_rpy,
+                                'tx_antenna_relative_rpy': v_antenna_relative_rpy,
+                                'rx_positions': bs_positions,
+                                'rx_antenna_offsets': bs_antenna_offsets,
+                                'rx_rpys': bs_rpys,
+                                'rx_antenna_relative_rpys': bs_relative_rpys,
                                 'odom_topic': f'/{v_name}/odom',
                                 'cmd_vel_topic': f'/{v_name}/cmd_vel',
                                 'mission_complete_topic': f'/{v_name}/mission_complete',
-                                'use_sim_time': use_sim_time == 'true'
+                                'use_sim_time': use_sim_time == 'true',
+                                'config_file_path': config_path
                             },
                         ],
                         remappings=[
@@ -722,7 +724,7 @@ def launch_setup(context, *args, **kwargs):
             actions.append(comms_node)
 
         # -----------------------------------------------------------------
-        # UGVコントローラノード（車両ごと）
+        # TXコントローラノード（車両ごと）
         # -----------------------------------------------------------------
         # ウェイポイントの解析
         waypoints_raw = vehicle_cfg.get('waypoints', [])
@@ -734,12 +736,17 @@ def launch_setup(context, *args, **kwargs):
             else:
                 waypoints_param = [float(v) for v in waypoints_raw]
 
-        ugv_param_file = os.path.join(
-            tempfile.gettempdir(), f'ugv_controller_{v_name}.params.yaml'
+        tx_param_file = os.path.join(
+            tempfile.gettempdir(), f'tx_controller_{v_name}.params.yaml'
         )
 
-        ugv_param_yaml = {
-            f'ugv_controller_{v_name}': {
+        antennas = vehicle_cfg.get('antennas', [])
+        expected_subs = 1 + len(antennas)
+        if any(ant.get('name') == v_name for ant in antennas):
+            expected_subs += 1
+
+        tx_param_yaml = {
+            f'tx_controller_{v_name}': {
                 'ros__parameters': {
                     'waypoints': waypoints_param,
                     'waypoint_tolerance': waypoint_tolerance,
@@ -751,14 +758,15 @@ def launch_setup(context, *args, **kwargs):
                     'odom_topic': f'/{v_name}/odom',
                     'cmd_vel_topic': f'/{v_name}/cmd_vel',
                     'mission_complete_topic': f'/{v_name}/mission_complete',
+                    'expected_subscribers': expected_subs,
                     'use_sim_time': use_sim_time == 'true',
                 }
             }
         }
 
-        with open(ugv_param_file, 'w', encoding='utf-8') as f:
+        with open(tx_param_file, 'w', encoding='utf-8') as f:
             yaml.safe_dump(
-                ugv_param_yaml,
+                tx_param_yaml,
                 f,
                 sort_keys=False,
                 default_flow_style=False,
@@ -766,30 +774,30 @@ def launch_setup(context, *args, **kwargs):
             )
 
         try:
-            with open(ugv_param_file, 'r', encoding='utf-8') as f:
+            with open(tx_param_file, 'r', encoding='utf-8') as f:
                 preview_lines = f.read().splitlines()[:30]
             actions.append(LogInfo(
-                msg=f'[ugv_controller_{v_name}] パラメータファイル: '
-                    + ugv_param_file + "\n" + "\n".join(preview_lines)
+                msg=f'[tx_controller_{v_name}] パラメータファイル: '
+                    + tx_param_file + "\n" + "\n".join(preview_lines)
             ))
         except Exception as e:
             actions.append(LogInfo(
-                msg=f'[ugv_controller_{v_name}] パラメータファイル読み込み失敗: {e}'
+                msg=f'[tx_controller_{v_name}] パラメータファイル読み込み失敗: {e}'
             ))
 
-        ugv_node = TimerAction(
-            period=ugv_controller_delay,
+        tx_node = TimerAction(
+            period=tx_controller_delay,
             actions=[
                 Node(
                     package='comms_sim_pkg',
-                    executable='ugv_controller_node.py',
-                    name=f'ugv_controller_{v_name}',
+                    executable='tx_controller_node.py',
+                    name=f'tx_controller_{v_name}',
                     output='screen',
-                    parameters=[ugv_param_file]
+                    parameters=[tx_param_file]
                 )
             ]
         )
-        actions.append(ugv_node)
+        actions.append(tx_node)
 
     # =========================================================================
     # link_controller_node & sim_logger_node の起動
@@ -881,6 +889,32 @@ def launch_setup(context, *args, **kwargs):
             )
         )
         actions.append(shutdown_event)
+
+        # =================================================================
+        # Ready ゲートノード（全ノードの起動同期）
+        # =================================================================
+        # expected_nodes: 全 comms_node + 全 tx_controller
+        expected_ready_nodes = list(vehicle_names)  # comms_nodes (per antenna)
+        for v in vehicles:
+            v_name = v.get('name', 'suv')
+            expected_ready_nodes.append(f'tx_controller_{v_name}')
+
+        ready_gate_node = TimerAction(
+            period=comms_node_delay,
+            actions=[
+                Node(
+                    package='comms_sim_pkg',
+                    executable='sim_ready_gate_node.py',
+                    name='sim_ready_gate',
+                    output='screen',
+                    parameters=[{
+                        'expected_nodes': expected_ready_nodes,
+                        'use_sim_time': use_sim_time_bool
+                    }]
+                )
+            ]
+        )
+        actions.append(ready_gate_node)
 
     return actions
 

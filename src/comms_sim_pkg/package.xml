@@ -6,7 +6,7 @@
   <description>
     ROS 2 Communication Simulation Package for Gazebo Harmonic.
     Simulates wireless communication quality (RSSI/Throughput) between
-    a mobile UGV and a fixed ground station using path loss models.
+    a mobile TX and a fixed rx station using path loss models.
   </description>
   
   <maintainer email="s.yagi.504@stn.nitech.ac.jp">Developer</maintainer>
@@ -19,12 +19,17 @@
   <buildtool_depend>ament_cmake_python</buildtool_depend>
   
   <!-- Runtime dependencies -->
-  <exec_depend>rclpy</exec_depend>
-  <exec_depend>std_msgs</exec_depend>
-  <exec_depend>sensor_msgs</exec_depend>
-  <exec_depend>geometry_msgs</exec_depend>
-  <exec_depend>nav_msgs</exec_depend>
-  <exec_depend>comms_sim_msgs</exec_depend>
+  <depend>rclpy</depend>
+  <depend>rclcpp</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>nav_msgs</depend>
+  <depend>comms_sim_msgs</depend>
+  
+  <depend>eigen3_cmake_module</depend>
+  <build_depend>yaml_cpp_vendor</build_depend>
+  <exec_depend>yaml_cpp_vendor</exec_depend>
   
   <!-- Gazebo and ROS-GZ bridge -->
   <exec_depend>ros_gz_sim</exec_depend>

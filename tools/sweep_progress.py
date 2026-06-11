@@ -21,17 +21,16 @@ import re
 import time
 import datetime
 import subprocess
+import shutil
 
-# 同一ディレクトリにある sweep_sim.py から動的に設定を読み込めるようにパスを追加
+# 同一ディレクトリの lib から設定を読み込むためにパスを追加
 script_dir = os.path.dirname(os.path.abspath(__file__))
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 try:
-    import sweep_sim
-    Y_POSITIONS = sweep_sim.Y_POSITIONS
-    ANGLES_DEG  = sweep_sim.ANGLES_DEG
-    TOTAL_TASKS = len(Y_POSITIONS) * len(ANGLES_DEG) * sweep_sim.NUM_RUNS
+    from lib.sweep_config import Y_POSITIONS, ANGLES_DEG, NUM_RUNS
+    TOTAL_TASKS = len(Y_POSITIONS) * len(ANGLES_DEG) * NUM_RUNS
 except Exception:
     Y_POSITIONS = [1.0]
     ANGLES_DEG  = [round(0.2 * i, 2) for i in range(76)]
@@ -46,6 +45,12 @@ try:
     HAS_PSUTIL = True
 except ImportError:
     HAS_PSUTIL = False
+
+# 進捗ログ解析用のコンパイル済み正規表現
+RE_START = re.compile(r"START (\S+) TOTAL=(\d+)(?:\s+CONCURRENCY=(\d+))?")
+RE_RUNNING = re.compile(r"RUNNING task=(\d+) y=([\d\.]+) angle=([-\d\.]+) ts=(\S+)")
+RE_DONE = re.compile(r"DONE task=(\d+) y=([\d\.-]+) angle=([-\d\.-]+) status=(\w+) ts=(\S+)")
+RE_ABORT = re.compile(r"ABORT ts=(\S+)")
 
 def find_latest_progress_log():
     """sweep/log/ 配下から最も新しいタイムスタンプフォルダ内の sweep_progress.log を探す"""
@@ -63,7 +68,7 @@ def find_latest_progress_log():
         return PROGRESS_LOG_DEFAULT
     
     # タイムスタンプ付きディレクトリをソートして最新のものを取得
-    logs.sort()
+    logs.sort(key=os.path.getmtime)
     return logs[-1]
 
 PROGRESS_LOG = find_latest_progress_log()
@@ -87,16 +92,23 @@ def parse_progress_log(log_path: str):
         for line in f:
             line = line.rstrip()
             # 開始行: START 2026-05-18T17:00:00 TOTAL=910 CONCURRENCY=8
-            m = re.match(r"START (\S+) TOTAL=(\d+)(?:\s+CONCURRENCY=(\d+))?", line)
+            m = RE_START.match(line)
             if m:
                 start_time = datetime.datetime.fromisoformat(m.group(1))
                 total_tasks = int(m.group(2))
                 if m.group(3):
                     concurrency = int(m.group(3))
+                running_tasks.clear()
                 continue
                 
+            # 中断行: ABORT ts=2026-05-18T17:02:00
+            m = RE_ABORT.match(line)
+            if m:
+                running_tasks.clear()
+                continue
+
             # 実行中行: RUNNING task=6 y=1 angle=5 ts=2026-05-18T17:01:25
-            m = re.match(r"RUNNING task=(\d+) y=([\d\.]+) angle=([-\d\.]+) ts=(\S+)", line)
+            m = RE_RUNNING.match(line)
             if m:
                 t_id = int(m.group(1))
                 y_val = float(m.group(2))
@@ -113,12 +125,13 @@ def parse_progress_log(log_path: str):
                 continue
 
             # 完了行: DONE task=5 y=1 angle=4 status=OK ts=2026-05-18T17:01:23
-            m = re.match(r"DONE task=(\d+) y=([\d\.-]+) angle=([-\d\.-]+) status=(\w+) ts=(\S+)", line)
+            m = RE_DONE.match(line)
             if m:
                 t_id = int(m.group(1))
                 status = m.group(4)
                 
                 if status == "SWEEP_COMPLETE":
+                    running_tasks.clear()
                     continue
                     
                 done_ts = datetime.datetime.fromisoformat(m.group(5))
@@ -164,12 +177,31 @@ def count_csv_rows():
     return len(run_ids), latest
 
 def clear_screen():
-    os.system("cls" if os.name == "nt" else "clear")
+    if os.name == "nt":
+        os.system("cls")
+    else:
+        sys.stdout.write("\033[H\033[2J")
+        sys.stdout.flush()
 
 def make_progress_bar(percent, width=40):
     filled = int(width * percent / 100)
     filled = max(0, min(width, filled))
     return "█" * filled + "░" * (width - filled)
+
+def _read_cpu_ticks():
+    """/proc/stat から CPU チックを読み取る補助関数"""
+    try:
+        with open("/proc/stat", "r") as f:
+            line = f.readline()
+        parts = line.split()
+        if len(parts) >= 5:
+            ticks = [float(x) for x in parts[1:]]
+            total = sum(ticks)
+            idle = ticks[3] + (ticks[4] if len(ticks) > 4 else 0)
+            return total, idle
+    except Exception:
+        pass
+    return 0, 0
 
 def get_cpu_usage(interval=None):
     """CPU使用率の取得"""
@@ -182,20 +214,9 @@ def get_cpu_usage(interval=None):
     # Linux /proc/stat のフォールバック
     if os.path.exists("/proc/stat"):
         try:
-            def read_cpu_ticks():
-                with open("/proc/stat", "r") as f:
-                    line = f.readline()
-                parts = line.split()
-                if len(parts) >= 5:
-                    ticks = [float(x) for x in parts[1:]]
-                    total = sum(ticks)
-                    idle = ticks[3] + (ticks[4] if len(ticks) > 4 else 0)
-                    return total, idle
-                return 0, 0
-            
-            t1, i1 = read_cpu_ticks()
+            t1, i1 = _read_cpu_ticks()
             time.sleep(interval or 0.1)
-            t2, i2 = read_cpu_ticks()
+            t2, i2 = _read_cpu_ticks()
             
             dt = t2 - t1
             di = i2 - i1
@@ -243,7 +264,6 @@ def get_memory_usage():
 
 def get_gpu_usage():
     """GPUの状況取得 (nvidia-smi を使用)"""
-    import shutil
     if not shutil.which("nvidia-smi"):
         return None
     try:
@@ -395,19 +415,20 @@ def main():
     args = parser.parse_args()
 
     log_file = args.log_file
-    if not log_file:
-        log_file = find_latest_progress_log()
 
     if args.watch:
         try:
             while True:
-                render(log_file)
+                # 明示的なログファイル指定がない場合、ループ毎に最新のログファイルを再スキャンする
+                current_log = log_file or find_latest_progress_log()
+                render(current_log)
                 print(f"  (Ctrl+C で終了。{args.interval}秒ごとに更新)")
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             print("\n進捗監視を終了します。")
     else:
-        render(log_file)
+        current_log = log_file or find_latest_progress_log()
+        render(current_log)
 
 if __name__ == "__main__":
     main()

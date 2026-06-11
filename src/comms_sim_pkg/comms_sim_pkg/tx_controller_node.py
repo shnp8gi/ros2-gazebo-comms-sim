@@ -1,14 +1,14 @@
 #!/usr/bin/env python3
 # -*- coding: utf-8 -*-
 # =============================================================================
-# UGVコントローラノード
+# TXコントローラノード
 # ウェイポイント追従制御を行うROS 2ノード
 # =============================================================================
 """
-ウェイポイント追従によりUGVの移動を制御するROS 2ノード。
+ウェイポイント追従によりTXの移動を制御するROS 2ノード。
 
 サブスクライブトピック:
-    - /odom (nav_msgs/Odometry): UGVオドメトリ（位置フィードバック）
+    - /odom (nav_msgs/Odometry): TXオドメトリ（位置フィードバック）
 
 パブリッシュトピック:
     - /cmd_vel (geometry_msgs/Twist): 速度指令
@@ -79,7 +79,7 @@ class Waypoint:
         return f"Waypoint(x={self.x}, y={self.y}, z={self.z}, v={self.velocity})"
 
 
-class UGVControllerNode(Node):
+class TxControllerNode(Node):
     """
     ウェイポイント追従制御を行うROS 2ノード。
 
@@ -88,7 +88,7 @@ class UGVControllerNode(Node):
     """
 
     def __init__(self) -> None:
-        super().__init__('ugv_controller_node')
+        super().__init__('tx_controller_node')
 
         # =====================================================================
         # パラメータ宣言
@@ -109,6 +109,7 @@ class UGVControllerNode(Node):
         self.declare_parameter('odom_topic', '/odom')
         self.declare_parameter('cmd_vel_topic', '/cmd_vel')
         self.declare_parameter('mission_complete_topic', '/mission_complete')
+        self.declare_parameter('expected_subscribers', 2)
 
         # パラメータ取得
         waypoints_raw = self.get_parameter('waypoints').value
@@ -121,6 +122,7 @@ class UGVControllerNode(Node):
         self.odom_topic = self.get_parameter('odom_topic').value
         self.cmd_vel_topic = self.get_parameter('cmd_vel_topic').value
         self.mission_complete_topic = self.get_parameter('mission_complete_topic').value
+        self.expected_subscribers = self.get_parameter('expected_subscribers').value
         self.is_shinkansen = 'shinkansen' in self.odom_topic
 
         # ウェイポイント解析
@@ -209,10 +211,10 @@ class UGVControllerNode(Node):
         )
 
         # ミッション完了通知（他ノード向け、例: comms_node）
-        # TRANSIENT_LOCAL（ラッチ型）: sim_logger が遅く起動しても受信できる
+        # VOLATILE: 以前の実行での古いキャッシュメッセージを受信してしまうのを防ぐため、ラッチしない
         _mission_qos = QoSProfile(
             reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            durability=DurabilityPolicy.VOLATILE,
             history=HistoryPolicy.KEEP_LAST,
             depth=1
         )
@@ -229,7 +231,7 @@ class UGVControllerNode(Node):
         # self.control_timer = self.create_timer(period, self.control_loop)
 
         self.get_logger().info(
-            f'UGVControllerNode 初期化完了\n'
+            f'TxControllerNode 初期化完了\n'
             f'  ウェイポイント数: {len(self.waypoints)}\n'
             f'  到達判定距離: {self.waypoint_tolerance} m\n'
             f'  制御レート: {self.control_rate} Hz\n'
@@ -242,6 +244,52 @@ class UGVControllerNode(Node):
 
         for i, wp in enumerate(self.waypoints):
             self.get_logger().info(f'  WP{i}: {wp}')
+
+        # =================================================================
+        # Ready シグナルの発行と全ノード待機（実車ECU起動シーケンスの再現）
+        # =================================================================
+        _ready_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.TRANSIENT_LOCAL,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        # 車両名をトピック名から取得
+        v_name = self.odom_topic.strip('/').split('/')[0] if '/' in self.odom_topic else 'tx'
+        self._ready_pub = self.create_publisher(
+            Bool, f'/tx_controller_{v_name}/ready', _ready_qos)
+        self._all_nodes_ready = False
+        
+        # /sim/all_ready topic uses VOLATILE durability to prevent receiving old cached values
+        _all_ready_qos = QoSProfile(
+            reliability=ReliabilityPolicy.RELIABLE,
+            durability=DurabilityPolicy.VOLATILE,
+            history=HistoryPolicy.KEEP_LAST,
+            depth=1
+        )
+        self._all_ready_sub = self.create_subscription(
+            Bool, '/sim/all_ready', self._on_all_ready, _all_ready_qos)
+
+        # 初期化完了を定期的に通知（ゲートノードが確実に受信できるようにする）
+        self._publish_ready_timer = self.create_timer(0.5, self._publish_ready)
+
+    def _publish_ready(self) -> None:
+        """初期化完了を通知する。全ノードReady受信後は停止する。"""
+        if self._all_nodes_ready:
+            if hasattr(self, '_publish_ready_timer') and self._publish_ready_timer:
+                self._publish_ready_timer.cancel()
+            return
+        ready_msg = Bool()
+        ready_msg.data = True
+        self._ready_pub.publish(ready_msg)
+
+    def _on_all_ready(self, msg: Bool) -> None:
+        """全ノード Ready シグナルの受信コールバック。"""
+        if msg.data and not self._all_nodes_ready:
+            self._all_nodes_ready = True
+            self.get_logger().info(
+                '=== 全ノード Ready 受信。車両移動を開始します。 ==='
+            )
 
     def set_position_callback(self, callback: Callable[[np.ndarray], None]) -> None:
         """
@@ -263,6 +311,41 @@ class UGVControllerNode(Node):
 
     def odom_callback(self, msg: Odometry) -> None:
         """オドメトリ更新コールバック。"""
+        # スポーン位置を使ってodom→ワールドオフセットを1回だけ計算
+        # 古いシミュレーションの残存メッセージを無視するため、スポーン位置付近（<= 10.0m）のメッセージのみ採用する
+        if not self.odom_offset_set:
+            if isinstance(self.spawn_pose, (list, tuple)) and len(self.spawn_pose) >= 3:
+                spawn_x = float(self.spawn_pose[0])
+                spawn_y = float(self.spawn_pose[1])
+                spawn_z = float(self.spawn_pose[2])
+                dist_to_spawn = math.sqrt((msg.pose.pose.position.x - spawn_x)**2 + (msg.pose.pose.position.y - spawn_y)**2 + (msg.pose.pose.position.z - spawn_z)**2)
+                if dist_to_spawn > 10.0:
+                    self.get_logger().debug(
+                        f'古いシミュレーションの残存オドメトリデータを検出 (スポーン位置からの距離 {dist_to_spawn:.1f}m)。無視します。'
+                    )
+                    return
+
+                self.odom_offset_x = spawn_x - msg.pose.pose.position.x
+                self.odom_offset_y = spawn_y - msg.pose.pose.position.y
+                self.odom_offset_z = spawn_z - msg.pose.pose.position.z
+                self.odom_offset_set = True
+                self.get_logger().info(
+                    f'odomオフセット初回計算: '
+                    f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
+                )
+        else:
+            # DDSの残存メッセージ等による急激な位置ジャンプを検出して無視する
+            if hasattr(self, '_last_raw_x'):
+                dx = msg.pose.pose.position.x - self._last_raw_x
+                dy = msg.pose.pose.position.y - self._last_raw_y
+                dz = msg.pose.pose.position.z - self._last_raw_z
+                jump_dist = math.sqrt(dx*dx + dy*dy + dz*dz)
+                if jump_dist > 20.0:
+                    self.get_logger().debug(
+                        f'無視: オドメトリの位置ジャンプを検出しました (移動距離: {jump_dist:.1f}m)。'
+                    )
+                    return
+
         self.current_x = msg.pose.pose.position.x
         self.current_y = msg.pose.pose.position.y
         self.current_z = msg.pose.pose.position.z
@@ -274,32 +357,11 @@ class UGVControllerNode(Node):
         )
         self.actual_linear_x = msg.twist.twist.linear.x
 
-
-
         self.odom_received = True
 
-        # スポーン位置を使ってodom→ワールドオフセットを1回だけ計算
-        # 古いシミュレーションの残存メッセージを無視するため、スポーン位置付近（<= 10.0m）のメッセージのみ採用する
-        if not self.odom_offset_set:
-            if isinstance(self.spawn_pose, (list, tuple)) and len(self.spawn_pose) >= 3:
-                spawn_x = float(self.spawn_pose[0])
-                spawn_y = float(self.spawn_pose[1])
-                spawn_z = float(self.spawn_pose[2])
-                dist_to_spawn = math.sqrt((self.current_x - spawn_x)**2 + (self.current_y - spawn_y)**2 + (self.current_z - spawn_z)**2)
-                if dist_to_spawn > 10.0:
-                    self.get_logger().debug(
-                        f'古いシミュレーションの残存オドメトリデータを検出 (スポーン位置からの距離 {dist_to_spawn:.1f}m)。無視します。'
-                    )
-                    return
-
-                self.odom_offset_x = spawn_x - self.current_x
-                self.odom_offset_y = spawn_y - self.current_y
-                self.odom_offset_z = spawn_z - self.current_z
-                self.odom_offset_set = True
-                self.get_logger().info(
-                    f'odomオフセット初回計算: '
-                    f'({self.odom_offset_x:.3f}, {self.odom_offset_y:.3f}, {self.odom_offset_z:.3f})'
-                )
+        self._last_raw_x = self.current_x
+        self._last_raw_y = self.current_y
+        self._last_raw_z = self.current_z
 
         self.world_x = self.current_x + self.odom_offset_x
         self.world_y = self.current_y + self.odom_offset_y
@@ -359,20 +421,13 @@ class UGVControllerNode(Node):
             self.get_logger().debug('初期位置の検証・補正中...', throttle_duration_sec=2.0)
             return
 
-        # 同期起動プロトコル: sim_logger_node が mission_complete トピックにサブスクライブ
-        # するまで発車を待機する。これにより、ノード起動順序の壁時計タイミングによる
-        # 非決定的な初期状態を完全に排除する。
-        # (link_controller_node + sim_logger_node の2つが購読する)
-        if not getattr(self, '_logger_ready', False):
-            sub_count = self.count_subscribers(self.mission_complete_topic)
-            if sub_count < 2:
-                self.get_logger().info(
-                    f'ロガー起動待機中... (mission_complete 購読者数: {sub_count}/2)',
-                    throttle_duration_sec=2.0
-                )
-                return
-            self._logger_ready = True
-            self.get_logger().info('全ノード準備完了。車両移動を開始します。')
+        # 全ノード Ready シグナルを確認（ハンドシェイク方式）
+        if not self._all_nodes_ready:
+            self.get_logger().info(
+                '全ノード Ready 待機中... (/sim/all_ready)',
+                throttle_duration_sec=2.0
+            )
+            return
 
         if self.mission_complete:
             return
@@ -470,9 +525,18 @@ class UGVControllerNode(Node):
         msg.data = True
         self.mission_complete_pub.publish(msg)
 
+        # ミッション完了後、VOLATILE QoSでのパケットロス対策として定期的に再送するタイマーを開始
+        self._complete_pub_timer = self.create_timer(1.0, self._publish_mission_complete)
+
         # 完了コールバック呼び出し
         if self.on_mission_complete:
             self.on_mission_complete()
+
+    def _publish_mission_complete(self) -> None:
+        """ミッション完了通知を定期的にパブリッシュする。"""
+        msg = Bool()
+        msg.data = True
+        self.mission_complete_pub.publish(msg)
 
     @staticmethod
     def normalize_angle(angle: float) -> float:
@@ -549,10 +613,18 @@ def main(args=None):
     """メインエントリポイント。"""
     rclpy.init(args=args)
 
-    node = UGVControllerNode()
+    node = TxControllerNode()
 
     try:
-        rclpy.spin(node)
+        while rclpy.ok():
+            try:
+                rclpy.spin_once(node, timeout_sec=0.1)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                node.get_logger().error(f"Error during spin (ignored to prevent crash): {e}")
+                import time
+                time.sleep(0.01)
     except KeyboardInterrupt:
         pass
     finally:

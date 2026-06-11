@@ -59,14 +59,15 @@ except ImportError:
         TwoRayGroundModel,
     )
 
-def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float, output_subdir: str = '') -> str:
+def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_pos: float, antenna_yaw: float, output_subdir: str = '', entity_yaw: float = -1.5708) -> str:
     if output_subdir:
         run_idx = None
         match_run = re.search(r'run(\d+)', summary_filename)
         if match_run:
             run_idx = int(match_run.group(1))
             
-        angle_deg = (270.0 - math.degrees(antenna_yaw)) % 360.0
+        entity_yaw_deg = math.degrees(entity_yaw)
+        angle_deg = (math.degrees(antenna_yaw) + entity_yaw_deg + 180.0) % 360.0
         angle_deg = round(angle_deg, 1)
         angle_str = f"{angle_deg:g}"
         y_str = f"{round(y_pos, 2):g}"
@@ -83,7 +84,8 @@ def get_run_dir(output_dir: str, summary_filename: str, run_timestamp: str, y_po
         if match:
             sweep_timestamp = match.group(1)
             run_idx = int(match.group(2))
-            angle_deg = (270.0 - math.degrees(antenna_yaw)) % 360.0
+            entity_yaw_deg = math.degrees(entity_yaw)
+            angle_deg = (math.degrees(antenna_yaw) + entity_yaw_deg + 180.0) % 360.0
             angle_deg = round(angle_deg, 1)
             angle_str = f"{angle_deg:g}"
             y_str = f"{round(y_pos, 2):g}"
@@ -219,6 +221,11 @@ class LinkControllerNode(Node):
         self.declare_parameter('run_timestamp', '')
         self.declare_parameter('config_file_path', resolve_path('/workspace/config/sim_params.yaml'))
         self.declare_parameter('output_subdir', '')
+        self.declare_parameter('filter_main_lobe', True)
+        self.declare_parameter('mainlobe_angle_margin_deg', 5.0)
+        self.declare_parameter('mainlobe_e_half_angle_deg', -1.0)
+        self.declare_parameter('mainlobe_h_half_angle_deg', -1.0)
+
 
         vehicle_names_raw = self.get_parameter('vehicle_names').value
         self.scheduling_policy: str = str(
@@ -266,6 +273,19 @@ class LinkControllerNode(Node):
         self.output_subdir: str = str(
             self.get_parameter('output_subdir').value
         )
+        self.filter_main_lobe: bool = bool(
+            self.get_parameter('filter_main_lobe').value
+        )
+        self.mainlobe_angle_margin_deg: float = float(
+            self.get_parameter('mainlobe_angle_margin_deg').value
+        )
+        self.mainlobe_e_half_angle_deg: float = float(
+            self.get_parameter('mainlobe_e_half_angle_deg').value
+        )
+        self.mainlobe_h_half_angle_deg: float = float(
+            self.get_parameter('mainlobe_h_half_angle_deg').value
+        )
+
 
         # 車両名リストのパース
         if isinstance(vehicle_names_raw, list):
@@ -363,6 +383,7 @@ class LinkControllerNode(Node):
         # Load run parameters and precalculate nominal RSSI LUT if feedforward_optimal or level >= 5
         self.y_pos = 0.0
         self.angle = 0.0
+        self.entity_yaw = -1.5708
         self.summary_filename = 'sweep_summary.csv'
         self.center_antenna_name = 'shinkansen_mid'
         try:
@@ -373,6 +394,7 @@ class LinkControllerNode(Node):
                 antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
                 self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
                 self.angle = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
+                self.entity_yaw = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[5])
                 self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
                 
                 # 車両アンテナから中心アンテナを動的に特定
@@ -392,7 +414,7 @@ class LinkControllerNode(Node):
             self.get_logger().warn(f"Failed to read yaml for summary / center antenna: {e}")
 
         # Set run directory
-        self.run_dir = get_run_dir(resolve_path('/workspace/sim_results/'), self.summary_filename, self.run_timestamp, self.y_pos, self.angle, self.output_subdir)
+        self.run_dir = get_run_dir(resolve_path('/workspace/sim_results/'), self.summary_filename, self.run_timestamp, self.y_pos, self.angle, self.output_subdir, self.entity_yaw)
 
         self.lut = []
         self.ff_file = None
@@ -406,14 +428,14 @@ class LinkControllerNode(Node):
                     config = yaml.safe_load(f)
                 
                 spawn_ent = config.get('spawn_entities', {})
-                base_stations = []
+                rx_nodes = []
                 for k, v in spawn_ent.items():
                     if k.startswith('antenna_'):
                         pos = np.array(v.get('pose', [0, 0, 0, 0, 0, 0])[:3], dtype=float)
                         offset = np.array(v.get('antenna_offset', [0, 0, 0]), dtype=float)
                         rpy = np.array(v.get('pose', [0, 0, 0, 0, 0, 0])[3:6], dtype=float)
                         rel_rpy = np.array(v.get('antenna_relative_rpy', [0, 0, 0]), dtype=float)
-                        base_stations.append({
+                        rx_nodes.append({
                             'name': k,
                             'position': pos,
                             'antenna_offset': offset,
@@ -434,7 +456,18 @@ class LinkControllerNode(Node):
                     polyline_points.append(np.array(wp[:3], dtype=float))
                 
                 samples = sample_trajectory(polyline_points, self.heatmap_resolution_m)
-                self.get_logger().info(f'軌道をサンプリングしました: {len(samples)} 点 (解像度: {self.heatmap_resolution_m} m)')
+                if rx_nodes:
+                    filtered_samples = []
+                    for pt, yaw in samples:
+                        near_bs = False
+                        for bs in rx_nodes:
+                            if np.linalg.norm(pt[:2] - bs['position'][:2]) < 100.0:
+                                near_bs = True
+                                break
+                        if near_bs:
+                            filtered_samples.append((pt, yaw))
+                    samples = filtered_samples
+                self.get_logger().info(f'軌道をサンプリングしました: {len(samples)} 点 (解像度: {self.heatmap_resolution_m} m, 基地局近傍フィルタ適用後)')
                 
                 comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
                 e_plane_path = resolve_path(comms_params.get('e_plane_path', '/workspace/config/e_plane.csv'))
@@ -444,8 +477,12 @@ class LinkControllerNode(Node):
                 parser = AntennaPatternParser(
                     e_plane_path=e_plane_path,
                     h_plane_path=h_plane_path,
-                    max_antenna_attenuation=max_att
+                    max_antenna_attenuation=max_att,
+                    mainlobe_angle_margin_deg=self.mainlobe_angle_margin_deg,
+                    mainlobe_e_half_angle_override_deg=self.mainlobe_e_half_angle_deg,
+                    mainlobe_h_half_angle_override_deg=self.mainlobe_h_half_angle_deg
                 )
+
                 
                 pl_params = comms_params.get('path_loss', {})
                 c = float(pl_params.get('c', 299792458.0))
@@ -470,11 +507,10 @@ class LinkControllerNode(Node):
                 )
                 
                 heatmap_rows = []
+                last_optimal_antenna = None
                 for pt, yaw in samples:
-                    ugv_orientation = np.array([0.0, 0.0, yaw])
+                    tx_orientation = np.array([0.0, 0.0, yaw])
                     
-                    max_rssi = float('-inf')
-                    optimal_antenna = None
                     row = {
                         'x_m': round(pt[0], 4),
                         'y_m': round(pt[1], 4),
@@ -482,35 +518,73 @@ class LinkControllerNode(Node):
                         'yaw_rad': round(yaw, 4)
                     }
                     
-                    for bs in base_stations:
+                    rssi_dict = {}
+                    
+                    # Rotate vehicle antenna offset by vehicle's orientation
+                    R_veh = parser._rpy_to_rotmat(tx_orientation[0], tx_orientation[1], tx_orientation[2])
+                    for bs in rx_nodes:
                         bs_antenna_pos = bs['position'] + bs['antenna_offset']
                         bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
                         
                         for va in vehicle_antennas:
-                            ugv_antenna_pos = pt + np.asarray(va['offset'], dtype=float)
-                            ugv_ant_rpy = ugv_orientation + np.asarray(va['relative_rpy'], dtype=float)
+                            tx_antenna_pos = pt + R_veh.dot(np.asarray(va['offset'], dtype=float))
+                            tx_ant_rpy = tx_orientation + np.asarray(va['relative_rpy'], dtype=float)
                             
                             tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = parser.get_tx_rx_gains(
                                 tx_pos_world=bs_antenna_pos,
                                 tx_rpy_world=bs_ant_rpy,
-                                rx_pos_world=ugv_antenna_pos,
-                                rx_rpy_world=ugv_ant_rpy,
+                                rx_pos_world=tx_antenna_pos,
+                                rx_rpy_world=tx_ant_rpy,
                             )
                             antenna_gain_db = float(tx_total + rx_total)
                             
-                            metrics = calculator.calculate_all(
-                                ugv_antenna_pos,
-                                bs_antenna_pos,
-                                antenna_gain_db=antenna_gain_db,
-                                add_noise=False
-                            )
-                            rssi = metrics['rssi']
+                            in_main = True
+                            if self.filter_main_lobe:
+                                tx_el, tx_az = parser.calculate_antenna_frame_angles(bs_antenna_pos, tx_antenna_pos, bs_ant_rpy)
+                                rx_el, rx_az = parser.calculate_antenna_frame_angles(tx_antenna_pos, bs_antenna_pos, tx_ant_rpy)
+                                tx_in = parser.is_in_main_lobe(np.degrees(abs(tx_el)), np.degrees(abs(tx_az)))
+                                rx_in = parser.is_in_main_lobe(np.degrees(abs(rx_el)), np.degrees(abs(rx_az)))
+                                if not (tx_in and rx_in):
+                                    in_main = False
+
+                            if in_main:
+                                metrics = calculator.calculate_all(
+                                    tx_antenna_pos,
+                                    bs_antenna_pos,
+                                    antenna_gain_db=antenna_gain_db,
+                                    add_noise=False
+                                )
+                                rssi = metrics['rssi']
+                            else:
+                                rssi = -999.0
+
                             col_name = f"rssi_{bs['name']}_{va['name']}"
                             row[col_name] = round(rssi, 2)
                             
-                            if rssi > max_rssi:
-                                max_rssi = rssi
-                                optimal_antenna = va['name']
+                            # Track the best RSSI for each UGV antenna across all base stations
+                            va_name = va['name']
+                            if va_name not in rssi_dict or rssi > rssi_dict[va_name]:
+                                rssi_dict[va_name] = rssi
+
+                    # Determine optimal antenna at this point using hysteresis/memory
+                    best_antenna = max(rssi_dict, key=rssi_dict.get)
+                    max_rssi = rssi_dict[best_antenna]
+                    
+                    optimal_antenna = None
+                    if last_optimal_antenna is None:
+                        optimal_antenna = best_antenna
+                        last_optimal_antenna = best_antenna
+                    else:
+                        last_rssi = rssi_dict.get(last_optimal_antenna, -999.0)
+                        margin_db = 1.0
+                        # Switch only if the new candidate is significantly better
+                        # OR if the last optimal antenna has fallen out of main lobe and the new one is in the main lobe
+                        if (max_rssi > last_rssi + margin_db) or (last_rssi <= -900.0 and max_rssi > -900.0):
+                            optimal_antenna = best_antenna
+                            last_optimal_antenna = best_antenna
+                        else:
+                            optimal_antenna = last_optimal_antenna
+                            max_rssi = last_rssi
                                 
                     row['optimal_antenna'] = optimal_antenna
                     row['max_rssi'] = round(max_rssi, 2)
@@ -525,7 +599,7 @@ class LinkControllerNode(Node):
                     
                     with open(heatmap_path, 'w', newline='', encoding='utf-8') as csvfile:
                         fieldnames = ['x_m', 'y_m', 'z_m', 'yaw_rad']
-                        for bs in base_stations:
+                        for bs in rx_nodes:
                             for va in vehicle_antennas:
                                 fieldnames.append(f"rssi_{bs['name']}_{va['name']}")
                         fieldnames.extend(['optimal_antenna', 'max_rssi'])
@@ -549,7 +623,7 @@ class LinkControllerNode(Node):
                 os.makedirs(control_dir, exist_ok=True)
                 ff_path = os.path.join(control_dir, 'feedforward_log.csv')
                 
-                fieldnames = ['time_s', 'ugv_x_m', 'ugv_y_m', 'ugv_z_m']
+                fieldnames = ['time_s', 'tx_x_m', 'tx_y_m', 'tx_z_m']
                 for name in self.vehicle_names:
                     fieldnames.append(f"rssi_{name}")
                 fieldnames.extend(['selected_antenna', 'rssi_optimal_dBm'])
@@ -582,14 +656,16 @@ class LinkControllerNode(Node):
         elif self.scheduling_policy == 'rssi_priority':
             self.strategy = RssiPriorityStrategy()
         elif self.scheduling_policy == 'geometric_beam_priority':
-            self.strategy = GeometricBeamPriorityStrategy(self.beam_gain_threshold)
+            self.strategy = GeometricBeamPriorityStrategy(self.beam_gain_threshold, self.filter_main_lobe)
         elif self.scheduling_policy == 'physical_score_priority':
             self.strategy = PhysicalScorePriorityStrategy(
                 self.beam_gain_threshold,
                 self.min_hold_time_s,
                 self.switch_margin_db,
-                self.proactive_handover_score_threshold
+                self.proactive_handover_score_threshold,
+                self.filter_main_lobe
             )
+
         elif self.scheduling_policy == 'geometric_weighted':
             self.strategy = GeometricWeightedStrategy(self.weight_distance, self.weight_angle)
         elif self.scheduling_policy == 'feedforward_optimal':
@@ -625,55 +701,32 @@ class LinkControllerNode(Node):
         self._rssi[vehicle_name] = msg.data
 
     def _on_comms_quality(self, vehicle_name: str, msg: CommsQuality) -> None:
-        """各車両からの通信品質・幾何学情報を受信。タイムスタンプ同期バッファで管理。"""
+        """各車両からの通信品質・幾何学情報を受信。"""
         current_time = msg.header.stamp.sec + msg.header.stamp.nanosec * 1e-9
         
-        # 許容誤差範囲内 (5ms) の既存スタンプを探す
-        tolerance = 0.005
-        matched_stamp_key = None
-        for stamp_key in self._quality_buffer:
-            stamp_time = stamp_key[0] + stamp_key[1] * 1e-9
-            if abs(current_time - stamp_time) < tolerance:
-                matched_stamp_key = stamp_key
-                break
+        # 幾何情報を更新
+        self._geometry_info[vehicle_name] = {
+            'distance': msg.distance,
+            'antenna_gain_e_plane': msg.antenna_gain_e_plane,
+            'antenna_gain_h_plane': msg.antenna_gain_h_plane,
+            'path_loss': msg.path_loss,
+            'comm_active': msg.comm_active,
+            'link_state': msg.link_state,
+            'rssi': msg.rssi,
+            'in_main_lobe': msg.in_main_lobe,
+            'off_boresight_e_deg': msg.off_boresight_e_deg,
+            'off_boresight_h_deg': msg.off_boresight_h_deg,
+            'tx_x': msg.tx_x,
+            'tx_y': msg.tx_y,
+            'tx_z': msg.tx_z
+        }
+
         
-        if matched_stamp_key is None:
-            stamp_key = (msg.header.stamp.sec, msg.header.stamp.nanosec)
-            self._quality_buffer[stamp_key] = {}
-            matched_stamp_key = stamp_key
-        
-        self._quality_buffer[matched_stamp_key][vehicle_name] = msg
-        
-        # すべての車両データがこのタイムスタンプで揃ったか確認
-        if len(self._quality_buffer[matched_stamp_key]) == len(self.vehicle_names):
-            # すべて揃ったので幾何情報を一括更新してスケジューリングを実行
-            for vn in self.vehicle_names:
-                m = self._quality_buffer[matched_stamp_key][vn]
-                self._geometry_info[vn] = {
-                    'distance': m.distance,
-                    'antenna_gain_e_plane': m.antenna_gain_e_plane,
-                    'antenna_gain_h_plane': m.antenna_gain_h_plane,
-                    'path_loss': m.path_loss,
-                    'comm_active': m.comm_active,
-                    'link_state': m.link_state,
-                    'rssi': m.rssi,
-                    'ugv_x': m.ugv_x,
-                    'ugv_y': m.ugv_y,
-                    'ugv_z': m.ugv_z
-                }
-            
-            # スケジュール処理を実行
-            trigger_time = matched_stamp_key[0] + matched_stamp_key[1] * 1e-9
-            self._schedule_tick(trigger_time)
-            
-            # メモリ節約のため、このスタンプとそれより古いスタンプを削除
-            keys_to_remove = []
-            for k in list(self._quality_buffer.keys()):
-                k_time = k[0] + k[1] * 1e-9
-                if k_time <= trigger_time + 1e-9:
-                    keys_to_remove.append(k)
-            for k in keys_to_remove:
-                self._quality_buffer.pop(k, None)
+        # すべてのアンテナデータが一度揃ったら、基準アンテナ受信時にのみスケジューリングを実行して無駄な多重実行を防止する。
+        # 揃う前は、全てのアンテナデータが集まった瞬間に一度実行する。
+        if len(self._geometry_info) == len(self.vehicle_names):
+            if vehicle_name == self.center_antenna_name or self._last_grant_change_time == 0.0:
+                self._schedule_tick(current_time)
 
     def _on_mission_complete(self, vehicle_name: str, msg: Bool) -> None:
         """各車両のミッション完了通知を受信。"""
@@ -732,7 +785,7 @@ class LinkControllerNode(Node):
         grace_period_passed = (current_time - self._last_grant_change_time) > self.proactive_grace_period_s
         hold_time_passed = (current_time - self._last_grant_change_time) >= self.min_hold_time_s
 
-        if active_link_state == 'DISCONNECTED' and active_info and grace_period_passed and hold_time_passed:
+        if self.scheduling_policy != 'feedforward_optimal' and active_link_state == 'DISCONNECTED' and active_info and grace_period_passed and hold_time_passed:
             best_score = float('-inf')
             best_idx = None
             for i, name in enumerate(self.vehicle_names):
@@ -741,6 +794,9 @@ class LinkControllerNode(Node):
                 info = self._geometry_info.get(name, {})
                 if not info.get('comm_active', False):
                     continue
+                if self.filter_main_lobe and not info.get('in_main_lobe', True):
+                    continue
+
                 # 物理スコア = 送信側総ゲイン(E) + 受信側総ゲイン(H) - パスロス
                 # これは実質的にノイズを含まない理想的なRSSI(受信電力)に比例します
                 e_gain = info.get('antenna_gain_e_plane', -999.0)
@@ -789,10 +845,10 @@ class LinkControllerNode(Node):
             ux, uy, uz = 0.0, 0.0, 0.0
             for name in self.vehicle_names:
                 info = self._geometry_info.get(name, {})
-                if 'ugv_x' in info:
-                    ux = info['ugv_x']
-                    uy = info['ugv_y']
-                    uz = info['ugv_z']
+                if 'tx_x' in info:
+                    ux = info['tx_x']
+                    uy = info['tx_y']
+                    uz = info['tx_z']
                     break
             
             nominal_rssi = float('-inf')
@@ -803,9 +859,9 @@ class LinkControllerNode(Node):
             
             row = {
                 'time_s': round(elapsed, 4),
-                'ugv_x_m': round(ux, 4),
-                'ugv_y_m': round(uy, 4),
-                'ugv_z_m': round(uz, 4)
+                'tx_x_m': round(ux, 4),
+                'tx_y_m': round(uy, 4),
+                'tx_z_m': round(uz, 4)
             }
             for name in self.vehicle_names:
                 row[f"rssi_{name}"] = round(self._rssi.get(name, float('-inf')), 2)
@@ -841,7 +897,15 @@ def main(args=None):
     executor.add_node(node)
 
     try:
-        executor.spin()
+        while rclpy.ok():
+            try:
+                executor.spin_once(timeout_sec=0.1)
+            except KeyboardInterrupt:
+                break
+            except Exception as e:
+                node.get_logger().error(f"Error during executor spin (ignored to prevent crash): {e}")
+                import time
+                time.sleep(0.01)
     except KeyboardInterrupt:
         pass
     finally:
