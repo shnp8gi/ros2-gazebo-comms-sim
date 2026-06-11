@@ -54,7 +54,7 @@ from lib.sweep_data import average_summaries, get_completed_tasks
 # 動的プロファイリングがまだ十分に機能していない場合の初期想定負荷パラメータ
 DEFAULT_CPU_PER_SIM = 1.5
 DEFAULT_MEM_PER_SIM_GIB = 1.2
-CPU_SAFE_RATIO = 0.95  # システム全体のCPUコアを使い切らないよう、5%の最小限のマージンを残す (95%ターゲット)
+CPU_SAFE_RATIO = 0.95  # [廃止] 旧ロジックで使用。新ロジックではreserved_cpus (10%)を直接使用
 LAUNCH_COOLDOWN_SEC = 3.0  # 起動時の負荷スパイクとロードアベレージ遅延を防ぐため、新規起動の間隔を最低3秒空ける
 
 # =========================================================================
@@ -504,7 +504,13 @@ def resource_monitor_loop():
         time.sleep(1.0)
 
 def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: bool = False) -> int:
-    """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する"""
+    """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する
+
+    旧ロジックでは external_load = system_load - our_sims_load として外部負荷を推定していたが、
+    CPUコンテンション下では各シミュレーションのCPU計測値が低下し our_sims_load が過大推定され、
+    external_load が 0 になる循環依存バグがあった。
+    新ロジックでは「システム全体のアイドルCPUコア数」を直接使い、追加でRTFフィードバック制御を行う。
+    """
     global cached_system_load, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
 
     try:
@@ -518,15 +524,64 @@ def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: b
     dyn_cpu_per_sim = cached_dyn_cpu_per_sim
     dyn_mem_per_sim = cached_dyn_mem_per_sim
 
-    our_sims_load = active_count * dyn_cpu_per_sim
-    
-    # 全体負荷から自分たちのシミュレーション負荷を引くことで「外部負荷」を切り分ける
-    external_load = max(0.0, load_1min - our_sims_load)
-    
-    # 外部負荷を引いた「シミュレーションで利用可能な残りのCPUコア数」を計算（マージン比率を考慮）
-    avail_cpus = max(0.0, (cpu_count * CPU_SAFE_RATIO) - external_load)
-    max_by_cpu = max(1, int(math.floor(avail_cpus / dyn_cpu_per_sim)))
+    # ==========================================
+    # 方式1: アイドルCPUコアから直接計算 (メイン)
+    # ==========================================
+    # システム全体のアイドルCPUコア数 = 全コア × (1 - 使用率)
+    idle_cpus = max(0.0, cpu_count - load_1min)
 
+    # 自分のシミュレーションが使っている分を「空きに戻す」
+    # (自分のワーカーを減らせばその分空くため)
+    our_sims_load = active_count * dyn_cpu_per_sim
+    potential_avail = idle_cpus + our_sims_load
+
+    # 安全マージン: CPU全体の10%は常に確保 (他ユーザー・OS用)
+    reserved_cpus = cpu_count * 0.10
+    avail_for_sims = max(0.0, potential_avail - reserved_cpus)
+    max_by_cpu = max(1, int(math.floor(avail_for_sims / dyn_cpu_per_sim)))
+
+    # ==========================================
+    # 方式2: システム全体の使用率による絶対上限
+    # ==========================================
+    # CPUが85%以上使用中なら、現在のアクティブ数以上には増やさない
+    system_cpu_pct = (load_1min / cpu_count) * 100.0 if cpu_count > 0 else 100.0
+    if system_cpu_pct > 85.0 and active_count > 0:
+        max_by_cpu = min(max_by_cpu, active_count)
+    # CPUが95%以上なら、現在のアクティブ数から1つ減らす
+    if system_cpu_pct > 95.0 and active_count > 1:
+        max_by_cpu = min(max_by_cpu, active_count - 1)
+
+    # ==========================================
+    # 方式3: RTFフィードバック制御
+    # ==========================================
+    # タスクの実行時間が想定の2倍以上 → コンテンションの兆候 → 並列数を制限
+    rtf_penalty = 1.0
+    with completed_tasks_lock:
+        current_completed = completed_tasks_count
+    if current_completed >= 3:
+        try:
+            with first_task_samples_lock:
+                pass  # ロック取得確認のみ
+            # task_duration_history からRTF劣化を検出
+            recent_durations = getattr(get_optimal_concurrency, '_recent_durations', [])
+            if recent_durations:
+                baseline = getattr(get_optimal_concurrency, '_baseline_duration', None)
+                if baseline and baseline > 0:
+                    avg_recent = sum(recent_durations[-5:]) / len(recent_durations[-5:])
+                    ratio = avg_recent / baseline
+                    if ratio > 2.0:
+                        rtf_penalty = 0.5  # 半分に制限
+                    elif ratio > 1.5:
+                        rtf_penalty = 0.7  # 30%削減
+        except Exception:
+            pass
+
+    if rtf_penalty < 1.0:
+        max_by_cpu = max(1, int(max_by_cpu * rtf_penalty))
+
+    # ==========================================
+    # メモリ制限
+    # ==========================================
     mem_per_worker = dyn_mem_per_sim * (1024**3)  # bytes
     mem_available = 8 * (1024**3)     # 8 GiB fallback
     
@@ -548,17 +603,15 @@ def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: b
     optimal = max(1, min(optimal, max_limit))
     
     # Force concurrency to 1 during the first task execution for load measurement
-    global completed_tasks_count
-    with completed_tasks_lock:
-        current_completed = completed_tasks_count
-        
     if current_completed < 1:
         optimal = 1
     
     if not silent:
-        print(f"[Auto-detect] CPU Count: {cpu_count}, System Load (RT): {load_1min:.2f} (External: {external_load:.2f}, Our Sims: {our_sims_load:.2f})")
+        print(f"[Auto-detect] CPU Count: {cpu_count}, System Load: {load_1min:.2f}/{cpu_count} cores ({system_cpu_pct:.1f}%), Idle: {idle_cpus:.2f} cores")
         print(f"[Auto-detect] Estimated Resource per Sim -> CPU: {dyn_cpu_per_sim:.2f} cores, Mem: {dyn_mem_per_sim:.2f} GiB")
-        print(f"[Auto-detect] Max workers by CPU: {max_by_cpu}, Mem: {max_by_mem}")
+        print(f"[Auto-detect] Available for sims (after 10% reserve): {avail_for_sims:.2f} cores -> Max by CPU: {max_by_cpu}, Max by Mem: {max_by_mem}")
+        if rtf_penalty < 1.0:
+            print(f"[Auto-detect] RTF degradation detected! Penalty factor: {rtf_penalty:.1f}")
         if current_completed < 1:
             print(f"[Auto-detect] Profiling phase active (completed: {current_completed}/1). Concurrency forced to 1.")
         print(f"[Auto-detect] Optimal Concurrency (capped at {max_limit}): {optimal}")
@@ -776,6 +829,15 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             expected_str = f"{t_expected:.1f}s" if t_expected is not None else "Unknown"
             print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation finished successfully in {actual_duration:.1f}s (Expected: {expected_str}): Y={y}, Angle={angle_deg}")
             log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=OK ts={datetime.datetime.now().isoformat()}")
+
+            # RTFフィードバック用: タスク実行時間を記録
+            if not hasattr(get_optimal_concurrency, '_recent_durations'):
+                get_optimal_concurrency._recent_durations = []
+            get_optimal_concurrency._recent_durations.append(actual_duration)
+            # 最初の成功タスクの期待時間をベースラインとして記録
+            if t_expected is not None and not hasattr(get_optimal_concurrency, '_baseline_duration'):
+                get_optimal_concurrency._baseline_duration = t_expected
+
             increment_completed_tasks()
             return True
         else:
