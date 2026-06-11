@@ -14,7 +14,12 @@ echo "Checking system for NVIDIA GPU..."
 if command -v nvidia-smi &> /dev/null && nvidia-smi &> /dev/null; then
     echo "✅ NVIDIA GPU detected. Starting simulation WITH hardware acceleration..."
     # ベース設定とGPU設定を両方読み込んで起動
-    docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d sim
+    if ! docker compose -f docker-compose.yml -f docker-compose.gpu.yml up -d sim; then
+        echo "⚠️  Failed to start container with NVIDIA GPU acceleration."
+        echo "   Please check if 'nvidia-container-toolkit' is installed and configured for Docker on this machine."
+        echo "   Falling back to CPU mode..."
+        docker compose -f docker-compose.yml up -d sim
+    fi
 else
     echo "⚠️  No NVIDIA GPU detected. Starting simulation with CPU only..."
     # ベース設定のみで起動
