@@ -44,7 +44,7 @@ RUN wget https://github.com/VirtualGL/virtualgl/releases/download/3.1.1/virtualg
 # Environment Setup
 ENV ROS_DISTRO=humble
 ENV NVIDIA_VISIBLE_DEVICES=all
-ENV NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility,display
+ENV NVIDIA_DRIVER_CAPABILITIES=graphics,compute,utility
 
 RUN echo "source /opt/ros/humble/setup.bash" >> ~/.bashrc
 ENV GZ_SIM_RESOURCE_PATH=/workspace/src/comms_sim_pkg/models
