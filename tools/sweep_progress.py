@@ -68,7 +68,7 @@ def find_latest_progress_log():
         return PROGRESS_LOG_DEFAULT
     
     # タイムスタンプ付きディレクトリをソートして最新のものを取得
-    logs.sort()
+    logs.sort(key=os.path.getmtime)
     return logs[-1]
 
 PROGRESS_LOG = find_latest_progress_log()

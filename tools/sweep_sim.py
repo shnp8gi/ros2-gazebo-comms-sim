@@ -49,7 +49,7 @@ from lib.sweep_data import average_summaries, get_completed_tasks
 DEFAULT_CPU_PER_SIM = 1.5
 DEFAULT_MEM_PER_SIM_GIB = 1.2
 CPU_SAFE_RATIO = 0.95  # システム全体のCPUコアを使い切らないよう、5%の最小限のマージンを残す (95%ターゲット)
-LAUNCH_COOLDOWN_SEC = 10.0  # 起動時の負荷スパイクとロードアベレージ遅延を防ぐため、新規起動の間隔を最低10秒空ける
+LAUNCH_COOLDOWN_SEC = 3.0  # 起動時の負荷スパイクとロードアベレージ遅延を防ぐため、新規起動の間隔を最低3秒空ける
 
 # =========================================================================
 # 終了シグナルのハンドリングとアクティブプロセスの追跡
