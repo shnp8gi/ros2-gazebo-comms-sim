@@ -313,6 +313,36 @@ SWEEP_REAL_TIME_FACTOR = 5.0
 python3 ./tools/sweep_progress.py --watch
 ```
 
+### 5. 複数PCでの分散実行と結果のマージ (`tools/sweep_dist.py`)
+
+大規模なスイープシミュレーション（多数のパラメータ条件）を複数のPCに分割して実行し、最終的にデータを安全に結合（マージ）するためのユーティリティツールが用意されています。
+
+#### ① タスクの分割 (メインPC)
+メインのPCで以下のコマンドを実行し、タスクを分割します（例として3分割する場合）。
+```bash
+python3 tools/sweep_dist.py split --splits 3
+```
+実行すると、`sim_results/dist_sweep_YYYYMMDD_HHMMSS/` 内に以下が作成されます。
+- `manifest_chunk_0.json`, `manifest_chunk_1.json`, `manifest_chunk_2.json` (各PC用のタスク定義ファイル)
+- `instructions.txt` (分散実行・統合の手順書)
+
+#### ② 各PCでのシミュレーション実行 (各PC)
+生成されたマニフェストJSONファイルをそれぞれのPCのワークスペースにコピーし、以下のコマンドで実行します。
+```bash
+python3 tools/sweep_sim.py --manifest manifest_chunk_X.json
+```
+- ※マニフェストに記録されたスイープ設定（RTF、ラン数など）とタスク割り当てが自動で読み込まれます。
+- ※結果は `sim_results/sweep_{スイープID}/` 内に出力され、ファイル名は `sweep_summary_run{run_idx}_chunk{chunk_idx}.csv` のように他のPCと衝突しない名前で出力されます。
+- ※実行途中で中断した場合も、通常通り `--resume` オプションで再開可能です。
+
+#### ③ データの収集と統合 (メインPC)
+1. 各PCでの実行完了後、生成されたフォルダ（例: `sim_results/sweep_{スイープID}/`）内のファイルをすべてメインPCの同じフォルダにコピーしてまとめます（個別の詳細データが入る `runs/` ディレクトリ配下も名前が衝突しないように設計されています）。
+2. メインPCで結合先のフォルダパスを指定して、以下のコマンドを実行します。
+```bash
+python3 tools/sweep_dist.py merge --sweep-dir sim_results/sweep_{スイープID}
+```
+マージツールは自動的に各チャンクCSVをランごとのCSVに結合し、全体の平均値（`sweep_summary.csv`）を再集計・保存します。マージ完了後、不要となったチャンク別のCSVは自動でクリーンアップされます。
+
 ## ⚙️ パラメータ設定
 
 ### config/sim_params.yaml

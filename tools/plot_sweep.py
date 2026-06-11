@@ -70,42 +70,40 @@ def get_vehicle_colors(df):
     return color_map
 
 def setup_matplotlib_style():
-    """Configure matplotlib for modern dark-themed plots"""
+    """Configure matplotlib for academic-style plots matching user preferences"""
     plt.rcParams.update({
-        'figure.facecolor': COLORS['bg'],
-        'axes.facecolor': COLORS['bg'],
-        'savefig.facecolor': COLORS['bg'],
-        'axes.edgecolor': COLORS['grid'],
-        'axes.grid': True,
-        'grid.color': COLORS['grid'],
-        'grid.linestyle': ':',
-        'grid.alpha': 0.6,
-        'xtick.color': COLORS['text_muted'],
-        'ytick.color': COLORS['text_muted'],
-        'axes.labelcolor': COLORS['text'],
-        'axes.titlecolor': COLORS['text'],
-        'figure.titlesize': 14,
-        'axes.titlesize': 12,
-        'axes.labelsize': 10,
-        'xtick.labelsize': 9,
-        'ytick.labelsize': 9,
-        'legend.facecolor': COLORS['card_bg'],
-        'legend.edgecolor': COLORS['grid'],
-        'legend.fontsize': 9,
-        'text.color': COLORS['text'],
-        'font.family': 'sans-serif',
-        'figure.dpi': 150
+        'figure.facecolor': 'white',
+        'axes.facecolor': 'white',
+        'savefig.facecolor': 'white',
+        'axes.edgecolor': 'black',
+        'axes.grid': False,  # Managed manually
+        'xtick.color': 'black',
+        'ytick.color': 'black',
+        'axes.labelcolor': 'black',
+        'axes.titlecolor': 'black',
+        'figure.titlesize': 18,
+        'axes.titlesize': 18,
+        'axes.labelsize': 18,
+        'xtick.labelsize': 18,
+        'ytick.labelsize': 18,
+        'legend.facecolor': 'white',
+        'legend.edgecolor': 'black',
+        'legend.fontsize': 14,
+        'text.color': 'black',
+        'font.family': 'Times New Roman',
+        'figure.dpi': 150,
+        'axes.prop_cycle': plt.cycler("color", ["blue", "orange", "green", "olive", "peru", "cyan", "purple"])
     })
 
+
 def generate_static_plots(df, plots_dir):
-    """Generate professional matplotlib plots and save them as PNGs"""
+    """Generate academic-style matplotlib plots and save them as PNGs"""
     setup_matplotlib_style()
     os.makedirs(plots_dir, exist_ok=True)
     
-    color_map = get_vehicle_colors(df)
     unique_names = df['vehicle_name'].unique()
-    total_names = [v for v in unique_names if str(v).endswith('_total')]
-    individual_names = [v for v in unique_names if not str(v).endswith('_total')]
+    total_names = sorted([v for v in unique_names if str(v).endswith('_total')])
+    individual_names = sorted([v for v in unique_names if not str(v).endswith('_total')])
     
     # Sort dataframe by antenna_angle
     df_sorted = df.sort_values(by='antenna_angle')
@@ -130,116 +128,162 @@ def generate_static_plots(df, plots_dir):
             if len(b_val) > 0:
                 baselines[t_name] = b_val[0]
 
+    size_of_figure_ration = 7 / 13
+
+    # Helper function to apply common academic plot styling
+    def apply_academic_styling(ax, xlabel, ylabel, xmin, xmax, ymin=None):
+        ax.set_xlabel(xlabel, fontname="Times New Roman")
+        ax.set_ylabel(ylabel, fontname="Times New Roman")
+        
+        # Legend styling
+        leg = ax.legend(loc='best',
+                        facecolor='white',
+                        edgecolor='black',
+                        framealpha=1,
+                        fancybox=False,
+                        ncol=1)
+        try:
+            leg.set_draggable(True)
+        except:
+            pass
+            
+        # Grid styling
+        ax.grid(which="major", color='black', linestyle='-', zorder=0)
+        ax.minorticks_on()
+        ax.grid(which="minor", axis='y', linestyle='--', color='lightgray', zorder=0)
+        if ax.get_yscale() == 'log':
+            ax.yaxis.set_minor_locator(plt.LogLocator(base=10, subs='all'))
+            
+        # Ticks direction
+        ax.tick_params(direction='in', which='both')
+        
+        if xmin is not None and xmax is not None:
+            ax.set_xlim(xmin, xmax)
+            
+        if ymin is not None:
+            ax.set_ylim(bottom=ymin)
+
     # --- Plot 1: Total Data Transferred ---
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(16, 9))
     
     # Plot individual antennas
     for vehicle in individual_names:
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
-            ax.plot(v_df['antenna_angle'], v_df['total_data_MB'], 
-                    label=clean_label(vehicle), 
-                    color=color_map.get(vehicle, '#ffffff'), linewidth=2)
+            if 'theory' in vehicle.lower():
+                ax.plot(v_df['antenna_angle'], v_df['total_data_MB'], 
+                        "-r", label=clean_label(vehicle), lw=2, zorder=3)
+            else:
+                ax.plot(v_df['antenna_angle'], v_df['total_data_MB'], 
+                        "-", label=clean_label(vehicle), linewidth=2)
             
     # Plot total
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
-            ax.plot(total_df['antenna_angle'], total_df['total_data_MB'], 
-                    label=clean_label(t_name), color=color_map.get(t_name, '#818cf8'), linewidth=3)
-            ax.fill_between(total_df['antenna_angle'], total_df['total_data_MB'], 
-                            color=color_map.get(t_name, '#818cf8'), alpha=0.15)
+            if 'theory' in t_name.lower():
+                ax.plot(total_df['antenna_angle'], total_df['total_data_MB'], 
+                        "-r", label=clean_label(t_name), lw=3, zorder=3)
+            else:
+                ax.plot(total_df['antenna_angle'], total_df['total_data_MB'], 
+                        "-", label=clean_label(t_name), linewidth=3)
         
         # Plot baseline if available
         if t_name in baselines:
-            ax.axhline(y=baselines[t_name], color='#ff1744', linestyle='--', alpha=0.8,
+            ax.axhline(y=baselines[t_name], color='red', linestyle='--', alpha=0.8,
                        label=f'Baseline ({clean_label(t_name)} 360°): {baselines[t_name]:.1f} MB')
 
-    ax.set_title('Total Data Transferred vs. Base Station Antenna Angle')
-    ax.set_xlabel('Antenna Angle [degrees]')
-    ax.set_ylabel('Total Data Transferred [MB]')
-    ax.legend(loc='upper right')
-    if len(angles) > 1:
-        ax.set_xlim(angles.min(), angles.max())
+    xmin = angles.min() if len(angles) > 1 else None
+    xmax = angles.max() if len(angles) > 1 else None
+    apply_academic_styling(ax, 'Antenna Angle [degrees]', 'Total Data Transferred [MB]', xmin, xmax, ymin=0)
+    fig.set_size_inches(16 * size_of_figure_ration, 9 * size_of_figure_ration)
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'total_data.png'), dpi=300)
     plt.close()
 
     # --- Plot 2: Average Throughput ---
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(16, 9))
     for vehicle in individual_names:
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
-            ax.plot(v_df['antenna_angle'], v_df['average_throughput_Gbps'], 
-                    label=clean_label(vehicle), 
-                    color=color_map.get(vehicle, '#ffffff'), linewidth=2)
+            if 'theory' in vehicle.lower():
+                ax.plot(v_df['antenna_angle'], v_df['average_throughput_Gbps'], 
+                        "-r", label=clean_label(vehicle), lw=2, zorder=3)
+            else:
+                ax.plot(v_df['antenna_angle'], v_df['average_throughput_Gbps'], 
+                        "-", label=clean_label(vehicle), linewidth=2)
+                
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
-            ax.plot(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
-                    label=clean_label(t_name), color=color_map.get(t_name, '#818cf8'), linewidth=3)
-            ax.fill_between(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
-                            color=color_map.get(t_name, '#818cf8'), alpha=0.15)
+            if 'theory' in t_name.lower():
+                ax.plot(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
+                        "-r", label=clean_label(t_name), lw=3, zorder=3)
+            else:
+                ax.plot(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
+                        "-", label=clean_label(t_name), linewidth=3)
             
-    ax.set_title('Average Throughput vs. Base Station Antenna Angle')
-    ax.set_xlabel('Antenna Angle [degrees]')
-    ax.set_ylabel('Average Throughput [Gbps]')
-    ax.legend(loc='upper right')
-    if len(angles) > 1:
-        ax.set_xlim(angles.min(), angles.max())
+    apply_academic_styling(ax, 'Antenna Angle [degrees]', 'Average Throughput [Gbps]', xmin, xmax, ymin=0)
+    fig.set_size_inches(16 * size_of_figure_ration, 9 * size_of_figure_ration)
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'throughput.png'), dpi=300)
     plt.close()
 
     # --- Plot 3: Average RSSI ---
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(16, 9))
     for vehicle in individual_names:
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
-            ax.plot(v_df['antenna_angle'], v_df['average_rssi_dBm'], 
-                    label=clean_label(vehicle), 
-                    color=color_map.get(vehicle, '#ffffff'), linewidth=2)
+            if 'theory' in vehicle.lower():
+                ax.plot(v_df['antenna_angle'], v_df['average_rssi_dBm'], 
+                        "-r", label=clean_label(vehicle), lw=2, zorder=3)
+            else:
+                ax.plot(v_df['antenna_angle'], v_df['average_rssi_dBm'], 
+                        "-", label=clean_label(vehicle), linewidth=2)
+                
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
-            ax.plot(total_df['antenna_angle'], total_df['average_rssi_dBm'], 
-                    label=clean_label(t_name), color=color_map.get(t_name, '#818cf8'), linewidth=3)
+            if 'theory' in t_name.lower():
+                ax.plot(total_df['antenna_angle'], total_df['average_rssi_dBm'], 
+                        "-r", label=clean_label(t_name), lw=3, zorder=3)
+            else:
+                ax.plot(total_df['antenna_angle'], total_df['average_rssi_dBm'], 
+                        "-", label=clean_label(t_name), linewidth=3)
             
     # Add a horizontal line at the operational threshold if known (-68.5 dBm)
-    ax.axhline(y=-68.5, color='#f44336', linestyle=':', alpha=0.7, label='MCS Threshold (-68.5 dBm)')
+    ax.axhline(y=-68.5, color='red', linestyle=':', alpha=0.8, label='MCS Threshold (-68.5 dBm)')
     
-    ax.set_title('Average RSSI vs. Base Station Antenna Angle')
-    ax.set_xlabel('Antenna Angle [degrees]')
-    ax.set_ylabel('Average RSSI [dBm]')
-    ax.legend(loc='lower right')
-    if len(angles) > 1:
-        ax.set_xlim(angles.min(), angles.max())
+    apply_academic_styling(ax, 'Antenna Angle [degrees]', 'Average RSSI [dBm]', xmin, xmax)
+    fig.set_size_inches(16 * size_of_figure_ration, 9 * size_of_figure_ration)
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'rssi.png'), dpi=300)
     plt.close()
 
     # --- Plot 4: Connected Time ---
-    fig, ax = plt.subplots(figsize=(8, 4.5))
+    fig, ax = plt.subplots(figsize=(16, 9))
     for vehicle in individual_names:
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
-            ax.plot(v_df['antenna_angle'], v_df['connected_time_s'], 
-                    label=clean_label(vehicle), 
-                    color=color_map.get(vehicle, '#ffffff'), linewidth=2)
+            if 'theory' in vehicle.lower():
+                ax.plot(v_df['antenna_angle'], v_df['connected_time_s'], 
+                        "-r", label=clean_label(vehicle), lw=2, zorder=3)
+            else:
+                ax.plot(v_df['antenna_angle'], v_df['connected_time_s'], 
+                        "-", label=clean_label(vehicle), linewidth=2)
+                
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
-            ax.plot(total_df['antenna_angle'], total_df['connected_time_s'], 
-                    label=clean_label(t_name), color=color_map.get(t_name, '#818cf8'), linewidth=3)
-            ax.fill_between(total_df['antenna_angle'], total_df['connected_time_s'], 
-                            color=color_map.get(t_name, '#818cf8'), alpha=0.15)
+            if 'theory' in t_name.lower():
+                ax.plot(total_df['antenna_angle'], total_df['connected_time_s'], 
+                        "-r", label=clean_label(t_name), lw=3, zorder=3)
+            else:
+                ax.plot(total_df['antenna_angle'], total_df['connected_time_s'], 
+                        "-", label=clean_label(t_name), linewidth=3)
             
-    ax.set_title('Connected Time vs. Base Station Antenna Angle')
-    ax.set_xlabel('Antenna Angle [degrees]')
-    ax.set_ylabel('Connected Time [seconds]')
-    ax.legend(loc='upper right')
-    if len(angles) > 1:
-        ax.set_xlim(angles.min(), angles.max())
+    apply_academic_styling(ax, 'Antenna Angle [degrees]', 'Connected Time [seconds]', xmin, xmax, ymin=0)
+    fig.set_size_inches(16 * size_of_figure_ration, 9 * size_of_figure_ration)
     plt.tight_layout()
     plt.savefig(os.path.join(plots_dir, 'connected_time.png'), dpi=300)
     plt.close()
