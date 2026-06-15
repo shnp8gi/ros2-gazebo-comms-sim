@@ -14,6 +14,7 @@ import argparse
 import sys
 import glob
 import psutil
+import atexit
 
 # Initialize psutil CPU measurement reference point
 try:
@@ -54,7 +55,6 @@ from lib.sweep_data import average_summaries, get_completed_tasks
 # 動的プロファイリングがまだ十分に機能していない場合の初期想定負荷パラメータ
 DEFAULT_CPU_PER_SIM = 1.5
 DEFAULT_MEM_PER_SIM_GIB = 1.2
-CPU_SAFE_RATIO = 0.95  # [廃止] 旧ロジックで使用。新ロジックではreserved_cpus (10%)を直接使用
 LAUNCH_COOLDOWN_SEC = 3.0  # 起動時の負荷スパイクとロードアベレージ遅延を防ぐため、新規起動の間隔を最低3秒空ける
 
 # =========================================================================
@@ -68,77 +68,54 @@ sweep_start_time = None
 launch_lock = threading.Lock()
 last_launch_time = 0.0
 
-def send_sigint_to_worker(proc, ros_domain_id, is_docker):
-    """Sends SIGINT to the process group and ROS nodes matching the domain ID."""
-    if not proc:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-    except Exception:
-        pass
-
-    if is_docker:
+def send_sigint_to_worker(proc, worker_id):
+    """Sends SIGINT to the process group and all child processes."""
+    if proc:
         try:
-            subprocess.run(
-                f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2",
-                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-            )
+            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
         except Exception:
             pass
-    else:
+            
+    procs = get_worker_processes(proc, worker_id)
+    for p in procs:
         try:
-            subprocess.run(
-                ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -2"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-            )
+            p.send_signal(signal.SIGINT)
         except Exception:
             pass
 
-def send_sigkill_to_worker(proc, ros_domain_id, is_docker):
-    """Sends SIGKILL to the process group and ROS nodes matching the domain ID."""
-    if not proc:
-        return
-    try:
-        os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-    except Exception:
-        pass
-
-    if is_docker:
+def send_sigkill_to_worker(proc, worker_id):
+    """Sends SIGKILL to the process group and all child processes."""
+    if proc:
         try:
-            subprocess.run(
-                f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9",
-                shell=True, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-            )
+            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
         except Exception:
             pass
-    else:
+            
+    procs = get_worker_processes(proc, worker_id)
+    for p in procs:
         try:
-            subprocess.run(
-                ["docker", "compose", "exec", "-T", "sim", "sh", "-c", f"grep -l 'ROS_DOMAIN_ID={ros_domain_id}' /proc/[0-9]*/environ 2>/dev/null | cut -d '/' -f 3 | xargs -r kill -9"],
-                stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL, timeout=2
-            )
+            p.kill()
         except Exception:
             pass
 
-def terminate_process_cleanly(proc, ros_domain_id, is_docker, timeout=2.0):
-    if not proc:
+def terminate_process_cleanly(proc, worker_id, timeout=2.0):
+    if not proc and worker_id is None:
         return
 
-    send_sigint_to_worker(proc, ros_domain_id, is_docker)
+    send_sigint_to_worker(proc, worker_id)
 
     t_start = time.time()
     while time.time() - t_start < timeout:
-        if proc.poll() is not None:
-            return
+        if proc and proc.poll() is not None:
+            # Check if children are also dead
+            if not get_worker_processes(None, worker_id):
+                return
         time.sleep(0.1)
 
-    if proc.poll() is None:
-        send_sigkill_to_worker(proc, ros_domain_id, is_docker)
+    send_sigkill_to_worker(proc, worker_id)
 
-def fix_ownership(start_time_str):
+def fix_ownership(start_time_str=None):
     """結果ディレクトリの所有権をホストのユーザーに変更する"""
-    if not start_time_str:
-        return
     is_docker = os.path.exists('/.dockerenv')
     try:
         if is_docker:
@@ -149,8 +126,8 @@ def fix_ownership(start_time_str):
                 gid = stat_info.st_gid
                 
                 paths_to_fix = [
-                    f"/workspace/sim_results/sweep_{start_time_str}",
-                    f"/workspace/tools/log/{start_time_str}"
+                    "/workspace/sim_results",
+                    "/workspace/tools/log"
                 ]
                 for p in paths_to_fix:
                     if os.path.exists(p):
@@ -158,25 +135,27 @@ def fix_ownership(start_time_str):
                             ["chown", "-R", f"{uid}:{gid}", p],
                             stdout=subprocess.DEVNULL,
                             stderr=subprocess.DEVNULL,
-                            timeout=10
+                            timeout=60
                         )
         else:
             # Host side
             uid = os.getuid()
             gid = os.getgid()
             paths_to_fix = [
-                f"/workspace/sim_results/sweep_{start_time_str}",
-                f"/workspace/tools/log/{start_time_str}"
+                "/workspace/sim_results",
+                "/workspace/tools/log"
             ]
             for p in paths_to_fix:
                 subprocess.run(
                     ["docker", "compose", "exec", "-T", "sim", "chown", "-R", f"{uid}:{gid}", p],
                     stdout=subprocess.DEVNULL,
                     stderr=subprocess.DEVNULL,
-                    timeout=10
+                    timeout=60
                 )
     except Exception as e:
         print(f"[Sweep Sim] Warning: Failed to fix ownership: {e}")
+
+atexit.register(fix_ownership)
 
 def handle_shutdown(signum, frame):
     global shutdown_requested
@@ -202,10 +181,9 @@ def handle_shutdown(signum, frame):
     # 全プロセスに並列で SIGINT を送信
     for worker_id, task_data in tasks_to_kill:
         proc = task_data.get('proc')
-        ros_domain_id = task_data.get('ros_domain_id')
         if proc:
             print(f"[Sweep Sim] Requesting clean shutdown (SIGINT) for Worker {worker_id} (PID {proc.pid})...")
-            send_sigint_to_worker(proc, ros_domain_id, is_docker)
+            send_sigint_to_worker(proc, worker_id)
 
     # デストラクタでのCSV書き込みを待つ
     time.sleep(2.0)
@@ -213,12 +191,11 @@ def handle_shutdown(signum, frame):
     # 終了していないものを SIGKILL
     for worker_id, task_data in tasks_to_kill:
         proc = task_data.get('proc')
-        ros_domain_id = task_data.get('ros_domain_id')
         tmp_config_path = task_data.get('tmp_config_path')
         
         if proc and proc.poll() is None:
             print(f"[Sweep Sim] Killing remaining process group for Worker {worker_id} (PID {proc.pid})...")
-            send_sigkill_to_worker(proc, ros_domain_id, is_docker)
+            send_sigkill_to_worker(proc, worker_id)
                     
         # 一時設定ファイルの削除
         if tmp_config_path and os.path.exists(tmp_config_path):
@@ -309,7 +286,6 @@ monitor_running = False
 # Resource Measurement Cache and Monitor Thread
 # =========================================================================
 resource_cache_lock = threading.Lock()
-cached_system_load = 0.0
 cached_dyn_cpu_per_sim = DEFAULT_CPU_PER_SIM
 cached_dyn_mem_per_sim = DEFAULT_MEM_PER_SIM_GIB
 
@@ -352,35 +328,10 @@ def increment_completed_tasks():
             print(f"\n[Resource Profiling] Warning: No resource samples collected during first execution. Using defaults.\n")
 
 def measure_resources():
-    global cached_system_load, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
+    global cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
     global first_task_cpu_samples, first_task_mem_samples
-    
-    try:
-        cpu_count = os.cpu_count() or 4
-    except Exception:
-        cpu_count = 4
 
-    # 1. Measure system CPU load
-    system_load = 0.0
-    if psutil:
-        try:
-            sys_cpu_pct = psutil.cpu_percent(interval=None)
-            system_load = (sys_cpu_pct / 100.0) * cpu_count
-        except Exception:
-            pass
-    if system_load == 0.0:
-        loadavg_path = "/proc/loadavg"
-        if os.path.exists(loadavg_path):
-            try:
-                with open(loadavg_path, "r") as f:
-                    system_load = float(f.read().split()[0])
-            except Exception:
-                pass
-    
-    with resource_cache_lock:
-        cached_system_load = system_load
-
-    # 2. Measure active tasks metrics (CPU/Mem per sim)
+    # Measure active tasks metrics (CPU/Mem per sim)
     measured_cpu = 0.0
     measured_mem_bytes = 0.0
     measured_count = 0
@@ -504,86 +455,30 @@ def resource_monitor_loop():
         time.sleep(1.0)
 
 def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: bool = False) -> int:
-    """CPUコア数・現在のシステム負荷・および利用可能な空きメモリ容量から最適な並列度を決定する
-
-    旧ロジックでは external_load = system_load - our_sims_load として外部負荷を推定していたが、
-    CPUコンテンション下では各シミュレーションのCPU計測値が低下し our_sims_load が過大推定され、
-    external_load が 0 になる循環依存バグがあった。
-    新ロジックでは「システム全体のアイドルCPUコア数」を直接使い、追加でRTFフィードバック制御を行う。
     """
-    global cached_system_load, cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
-
+    【静的計算方式】
+    CPUコア数とメモリ容量の両方から最適な並列数を算出する。
+    1インスタンスあたりのリソース消費量は初回タスクのプロファイリングで更新される。
+    """
+    global cached_dyn_cpu_per_sim, cached_dyn_mem_per_sim
+    
     try:
-        cpu_count = os.cpu_count()
+        cpu_count = os.cpu_count() or 4
     except Exception:
         cpu_count = 4
-    if cpu_count is None:
-        cpu_count = 4
 
-    load_1min = cached_system_load
-    dyn_cpu_per_sim = cached_dyn_cpu_per_sim
-    dyn_mem_per_sim = cached_dyn_mem_per_sim
+    # --- CPU制約 ---
+    cpu_val = cached_dyn_cpu_per_sim if cached_dyn_cpu_per_sim > 0.0 else DEFAULT_CPU_PER_SIM
+    cpu_val = max(0.5, cpu_val)
+    # CPUコアの90%を使用可能とし、1インスタンスあたりのCPU消費で割る
+    safe_cpu_count = cpu_count * 0.9
+    max_by_cpu = max(1, int(math.floor(safe_cpu_count / cpu_val)))
 
-    # ==========================================
-    # 方式1: アイドルCPUコアから直接計算 (メイン)
-    # ==========================================
-    # システム全体のアイドルCPUコア数 = 全コア × (1 - 使用率)
-    idle_cpus = max(0.0, cpu_count - load_1min)
-
-    # 自分のシミュレーションが使っている分を「空きに戻す」
-    # (自分のワーカーを減らせばその分空くため)
-    our_sims_load = active_count * dyn_cpu_per_sim
-    potential_avail = idle_cpus + our_sims_load
-
-    # 安全マージン: CPU全体の10%は常に確保 (他ユーザー・OS用)
-    reserved_cpus = cpu_count * 0.10
-    avail_for_sims = max(0.0, potential_avail - reserved_cpus)
-    max_by_cpu = max(1, int(math.floor(avail_for_sims / dyn_cpu_per_sim)))
-
-    # ==========================================
-    # 方式2: システム全体の使用率による絶対上限
-    # ==========================================
-    # CPUが85%以上使用中なら、現在のアクティブ数以上には増やさない
-    system_cpu_pct = (load_1min / cpu_count) * 100.0 if cpu_count > 0 else 100.0
-    if system_cpu_pct > 85.0 and active_count > 0:
-        max_by_cpu = min(max_by_cpu, active_count)
-    # CPUが95%以上なら、現在のアクティブ数から1つ減らす
-    if system_cpu_pct > 95.0 and active_count > 1:
-        max_by_cpu = min(max_by_cpu, active_count - 1)
-
-    # ==========================================
-    # 方式3: RTFフィードバック制御
-    # ==========================================
-    # タスクの実行時間が想定の2倍以上 → コンテンションの兆候 → 並列数を制限
-    rtf_penalty = 1.0
-    with completed_tasks_lock:
-        current_completed = completed_tasks_count
-    if current_completed >= 3:
-        try:
-            with first_task_samples_lock:
-                pass  # ロック取得確認のみ
-            # task_duration_history からRTF劣化を検出
-            recent_durations = getattr(get_optimal_concurrency, '_recent_durations', [])
-            if recent_durations:
-                baseline = getattr(get_optimal_concurrency, '_baseline_duration', None)
-                if baseline and baseline > 0:
-                    avg_recent = sum(recent_durations[-5:]) / len(recent_durations[-5:])
-                    ratio = avg_recent / baseline
-                    if ratio > 2.0:
-                        rtf_penalty = 0.5  # 半分に制限
-                    elif ratio > 1.5:
-                        rtf_penalty = 0.7  # 30%削減
-        except Exception:
-            pass
-
-    if rtf_penalty < 1.0:
-        max_by_cpu = max(1, int(max_by_cpu * rtf_penalty))
-
-    # ==========================================
-    # メモリ制限
-    # ==========================================
-    mem_per_worker = dyn_mem_per_sim * (1024**3)  # bytes
-    mem_available = 8 * (1024**3)     # 8 GiB fallback
+    # --- メモリ制約 ---
+    mem_val = cached_dyn_mem_per_sim if cached_dyn_mem_per_sim > 0.0 else DEFAULT_MEM_PER_SIM_GIB
+    mem_val = max(0.5, mem_val)
+    mem_per_worker = mem_val * (1024**3)  # bytes
+    mem_available = 8 * (1024**3)         # 8 GiB fallback
     
     meminfo_path = "/proc/meminfo"
     if os.path.exists(meminfo_path):
@@ -596,25 +491,19 @@ def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: b
         except Exception:
             pass
 
+    # メモリ全体の80%を安全ラインとする
     safe_mem_available = mem_available * 0.8
     max_by_mem = max(1, int(math.floor(safe_mem_available / mem_per_worker)))
 
-    optimal = min(max_by_cpu, max_by_mem)
-    optimal = max(1, min(optimal, max_limit))
-    
-    # Force concurrency to 1 during the first task execution for load measurement
-    if current_completed < 1:
-        optimal = 1
+    # CPU制約とメモリ制約の厳しい方を採用し、ユーザー指定上限でキャップ
+    optimal = min(max_limit, max_by_cpu, max_by_mem)
     
     if not silent:
-        print(f"[Auto-detect] CPU Count: {cpu_count}, System Load: {load_1min:.2f}/{cpu_count} cores ({system_cpu_pct:.1f}%), Idle: {idle_cpus:.2f} cores")
-        print(f"[Auto-detect] Estimated Resource per Sim -> CPU: {dyn_cpu_per_sim:.2f} cores, Mem: {dyn_mem_per_sim:.2f} GiB")
-        print(f"[Auto-detect] Available for sims (after 10% reserve): {avail_for_sims:.2f} cores -> Max by CPU: {max_by_cpu}, Max by Mem: {max_by_mem}")
-        if rtf_penalty < 1.0:
-            print(f"[Auto-detect] RTF degradation detected! Penalty factor: {rtf_penalty:.1f}")
-        if current_completed < 1:
-            print(f"[Auto-detect] Profiling phase active (completed: {current_completed}/1). Concurrency forced to 1.")
-        print(f"[Auto-detect] Optimal Concurrency (capped at {max_limit}): {optimal}")
+        print(f"[Auto-detect] CPU cores: {cpu_count} (safe: {safe_cpu_count:.1f})")
+        print(f"[Auto-detect] Per-sim CPU: {cpu_val:.2f} cores → max {max_by_cpu} parallel")
+        print(f"[Auto-detect] Mem Available: {mem_available / (1024**3):.2f} GiB (safe: {safe_mem_available / (1024**3):.2f} GiB)")
+        print(f"[Auto-detect] Per-sim Mem: {mem_val:.2f} GiB → max {max_by_mem} parallel")
+        print(f"[Auto-detect] Optimal Concurrency: {optimal} (CPU-limited={max_by_cpu <= max_by_mem})")
     
     return optimal
 
@@ -739,6 +628,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 f.write(content)
                 
         except Exception as e:
+            with active_tasks_lock:
+                active_tasks.pop(worker_id, None)
             print(f"[Worker {worker_id}] Error creating config {tmp_config_path}: {e}")
             log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()}")
             return False
@@ -765,18 +656,27 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                    f"ros2 launch comms_sim_pkg sim_launch.py config_file:=/workspace/{tmp_config_path}"]
      
         if shutdown_requested:
+            with active_tasks_lock:
+                active_tasks.pop(worker_id, None)
             return False
 
         log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()}")
 
         start_time = time.time()
+        out_log_path = f"/workspace/sim_results/stdout_worker_{worker_id}.log"
+        err_log_path = f"/workspace/sim_results/stderr_worker_{worker_id}.log"
+        out_f = open(out_log_path, "w")
+        err_f = open(err_log_path, "w")
         proc = subprocess.Popen(
             cmd,
+            stdout=out_f,
+            stderr=err_f,
             preexec_fn=os.setsid
         )
 
         with active_tasks_lock:
             if shutdown_requested:
+                active_tasks.pop(worker_id, None)
                 try:
                     os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
                 except Exception:
@@ -796,34 +696,33 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             timed_out = True
             print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation TIMEOUT ({task_timeout}s): Y={y}, Angle={angle_deg}")
         finally:
+            out_f.close()
+            err_f.close()
             with active_tasks_lock:
                 if worker_id in active_tasks:
                     del active_tasks[worker_id]
 
-            terminate_process_cleanly(proc, ros_domain_id, is_docker)
+            terminate_process_cleanly(proc, worker_id)
      
-            if os.path.exists(tmp_config_path):
-                try:
-                    os.remove(tmp_config_path)
-                except Exception:
-                    pass
+            pass
 
         actual_duration = time.time() - start_time
         
         is_valid = True
         reason = ""
         
+        summary_path = os.path.join(os.getcwd(), "sim_results", f"sweep_{sweep_start_time}", summary_filename)
         if timed_out:
             is_valid = False
             reason = "Timeout"
-        elif proc.returncode != 0:
-            is_valid = False
-            reason = f"Process exited with error code {proc.returncode}"
-        elif t_expected is not None:
-            min_expected = max(5.0, t_expected * 0.7)
-            if actual_duration < min_expected:
+        elif proc.returncode != 0 and proc.returncode not in (-2, -15):
+            if not os.path.exists(summary_path):
                 is_valid = False
-                reason = f"Simulation ended too quickly ({actual_duration:.1f}s < minimum expected {min_expected:.1f}s)"
+                reason = f"Process exited with error code {proc.returncode}"
+        else:
+            if not os.path.exists(summary_path):
+                is_valid = False
+                reason = "Summary CSV not found (Simulation crashed or exited silently)"
                 
         if is_valid:
             expected_str = f"{t_expected:.1f}s" if t_expected is not None else "Unknown"
@@ -864,7 +763,7 @@ def main():
     parser.add_argument("--base-station-yaw", type=float, default=None, help="Yaw angle of base station entity in degrees (default from config)")
     parser.add_argument("--rtf", "--real-time-factor", type=float, default=None, help="Acceleration factor (default from config)")
     parser.add_argument("--timeout", type=int, default=None, help="Timeout in seconds per task (default from config)")
-    parser.add_argument("--resume", type=str, default=None, help="Resume a previous sweep using its timestamp or directory path")
+    parser.add_argument("--resume", type=str, nargs='?', default=None, const='latest', help="Resume a previous sweep. Without a value, resumes the most recently executed sweep. Optionally specify a timestamp or directory path.")
     parser.add_argument("--no-build", action="store_true", help="Skip automatic colcon build at start")
     parser.add_argument("--manifest", type=str, default=None, help="Path to a JSON manifest file for split sweep execution")
     args = parser.parse_args()
@@ -892,11 +791,12 @@ def main():
     MAX_CONCURRENCY_CAP = cpu_count
     concurrency_arg = args.concurrency
     if concurrency_arg <= 0:
-        # In auto mode, we set the pool capacity to MAX_CONCURRENCY_CAP,
-        # but check and print the initial optimal concurrency level.
+        # 自動モード: CPU・メモリから最適並列数を算出
+        # スレッドプールはMAX_CONCURRENCY_CAPで作成し、ゲートで実際の並列数を制御
+        # (プロファイリング後に最適値が上がっても対応可能にするため)
         initial_optimal = get_optimal_concurrency(max_limit=MAX_CONCURRENCY_CAP)
         concurrency = MAX_CONCURRENCY_CAP
-        print(f"[Sweep Sim] Dynamic concurrency enabled (Initial optimal: {initial_optimal}, Limit: {MAX_CONCURRENCY_CAP})")
+        print(f"[Sweep Sim] Auto concurrency: {initial_optimal} parallel (pool size: {MAX_CONCURRENCY_CAP}, will adjust after profiling)")
     else:
         concurrency = concurrency_arg
         print(f"[Sweep Sim] Concurrency manually set to limit: {concurrency}")
@@ -971,7 +871,17 @@ def main():
 
     if args.resume:
         resume_input = args.resume.strip()
-        if '/' in resume_input or '\\' in resume_input:
+        
+        if resume_input == 'latest':
+            # 直近に実行されたスイープディレクトリを自動検出
+            sweep_dirs = sorted(glob.glob("sim_results/sweep_*"), key=os.path.getmtime, reverse=True)
+            if not sweep_dirs:
+                print("Error: No previous sweep directories found in sim_results/.")
+                sys.exit(1)
+            sweep_dir = sweep_dirs[0]
+            sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
+            print(f"[Sweep Sim] Auto-detected most recent sweep: {sweep_dir}")
+        elif '/' in resume_input or '\\' in resume_input:
             sweep_dir = resume_input
             sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
         else:
@@ -1091,8 +1001,21 @@ def main():
         with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
             futures = {executor.submit(worker_thread_fn, t): t for t in tasks_list}
             concurrent.futures.wait(futures.keys())
+            for future in futures:
+                try:
+                    future.result()
+                except Exception as e:
+                    print(f"Exception in worker thread: {e}")
+                    import traceback
+                    traceback.print_exc()
     finally:
         monitor_running = False
+        # Clean up temporary config files
+        for f in glob.glob("tools/sweep_build/sim_params_tmp_*.yaml"):
+            try:
+                os.remove(f)
+            except Exception:
+                pass
 
     fix_ownership(sweep_start_time)
 

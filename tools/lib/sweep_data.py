@@ -4,7 +4,7 @@ import glob
 import subprocess
 
 def average_summaries(summary_files, output_file):
-    """各ランのCSVファイルを読み込んで平均値を集計・保存する"""
+    """各ランのCSVファイルを読み込んで平均値と標準偏差を集計・保存する"""
     is_docker = os.path.exists('/.dockerenv')
     if not is_docker:
         ws_summary_files = [f"/workspace/{f}" if not f.startswith('/') else f for f in summary_files]
@@ -31,18 +31,39 @@ if not dfs:
 
 combined = pd.concat(dfs, ignore_index=True)
 agg_rules = {{
-    'total_data_MB': 'mean',
-    'connected_time_s': 'mean',
-    'average_throughput_Gbps': 'mean',
-    'average_rssi_dBm': 'mean',
-    'handover_count': 'mean'
+    'total_data_MB': ['mean', 'std'],
+    'connected_time_s': ['mean', 'std'],
+    'average_throughput_Gbps': ['mean', 'std'],
+    'average_rssi_dBm': ['mean', 'std'],
+    'handover_count': ['mean', 'std']
 }}
 averaged = combined.groupby(['y_position', 'antenna_angle', 'vehicle_name'], as_index=False).agg(agg_rules)
+
+new_cols = []
+for col in averaged.columns:
+    if isinstance(col, tuple) and col[0] not in ['y_position', 'antenna_angle', 'vehicle_name']:
+        if col[1] == 'mean':
+            new_cols.append(col[0])
+        else:
+            new_cols.append(f"{{col[0]}}_std")
+    else:
+        new_cols.append(col[0])
+averaged.columns = new_cols
+
+for col in ['total_data_MB_std', 'connected_time_s_std', 'average_throughput_Gbps_std', 'average_rssi_dBm_std', 'handover_count_std']:
+    averaged[col] = averaged[col].fillna(0.0)
+
 averaged['total_data_MB'] = averaged['total_data_MB'].round(3)
+averaged['total_data_MB_std'] = averaged['total_data_MB_std'].round(3)
 averaged['connected_time_s'] = averaged['connected_time_s'].round(3)
+averaged['connected_time_s_std'] = averaged['connected_time_s_std'].round(3)
 averaged['average_throughput_Gbps'] = averaged['average_throughput_Gbps'].round(3)
+averaged['average_throughput_Gbps_std'] = averaged['average_throughput_Gbps_std'].round(3)
 averaged['average_rssi_dBm'] = averaged['average_rssi_dBm'].round(3)
+averaged['average_rssi_dBm_std'] = averaged['average_rssi_dBm_std'].round(3)
 averaged['handover_count'] = averaged['handover_count'].round(1)
+averaged['handover_count_std'] = averaged['handover_count_std'].round(1)
+
 averaged.insert(0, 'run_id', 'AVERAGE')
 averaged = averaged.sort_values(by=['y_position', 'antenna_angle', 'vehicle_name'])
 os.makedirs(os.path.dirname(output_file), exist_ok=True)
@@ -68,32 +89,44 @@ averaged.to_csv(output_file, index=False)
         print("No successful sweep summary files found to average.")
         return
 
-    # すべてのデータフレームを結合
     combined = pd.concat(dfs, ignore_index=True)
 
-    # 平均化する数値カラムの集計ルール
     agg_rules = {
-        'total_data_MB': 'mean',
-        'connected_time_s': 'mean',
-        'average_throughput_Gbps': 'mean',
-        'average_rssi_dBm': 'mean',
-        'handover_count': 'mean'
+        'total_data_MB': ['mean', 'std'],
+        'connected_time_s': ['mean', 'std'],
+        'average_throughput_Gbps': ['mean', 'std'],
+        'average_rssi_dBm': ['mean', 'std'],
+        'handover_count': ['mean', 'std']
     }
 
-    # y_position, antenna_angle, vehicle_name でグループ化して平均値を計算
     averaged = combined.groupby(['y_position', 'antenna_angle', 'vehicle_name'], as_index=False).agg(agg_rules)
 
-    # 表示をきれいにするために四捨五入
+    new_cols = []
+    for col in averaged.columns:
+        if isinstance(col, tuple) and col[0] not in ['y_position', 'antenna_angle', 'vehicle_name']:
+            if col[1] == 'mean':
+                new_cols.append(col[0])
+            else:
+                new_cols.append(f"{col[0]}_std")
+        else:
+            new_cols.append(col[0])
+    averaged.columns = new_cols
+
+    for col in ['total_data_MB_std', 'connected_time_s_std', 'average_throughput_Gbps_std', 'average_rssi_dBm_std', 'handover_count_std']:
+        averaged[col] = averaged[col].fillna(0.0)
+
     averaged['total_data_MB'] = averaged['total_data_MB'].round(3)
+    averaged['total_data_MB_std'] = averaged['total_data_MB_std'].round(3)
     averaged['connected_time_s'] = averaged['connected_time_s'].round(3)
+    averaged['connected_time_s_std'] = averaged['connected_time_s_std'].round(3)
     averaged['average_throughput_Gbps'] = averaged['average_throughput_Gbps'].round(3)
+    averaged['average_throughput_Gbps_std'] = averaged['average_throughput_Gbps_std'].round(3)
     averaged['average_rssi_dBm'] = averaged['average_rssi_dBm'].round(3)
+    averaged['average_rssi_dBm_std'] = averaged['average_rssi_dBm_std'].round(3)
     averaged['handover_count'] = averaged['handover_count'].round(1)
+    averaged['handover_count_std'] = averaged['handover_count_std'].round(1)
 
-    # run_id カラムの先頭への挿入
     averaged.insert(0, 'run_id', 'AVERAGE')
-
-    # 並び順をソートして保存
     averaged = averaged.sort_values(by=['y_position', 'antenna_angle', 'vehicle_name'])
     
     os.makedirs(os.path.dirname(output_file), exist_ok=True)

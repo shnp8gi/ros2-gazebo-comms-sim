@@ -215,6 +215,8 @@ class SimLoggerNode(Node):
             } for vn in self.vehicle_names
         }
         
+        self._latest_sim_time = 0.0
+        
         # Level 2: イベントログ用
         self.last_state = {vn: {'link_state': 'DISCONNECTED', 'has_link_grant': False} for vn in self.vehicle_names}
         self.event_file = None
@@ -269,7 +271,7 @@ class SimLoggerNode(Node):
 
         # ウォッチドッグ: 車両が停止してから一定時間後に強制シャットダウン
         # (mission_complete が取りこぼされた場合のフォールバック)
-        self._last_moving_wall_time: float = 0.0  # 最後に速度を検知した壁時計時刻
+        self._last_moving_sim_time: float = 0.0  # 最後に速度を検知したシミュレーション時刻
         self._vehicle_ever_moved: bool = False
         self._watchdog_timer = self.create_timer(1.0, self._watchdog_tick)
         
@@ -316,16 +318,15 @@ class SimLoggerNode(Node):
 
     def _watchdog_tick(self) -> None:
         """車両が停止してから _WATCHDOG_STOP_TIMEOUT_SEC 秒後に強制シャットダウン。"""
-        import time as _time
         if all(self._mission_status.values()):
             return  # 正常終了済み
         if not self._vehicle_ever_moved:
             return  # まだ動いていない (初期化待ち)
-        wall_now = _time.monotonic()
-        elapsed_stopped = wall_now - self._last_moving_wall_time
+        sim_now = self._latest_sim_time
+        elapsed_stopped = sim_now - self._last_moving_sim_time
         if elapsed_stopped >= _WATCHDOG_STOP_TIMEOUT_SEC:
             self.get_logger().warn(
-                f'[Watchdog] 車両が {elapsed_stopped:.1f}s 停止中。'
+                f'[Watchdog] 車両が {elapsed_stopped:.1f}s (シミュレーション時間) 停止中。'
                 f'mission_complete未受信のため強制終了します。'
                 f'(mission_status={self._mission_status})'
             )
@@ -333,6 +334,7 @@ class SimLoggerNode(Node):
 
     def _on_quality(self, vehicle_name: str, msg: CommsQuality):
         current_time = msg.header.stamp.sec + msg.header.stamp.nanosec / 1e9
+        self._latest_sim_time = current_time
         if self._start_time is None: self._start_time = current_time
         if vehicle_name not in self._vehicle_start_times: self._vehicle_start_times[vehicle_name] = current_time
             
@@ -349,9 +351,8 @@ class SimLoggerNode(Node):
             dz = pos[2] - last_pos[2]
             dist = math.sqrt(dx*dx + dy*dy + dz*dz)
             if dist > 0.01:  # 前回の品質メッセージから1cm以上移動している場合
-                import time as _time
                 self._vehicle_ever_moved = True
-                self._last_moving_wall_time = _time.monotonic()
+                self._last_moving_sim_time = current_time
         self._last_vehicle_pos[vehicle_name] = pos
         
         # msg.header.stamp を基に動的かつ決定論的に時間差を計算
@@ -432,133 +433,135 @@ class SimLoggerNode(Node):
             return
         self._summary_saved = True
         
-        # C++ノードがCSVを書き終えるまで少し待つ
-        import time
-        time.sleep(1.0)
-
-        # C++側が出力したデータ欠損のないCSVファイルがあれば、それに基づいて正確な統計値を再計算する
-        for vn in self.vehicle_names:
-            stats = self.summary_stats[vn]
-            suffix = '_connected.csv' if self.logging_level == 3 else '_full.csv'
-            csv_path = os.path.join(self.run_dir, 'comms', f'{vn}{suffix}')
-            if os.path.exists(csv_path):
-                try:
-                    with open(csv_path, 'r', encoding='utf-8') as f:
-                        reader = csv.DictReader(f)
-                        rows = list(reader)
-                    if rows:
-                        if self.logging_level == 3:
-                            connected_rows = rows
-                        else:
-                            connected_rows = [r for r in rows if r.get('link_state') == 'CONNECTED']
-                        
-                        cnt = len(connected_rows)
-                        if cnt > 0:
-                            stats['rssi_sum'] = sum(float(r['rssi_dBm']) for r in connected_rows)
-                            stats['tp_sum'] = sum(float(r['throughput_Gbps']) for r in connected_rows)
-                            stats['connected_count'] = cnt
-                            
-                            if self.logging_level >= 4:
-                                conn_time = 0.0
-                                prev_t = None
-                                for r in rows:
-                                    t = float(r['time_s'])
-                                    state = r.get('link_state')
-                                    if prev_t is not None:
-                                        dt = t - prev_t
-                                        if state == 'CONNECTED':
-                                            conn_time += dt
-                                    prev_t = t
-                                stats['connected_time'] = conn_time
-                            
-                            stats['total_data'] = max(float(r['total_data_MB']) for r in rows)
-                            
-                            if self.logging_level >= 4:
-                                ho_count = 0
-                                prev_s = 'DISCONNECTED'
-                                for r in rows:
-                                    s = r.get('link_state', 'DISCONNECTED')
-                                    if prev_s != 'CONNECTED' and s == 'CONNECTED':
-                                        ho_count += 1
-                                    prev_s = s
-                                stats['handover_count'] = ho_count
-                            
-                            self.get_logger().info(f"[{vn}] Recalculated summary stats from C++ CSV (no drops)")
-                except Exception as e:
-                    self.get_logger().warn(f"Failed to read C++ CSV for summary recalculation: {e}")
-        
-        # 終了処理 (ファイルを閉じる)
-        if self.event_file:
-            self.event_file.close()
-        # for vn, f in self.ts_files.items():
-        #     if vn in self.ts_buffers and self.ts_buffers[vn]:
-        #         self.ts_writers[vn].writerows(self.ts_buffers[vn])
-        #         self.ts_buffers[vn].clear()
-        #     f.close()
-
-        if self.output_subdir:
-            summary_path = os.path.join(self.output_dir, self.output_subdir, self.summary_filename)
-        else:
-            match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
-            if match:
-                sweep_timestamp = match.group(1)
-                summary_path = os.path.join(self.output_dir, f"sweep_{sweep_timestamp}", self.summary_filename)
-            else:
-                summary_path = os.path.join(self.output_dir, self.summary_filename)
-        
-        summary_dir = os.path.dirname(summary_path)
-        os.makedirs(summary_dir, exist_ok=True)
-        self._set_file_ownership(summary_dir)
-        file_exists = os.path.isfile(summary_path)
-        
+        import signal
+        handler_int = signal.signal(signal.SIGINT, signal.SIG_IGN)
+        handler_term = signal.signal(signal.SIGTERM, signal.SIG_IGN)
         try:
-            with open(summary_path, 'a', newline='', encoding='utf-8') as f:
-                fields = ['run_id', 'y_position', 'antenna_angle', 'vehicle_name', 
-                          'total_data_MB', 'connected_time_s', 'average_throughput_Gbps', 
-                          'average_rssi_dBm', 'handover_count']
-                writer = csv.DictWriter(f, fieldnames=fields)
-                if not file_exists:
-                    writer.writeheader()
-                    self._set_file_ownership(summary_path)
+            # C++ノードがCSVを書き終えるまで少し待つ
+            import time
+            time.sleep(1.0)
 
-                for vn in self.vehicle_names:
-                    stats = self.summary_stats[vn]
-                    cnt = stats['connected_count']
-                    writer.writerow({
-                        'run_id': self.timestamp,
-                        'y_position': self.y_pos,
-                        'antenna_angle': self.angle,
-                        'vehicle_name': vn,
-                        'total_data_MB': round(stats['total_data'], 3),
-                        'connected_time_s': round(stats['connected_time'], 3),
-                        'average_throughput_Gbps': round(stats['tp_sum'] / cnt, 3) if cnt > 0 else 0.0,
-                        'average_rssi_dBm': round(stats['rssi_sum'] / cnt, 3) if cnt > 0 else 0.0,
-                        'handover_count': stats['handover_count']
-                    })
-                    
-                shinkansen_vns = [vn for vn in self.vehicle_names if 'shinkansen' in vn]
-                if len(shinkansen_vns) >= 3:
-                    total_data = sum(self.summary_stats[vn]['total_data'] for vn in shinkansen_vns)
-                    total_connected_time = sum(self.summary_stats[vn]['connected_time'] for vn in shinkansen_vns)
-                    total_connected_count = sum(self.summary_stats[vn]['connected_count'] for vn in shinkansen_vns)
-                    total_tp_sum = sum(self.summary_stats[vn]['tp_sum'] for vn in shinkansen_vns)
-                    total_rssi_sum = sum(self.summary_stats[vn]['rssi_sum'] for vn in shinkansen_vns)
-                    total_handover_count = sum(self.summary_stats[vn]['handover_count'] for vn in shinkansen_vns)
+            # C++側が出力したデータ欠損のないCSVファイルがあれば、それに基づいて正確な統計値を再計算する
+            for vn in self.vehicle_names:
+                stats = self.summary_stats[vn]
+                suffix = '_connected.csv' if self.logging_level == 3 else '_full.csv'
+                csv_path = os.path.join(self.run_dir, 'comms', f'{vn}{suffix}')
+                if os.path.exists(csv_path):
+                    try:
+                        with open(csv_path, 'r', encoding='utf-8') as f:
+                            reader = csv.DictReader(f)
+                            rows = list(reader)
+                        if rows:
+                            if self.logging_level == 3:
+                                connected_rows = rows
+                            else:
+                                connected_rows = [r for r in rows if r.get('link_state') == 'CONNECTED']
+                            
+                            cnt = len(connected_rows)
+                            if cnt > 0:
+                                stats['rssi_sum'] = sum(float(r['rssi_dBm']) for r in connected_rows)
+                                stats['tp_sum'] = sum(float(r['throughput_Gbps']) for r in connected_rows)
+                                stats['connected_count'] = cnt
+                                
+                                if self.logging_level >= 4:
+                                    conn_time = 0.0
+                                    prev_t = None
+                                    for r in rows:
+                                        t = float(r['time_s'])
+                                        state = r.get('link_state')
+                                        if prev_t is not None:
+                                            dt = t - prev_t
+                                            if state == 'CONNECTED':
+                                                conn_time += dt
+                                        prev_t = t
+                                    stats['connected_time'] = conn_time
+                                
+                                stats['total_data'] = max(float(r['total_data_MB']) for r in rows)
+                                
+                                if self.logging_level >= 4:
+                                    ho_count = 0
+                                    prev_s = 'DISCONNECTED'
+                                    for r in rows:
+                                        s = r.get('link_state', 'DISCONNECTED')
+                                        if prev_s != 'CONNECTED' and s == 'CONNECTED':
+                                            ho_count += 1
+                                        prev_s = s
+                                    stats['handover_count'] = ho_count
+                                
+                                self.get_logger().info(f"[{vn}] Recalculated summary stats from C++ CSV (no drops)")
+                    except Exception as e:
+                        self.get_logger().warn(f"Failed to read C++ CSV for summary recalculation: {e}")
+            
+            # 終了処理 (ファイルを閉じる)
+            if self.event_file:
+                self.event_file.close()
 
-                    writer.writerow({
-                        'run_id': self.timestamp,
-                        'y_position': self.y_pos,
-                        'antenna_angle': self.angle,
-                        'vehicle_name': 'shinkansen_total',
-                        'total_data_MB': round(total_data, 3),
-                        'connected_time_s': round(total_connected_time, 3),
-                        'average_throughput_Gbps': round(total_tp_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
-                        'average_rssi_dBm': round(total_rssi_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
-                        'handover_count': total_handover_count
-                    })
-            self.get_logger().info(f'サマリー結果を追記しました: {summary_path}')
-        except Exception as e:
-            self.get_logger().error(f'サマリー保存失敗: {e}')
+            if self.output_subdir:
+                summary_path = os.path.join(self.output_dir, self.output_subdir, self.summary_filename)
+            else:
+                match = re.match(r'sweep_summary_(\d{8}_\d{6})_run(\d+)(?:_.*)?\.csv', self.summary_filename)
+                if match:
+                    sweep_timestamp = match.group(1)
+                    summary_path = os.path.join(self.output_dir, f"sweep_{sweep_timestamp}", self.summary_filename)
+                else:
+                    summary_path = os.path.join(self.output_dir, self.summary_filename)
+            
+            summary_dir = os.path.dirname(summary_path)
+            os.makedirs(summary_dir, exist_ok=True)
+            self._set_file_ownership(summary_dir)
+            file_exists = os.path.isfile(summary_path)
+            
+            try:
+                with open(summary_path, 'a', newline='', encoding='utf-8') as f:
+                    fields = ['run_id', 'y_position', 'antenna_angle', 'vehicle_name', 
+                              'total_data_MB', 'connected_time_s', 'average_throughput_Gbps', 
+                              'average_rssi_dBm', 'handover_count']
+                    writer = csv.DictWriter(f, fieldnames=fields)
+                    if not file_exists:
+                        writer.writeheader()
+                        self._set_file_ownership(summary_path)
+
+                    for vn in self.vehicle_names:
+                        stats = self.summary_stats[vn]
+                        cnt = stats['connected_count']
+                        writer.writerow({
+                            'run_id': self.timestamp,
+                            'y_position': self.y_pos,
+                            'antenna_angle': self.angle,
+                            'vehicle_name': vn,
+                            'total_data_MB': round(stats['total_data'], 3),
+                            'connected_time_s': round(stats['connected_time'], 3),
+                            'average_throughput_Gbps': round(stats['tp_sum'] / cnt, 3) if cnt > 0 else 0.0,
+                            'average_rssi_dBm': round(stats['rssi_sum'] / cnt, 3) if cnt > 0 else 0.0,
+                            'handover_count': stats['handover_count']
+                        })
+                        
+                    shinkansen_vns = [vn for vn in self.vehicle_names if 'shinkansen' in vn]
+                    if len(shinkansen_vns) >= 3:
+                        total_data = sum(self.summary_stats[vn]['total_data'] for vn in shinkansen_vns)
+                        total_connected_time = sum(self.summary_stats[vn]['connected_time'] for vn in shinkansen_vns)
+                        total_connected_count = sum(self.summary_stats[vn]['connected_count'] for vn in shinkansen_vns)
+                        total_tp_sum = sum(self.summary_stats[vn]['tp_sum'] for vn in shinkansen_vns)
+                        total_rssi_sum = sum(self.summary_stats[vn]['rssi_sum'] for vn in shinkansen_vns)
+                        total_handover_count = sum(self.summary_stats[vn]['handover_count'] for vn in shinkansen_vns)
+
+                        writer.writerow({
+                            'run_id': self.timestamp,
+                            'y_position': self.y_pos,
+                            'antenna_angle': self.angle,
+                            'vehicle_name': 'shinkansen_total',
+                            'total_data_MB': round(total_data, 3),
+                            'connected_time_s': round(total_connected_time, 3),
+                            'average_throughput_Gbps': round(total_tp_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
+                            'average_rssi_dBm': round(total_rssi_sum / total_connected_count, 3) if total_connected_count > 0 else 0.0,
+                            'handover_count': total_handover_count
+                        })
+                self.get_logger().info(f'サマリー結果を追記しました: {summary_path}')
+            except Exception as e:
+                self.get_logger().error(f'サマリー保存失敗: {e}')
+        finally:
+            signal.signal(signal.SIGINT, handler_int)
+            signal.signal(signal.SIGTERM, handler_term)
 
 def main(args=None):
     rclpy.init(args=args)

@@ -20,6 +20,13 @@ find_package(geometry_msgs REQUIRED)
 find_package(nav_msgs REQUIRED)
 find_package(comms_sim_msgs REQUIRED)
 
+# Gazebo Harmonic (gz-sim8)
+find_package(gz-sim8 REQUIRED)
+find_package(gz-plugin2 REQUIRED)
+find_package(gz-transport13 REQUIRED)
+find_package(gz-msgs10 REQUIRED)
+find_package(gz-math7 REQUIRED)
+
 # C++ executable
 add_executable(comms_node_cpp
   src/comms_node.cpp
@@ -39,6 +46,34 @@ target_compile_options(comms_node_cpp PRIVATE -O3)
 
 install(TARGETS comms_node_cpp
   DESTINATION lib/${PROJECT_NAME}
+)
+
+# =============================================================================
+# Gazebo Plugins
+# =============================================================================
+add_library(TxControllerPlugin SHARED
+  src/TxControllerPlugin.cc
+  src/antenna_pattern_parser.cpp
+  src/comms_calculator.cpp
+)
+target_include_directories(TxControllerPlugin PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${EIGEN3_INCLUDE_DIR}
+)
+target_link_libraries(TxControllerPlugin
+  gz-sim8::gz-sim8
+  gz-plugin2::gz-plugin2
+  gz-transport13::gz-transport13
+  gz-msgs10::gz-msgs10
+  gz-math7::gz-math7
+)
+ament_target_dependencies(TxControllerPlugin
+  yaml_cpp_vendor
+)
+set_target_properties(TxControllerPlugin PROPERTIES PREFIX "")
+
+install(TARGETS TxControllerPlugin
+  DESTINATION lib/${PROJECT_NAME}/plugins
 )
 
 # =============================================================================

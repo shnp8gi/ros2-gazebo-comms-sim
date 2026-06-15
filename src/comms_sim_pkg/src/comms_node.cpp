@@ -413,6 +413,14 @@ void CommsSimulatorNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr 
               double current_time_sec = rclcpp::Time(msg->header.stamp).seconds();
               double last_time_sec = rclcpp::Time(last_odom_time_.value()).seconds();
               dt = current_time_sec - last_time_sec;
+              
+              if (dt < -1.0) {
+                  RCLCPP_INFO(this->get_logger(), "Time rewound detected in odom check (%.3f -> %.3f). Resetting odom.", 
+                      last_time_sec, current_time_sec);
+                  last_odom_pos_ = odom_pos;
+                  last_odom_time_ = msg->header.stamp;
+                  return;
+              }
           }
           double max_dist = std::max(50.0, 120.0 * dt); // allow up to 120 m/s (432 km/h) velocity, with a minimum fallback of 50m
           if (jump_dist > max_dist) {
@@ -430,6 +438,16 @@ void CommsSimulatorNode::odom_callback(const nav_msgs::msg::Odometry::SharedPtr 
       if (get_current_segment_pose(px, py, yaw)) {
           tx_local_position_.value().x() = px;
           tx_local_position_.value().y() = py;
+      }
+  }
+
+  if (!logging_ready_) {
+      if (logging_trigger_ == "on_movement" && tx_spawn_pose_.size() >= 3) {
+          Eigen::Vector3d spawn(tx_spawn_pose_[0], tx_spawn_pose_[1], tx_spawn_pose_[2]);
+          if ((tx_local_position_.value() - spawn).norm() > 0.05) {
+              logging_ready_ = true;
+              RCLCPP_INFO(this->get_logger(), "Movement detected via odom. Starting logging.");
+          }
       }
   }
 

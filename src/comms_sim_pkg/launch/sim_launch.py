@@ -196,7 +196,7 @@ def _resolve_model_uri(model_uri: str, model_prefix: str) -> str:
     return path + '/model.sdf'
 
 
-def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str) -> str:
+def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str, plugin_xml: str = "") -> str:
     """
     車両固有のトピック名を持つSDFファイルを動的生成する。
 
@@ -227,6 +227,15 @@ def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str) -> str:
         f'<odom_topic>/{vehicle_name}/odom</odom_topic>',
         sdf_content
     )
+
+    if plugin_xml:
+        # 最後の </model> の直前にプラグインXMLを挿入
+        sdf_content = re.sub(
+            r'(</model>)',
+            f'{plugin_xml}\n\\1',
+            sdf_content,
+            count=1
+        )
 
     # 一時ファイルに保存
     tmp_dir = os.path.join(tempfile.gettempdir(), 'comms_sim_vehicles')
@@ -382,9 +391,13 @@ def launch_setup(context, *args, **kwargs):
     )
 
     # 基本の環境変数（GPU/CPU 共通）
-    gz_env = {
-        'GZ_SIM_RESOURCE_PATH': model_prefix,
-    }
+    gz_env = os.environ.copy()
+    gz_env['GZ_SIM_RESOURCE_PATH'] = model_prefix
+    plugin_path = os.path.join(get_workspace_root(), 'install', 'comms_sim_pkg', 'lib', 'comms_sim_pkg', 'plugins')
+    if 'GZ_SIM_SYSTEM_PLUGIN_PATH' in gz_env:
+        gz_env['GZ_SIM_SYSTEM_PLUGIN_PATH'] = f"{plugin_path}:{gz_env['GZ_SIM_SYSTEM_PLUGIN_PATH']}"
+    else:
+        gz_env['GZ_SIM_SYSTEM_PLUGIN_PATH'] = plugin_path
 
     if headless:
         # ヘッドレスモード（GUIなし・レンダリングなし）
@@ -496,8 +509,36 @@ def launch_setup(context, *args, **kwargs):
         # 元のSDFパスを解決
         original_sdf_path = _resolve_model_uri(v_model_uri, model_prefix)
 
-        # 車両固有のSDFを生成（トピック名を書き換え）
-        vehicle_sdf_path = _generate_vehicle_sdf(original_sdf_path, v_name)
+        # --- プラグインXMLの動的生成 ---
+        waypoints_raw = vehicle_cfg.get('waypoints', [])
+        waypoints_param = []
+        if waypoints_raw:
+            if isinstance(waypoints_raw[0], (list, tuple)):
+                for waypoint in waypoints_raw:
+                    waypoints_param.extend([float(v) for v in waypoint])
+            else:
+                waypoints_param = [float(v) for v in waypoints_raw]
+        waypoints_str = " ".join(map(str, waypoints_param))
+
+        is_shinkansen = 'shinkansen' in v_name.lower() or 'shinkansen' in original_sdf_path.lower()
+        
+        plugin_xml = f"""
+        <plugin filename="TxControllerPlugin.so" name="tx_controller::TxControllerPlugin">
+          <waypoints>{waypoints_str}</waypoints>
+          <waypoint_tolerance>{waypoint_tolerance}</waypoint_tolerance>
+          <heading_gain>{heading_gain}</heading_gain>
+          <max_acceleration>{max_acceleration}</max_acceleration>
+          <max_angular_velocity>{max_angular_velocity}</max_angular_velocity>
+          <is_shinkansen>{"true" if is_shinkansen else "false"}</is_shinkansen>
+          <mission_complete_topic>/{v_name}/mission_complete</mission_complete_topic>
+          <ready_pub_topic>/tx_controller_{v_name}/ready</ready_pub_topic>
+          <all_ready_topic>/sim/all_ready</all_ready_topic>
+          <config_file_path>{config_path}</config_file_path>
+        </plugin>
+        """
+
+        # 車両固有のSDFを生成（トピック名を書き換え + プラグイン追加）
+        vehicle_sdf_path = _generate_vehicle_sdf(original_sdf_path, v_name, plugin_xml)
 
         actions.append(LogInfo(
             msg=f'[vehicle] {v_name}: SDF生成完了 → {vehicle_sdf_path}'
@@ -553,6 +594,21 @@ def launch_setup(context, *args, **kwargs):
         # 速度指令: ROS → Gazebo DiffDriveプラグイン
         bridge_topic.append(
             f"/{v_name}/cmd_vel@geometry_msgs/msg/Twist]gz.msgs.Twist"
+        )
+        
+        # C++プラグインからの完了通知
+        bridge_topic.append(
+            f"/{v_name}/mission_complete@std_msgs/msg/Bool[gz.msgs.Boolean"
+        )
+        
+        # C++プラグインからのReadyシグナル
+        bridge_topic.append(
+            f"/tx_controller_{v_name}/ready@std_msgs/msg/Bool[gz.msgs.Boolean"
+        )
+        
+        # 全体Readyシグナル (ROS → Gazebo)
+        bridge_topic.append(
+            f"/sim/all_ready@std_msgs/msg/Bool]gz.msgs.Boolean"
         )
 
     if not bridge_topic:
@@ -721,83 +777,16 @@ def launch_setup(context, *args, **kwargs):
                     )
                 ]
             )
-            actions.append(comms_node)
+            # actions.append(comms_node)
 
         # -----------------------------------------------------------------
         # TXコントローラノード（車両ごと）
         # -----------------------------------------------------------------
-        # ウェイポイントの解析
-        waypoints_raw = vehicle_cfg.get('waypoints', [])
-        waypoints_param = []
-        if waypoints_raw:
-            if isinstance(waypoints_raw[0], (list, tuple)):
-                for waypoint in waypoints_raw:
-                    waypoints_param.extend([float(v) for v in waypoint])
-            else:
-                waypoints_param = [float(v) for v in waypoints_raw]
-
-        tx_param_file = os.path.join(
-            tempfile.gettempdir(), f'tx_controller_{v_name}.params.yaml'
-        )
-
-        antennas = vehicle_cfg.get('antennas', [])
-        expected_subs = 1 + len(antennas)
-        if any(ant.get('name') == v_name for ant in antennas):
-            expected_subs += 1
-
-        tx_param_yaml = {
-            f'tx_controller_{v_name}': {
-                'ros__parameters': {
-                    'waypoints': waypoints_param,
-                    'waypoint_tolerance': waypoint_tolerance,
-                    'control_rate': control_rate,
-                    'max_angular_velocity': max_angular_velocity,
-                    'heading_gain': heading_gain,
-                    'max_acceleration': max_acceleration,
-                    'spawn_pose': suv_pose,
-                    'odom_topic': f'/{v_name}/odom',
-                    'cmd_vel_topic': f'/{v_name}/cmd_vel',
-                    'mission_complete_topic': f'/{v_name}/mission_complete',
-                    'expected_subscribers': expected_subs,
-                    'use_sim_time': use_sim_time == 'true',
-                }
-            }
-        }
-
-        with open(tx_param_file, 'w', encoding='utf-8') as f:
-            yaml.safe_dump(
-                tx_param_yaml,
-                f,
-                sort_keys=False,
-                default_flow_style=False,
-                allow_unicode=True,
-            )
-
-        try:
-            with open(tx_param_file, 'r', encoding='utf-8') as f:
-                preview_lines = f.read().splitlines()[:30]
-            actions.append(LogInfo(
-                msg=f'[tx_controller_{v_name}] パラメータファイル: '
-                    + tx_param_file + "\n" + "\n".join(preview_lines)
-            ))
-        except Exception as e:
-            actions.append(LogInfo(
-                msg=f'[tx_controller_{v_name}] パラメータファイル読み込み失敗: {e}'
-            ))
-
-        tx_node = TimerAction(
-            period=tx_controller_delay,
-            actions=[
-                Node(
-                    package='comms_sim_pkg',
-                    executable='tx_controller_node.py',
-                    name=f'tx_controller_{v_name}',
-                    output='screen',
-                    parameters=[tx_param_file]
-                )
-            ]
-        )
-        actions.append(tx_node)
+        # C++ Gazebo Plugin (TxControllerPlugin.cc) に移行したため、
+        # Python版ノードの起動はスキップします。
+        actions.append(LogInfo(
+            msg=f'[tx_controller_{v_name}] Pythonノード起動をスキップし、C++プラグインを使用します。'
+        ))
 
     # =========================================================================
     # link_controller_node & sim_logger_node の起動
@@ -846,7 +835,7 @@ def launch_setup(context, *args, **kwargs):
                             'logging_level': int(sim_config.get('logging_level', 1)),
                             'heatmap_resolution_m': float(link_ctrl_params.get('heatmap_resolution_m', 0.2)),
                             'run_timestamp': run_timestamp,
-                            'use_sim_time': use_sim_time_bool,
+                            'use_sim_time': False,
                             'config_file_path': config_path,
                             'output_subdir': output_subdir
                         }
@@ -854,7 +843,7 @@ def launch_setup(context, *args, **kwargs):
                 )
             ]
         )
-        actions.append(link_controller_node)
+        # actions.append(link_controller_node)
         
         sim_logger_node_action = Node(
             package='comms_sim_pkg',
@@ -868,7 +857,7 @@ def launch_setup(context, *args, **kwargs):
                     'output_dir': os.path.join(get_workspace_root(), 'sim_results', ''),
                     'logging_level': int(sim_config.get('logging_level', 1)),
                     'run_timestamp': run_timestamp,
-                    'use_sim_time': use_sim_time_bool,
+                    'use_sim_time': False,
                     'config_file_path': config_path,
                     'output_subdir': output_subdir
                 }
@@ -894,7 +883,7 @@ def launch_setup(context, *args, **kwargs):
         # Ready ゲートノード（全ノードの起動同期）
         # =================================================================
         # expected_nodes: 全 comms_node + 全 tx_controller
-        expected_ready_nodes = list(vehicle_names)  # comms_nodes (per antenna)
+        expected_ready_nodes = []
         for v in vehicles:
             v_name = v.get('name', 'suv')
             expected_ready_nodes.append(f'tx_controller_{v_name}')
@@ -909,7 +898,7 @@ def launch_setup(context, *args, **kwargs):
                     output='screen',
                     parameters=[{
                         'expected_nodes': expected_ready_nodes,
-                        'use_sim_time': use_sim_time_bool
+                        'use_sim_time': False
                     }]
                 )
             ]

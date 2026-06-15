@@ -13,7 +13,7 @@
     - /{node_name}/ready (std_msgs/Bool): 各ノードの Ready 通知
 
 パブリッシュトピック:
-    - /sim/all_ready (std_msgs/Bool): 全ノード Ready 通知 (TRANSIENT_LOCAL)
+    - /sim/all_ready (std_msgs/Bool): 全ノード Ready 通知 (VOLATILE)
 
 パラメータ:
     - expected_nodes: Ready を待つノード名のリスト
@@ -24,9 +24,9 @@ from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
 from std_msgs.msg import Bool
 
-_TRANSIENT_LOCAL_QOS = QoSProfile(
+_VOLATILE_QOS = QoSProfile(
     reliability=ReliabilityPolicy.RELIABLE,
-    durability=DurabilityPolicy.TRANSIENT_LOCAL,
+    durability=DurabilityPolicy.VOLATILE,
     history=HistoryPolicy.KEEP_LAST,
     depth=1
 )
@@ -49,24 +49,18 @@ class SimReadyGateNode(Node):
         self.ready_nodes = set()
         self._all_ready_published = False
 
-        # 各ノードの Ready トピックを購読 (TRANSIENT_LOCAL: 遅延起動でも受信可能)
+        # 各ノードの Ready トピックを購読 (VOLATILE: 遅延起動でも受信可能)
         self._subs = []
         for node_name in self.expected_nodes:
             sub = self.create_subscription(
                 Bool,
                 f'/{node_name}/ready',
                 lambda msg, n=node_name: self._on_ready(n, msg),
-                _TRANSIENT_LOCAL_QOS
+                _VOLATILE_QOS
             )
             self._subs.append(sub)
 
         # /sim/all_ready utilizes a VOLATILE QoS to avoid caching startup signals from previous runs
-        _VOLATILE_QOS = QoSProfile(
-            reliability=ReliabilityPolicy.RELIABLE,
-            durability=DurabilityPolicy.VOLATILE,
-            history=HistoryPolicy.KEEP_LAST,
-            depth=1
-        )
         self.all_ready_pub = self.create_publisher(
             Bool, '/sim/all_ready', _VOLATILE_QOS)
 

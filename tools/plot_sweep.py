@@ -171,22 +171,34 @@ def generate_static_plots(df, plots_dir):
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
             if 'theory' in vehicle.lower():
-                ax.plot(v_df['antenna_angle'], v_df['total_data_MB'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['total_data_MB'], 
                         "-r", label=clean_label(vehicle), lw=2, zorder=3)
             else:
-                ax.plot(v_df['antenna_angle'], v_df['total_data_MB'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['total_data_MB'], 
                         "-", label=clean_label(vehicle), linewidth=2)
+            if 'total_data_MB_std' in v_df.columns and v_df['total_data_MB_std'].any():
+                std_val = v_df['total_data_MB_std']
+                ax.fill_between(v_df['antenna_angle'],
+                                np.maximum(0, v_df['total_data_MB'] - std_val),
+                                v_df['total_data_MB'] + std_val,
+                                color=line.get_color(), alpha=0.15)
             
     # Plot total
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
             if 'theory' in t_name.lower():
-                ax.plot(total_df['antenna_angle'], total_df['total_data_MB'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['total_data_MB'], 
                         "-r", label=clean_label(t_name), lw=3, zorder=3)
             else:
-                ax.plot(total_df['antenna_angle'], total_df['total_data_MB'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['total_data_MB'], 
                         "-", label=clean_label(t_name), linewidth=3)
+            if 'total_data_MB_std' in total_df.columns and total_df['total_data_MB_std'].any():
+                std_val = total_df['total_data_MB_std']
+                ax.fill_between(total_df['antenna_angle'],
+                                np.maximum(0, total_df['total_data_MB'] - std_val),
+                                total_df['total_data_MB'] + std_val,
+                                color=line.get_color(), alpha=0.15)
         
         # Plot baseline if available
         if t_name in baselines:
@@ -207,21 +219,33 @@ def generate_static_plots(df, plots_dir):
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
             if 'theory' in vehicle.lower():
-                ax.plot(v_df['antenna_angle'], v_df['average_throughput_Gbps'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['average_throughput_Gbps'], 
                         "-r", label=clean_label(vehicle), lw=2, zorder=3)
             else:
-                ax.plot(v_df['antenna_angle'], v_df['average_throughput_Gbps'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['average_throughput_Gbps'], 
                         "-", label=clean_label(vehicle), linewidth=2)
+            if 'average_throughput_Gbps_std' in v_df.columns and v_df['average_throughput_Gbps_std'].any():
+                std_val = v_df['average_throughput_Gbps_std']
+                ax.fill_between(v_df['antenna_angle'],
+                                np.maximum(0.0, v_df['average_throughput_Gbps'] - std_val),
+                                v_df['average_throughput_Gbps'] + std_val,
+                                color=line.get_color(), alpha=0.15)
                 
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
             if 'theory' in t_name.lower():
-                ax.plot(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
                         "-r", label=clean_label(t_name), lw=3, zorder=3)
             else:
-                ax.plot(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['average_throughput_Gbps'], 
                         "-", label=clean_label(t_name), linewidth=3)
+            if 'average_throughput_Gbps_std' in total_df.columns and total_df['average_throughput_Gbps_std'].any():
+                std_val = total_df['average_throughput_Gbps_std']
+                ax.fill_between(total_df['antenna_angle'],
+                                np.maximum(0.0, total_df['average_throughput_Gbps'] - std_val),
+                                total_df['average_throughput_Gbps'] + std_val,
+                                color=line.get_color(), alpha=0.15)
             
     apply_academic_styling(ax, 'Antenna Angle [degrees]', 'Average Throughput [Gbps]', xmin, xmax, ymin=0)
     fig.set_size_inches(16 * size_of_figure_ration, 9 * size_of_figure_ration)
@@ -235,21 +259,33 @@ def generate_static_plots(df, plots_dir):
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
             if 'theory' in vehicle.lower():
-                ax.plot(v_df['antenna_angle'], v_df['average_rssi_dBm'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['average_rssi_dBm'], 
                         "-r", label=clean_label(vehicle), lw=2, zorder=3)
             else:
-                ax.plot(v_df['antenna_angle'], v_df['average_rssi_dBm'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['average_rssi_dBm'], 
                         "-", label=clean_label(vehicle), linewidth=2)
+            if 'average_rssi_dBm_std' in v_df.columns and v_df['average_rssi_dBm_std'].any():
+                std_val = v_df['average_rssi_dBm_std']
+                ax.fill_between(v_df['antenna_angle'],
+                                v_df['average_rssi_dBm'] - std_val,
+                                v_df['average_rssi_dBm'] + std_val,
+                                color=line.get_color(), alpha=0.15)
                 
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
             if 'theory' in t_name.lower():
-                ax.plot(total_df['antenna_angle'], total_df['average_rssi_dBm'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['average_rssi_dBm'], 
                         "-r", label=clean_label(t_name), lw=3, zorder=3)
             else:
-                ax.plot(total_df['antenna_angle'], total_df['average_rssi_dBm'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['average_rssi_dBm'], 
                         "-", label=clean_label(t_name), linewidth=3)
+            if 'average_rssi_dBm_std' in total_df.columns and total_df['average_rssi_dBm_std'].any():
+                std_val = total_df['average_rssi_dBm_std']
+                ax.fill_between(total_df['antenna_angle'],
+                                total_df['average_rssi_dBm'] - std_val,
+                                total_df['average_rssi_dBm'] + std_val,
+                                color=line.get_color(), alpha=0.15)
             
     # Add a horizontal line at the operational threshold if known (-68.5 dBm)
     ax.axhline(y=-68.5, color='red', linestyle=':', alpha=0.8, label='MCS Threshold (-68.5 dBm)')
@@ -266,21 +302,33 @@ def generate_static_plots(df, plots_dir):
         v_df = df_line[df_line['vehicle_name'] == vehicle]
         if not v_df.empty:
             if 'theory' in vehicle.lower():
-                ax.plot(v_df['antenna_angle'], v_df['connected_time_s'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['connected_time_s'], 
                         "-r", label=clean_label(vehicle), lw=2, zorder=3)
             else:
-                ax.plot(v_df['antenna_angle'], v_df['connected_time_s'], 
+                line, = ax.plot(v_df['antenna_angle'], v_df['connected_time_s'], 
                         "-", label=clean_label(vehicle), linewidth=2)
+            if 'connected_time_s_std' in v_df.columns and v_df['connected_time_s_std'].any():
+                std_val = v_df['connected_time_s_std']
+                ax.fill_between(v_df['antenna_angle'],
+                                np.maximum(0, v_df['connected_time_s'] - std_val),
+                                v_df['connected_time_s'] + std_val,
+                                color=line.get_color(), alpha=0.15)
                 
     for t_name in total_names:
         total_df = df_line[df_line['vehicle_name'] == t_name]
         if not total_df.empty:
             if 'theory' in t_name.lower():
-                ax.plot(total_df['antenna_angle'], total_df['connected_time_s'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['connected_time_s'], 
                         "-r", label=clean_label(t_name), lw=3, zorder=3)
             else:
-                ax.plot(total_df['antenna_angle'], total_df['connected_time_s'], 
+                line, = ax.plot(total_df['antenna_angle'], total_df['connected_time_s'], 
                         "-", label=clean_label(t_name), linewidth=3)
+            if 'connected_time_s_std' in total_df.columns and total_df['connected_time_s_std'].any():
+                std_val = total_df['connected_time_s_std']
+                ax.fill_between(total_df['antenna_angle'],
+                                np.maximum(0, total_df['connected_time_s'] - std_val),
+                                total_df['connected_time_s'] + std_val,
+                                color=line.get_color(), alpha=0.15)
             
     apply_academic_styling(ax, 'Antenna Angle [degrees]', 'Connected Time [seconds]', xmin, xmax, ymin=0)
     fig.set_size_inches(16 * size_of_figure_ration, 9 * size_of_figure_ration)

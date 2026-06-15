@@ -897,15 +897,7 @@ def main(args=None):
     executor.add_node(node)
 
     try:
-        while rclpy.ok():
-            try:
-                executor.spin_once(timeout_sec=0.1)
-            except KeyboardInterrupt:
-                break
-            except Exception as e:
-                node.get_logger().error(f"Error during executor spin (ignored to prevent crash): {e}")
-                import time
-                time.sleep(0.01)
+        executor.spin()
     except KeyboardInterrupt:
         pass
     finally:
