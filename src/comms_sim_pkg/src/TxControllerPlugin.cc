@@ -12,6 +12,8 @@
 #include <gz/math/Vector3.hh>
 #include <gz/math/Quaternion.hh>
 #include <vector>
+#include <algorithm>
+#include <numeric>
 #include <string>
 #include <sstream>
 #include <cmath>
@@ -100,6 +102,17 @@ namespace tx_controller
         return samples;
     }
 
+    struct LutPair {
+        std::string tx_antenna;  // 車載アンテナ名
+        std::string rx_antenna;  // 基地局アンテナ名
+        double rssi = -999.0;
+    };
+
+    struct LutEntry {
+        double x, y, z;
+        std::vector<LutPair> pairs;  // N個のペア (RSSIの高い順)
+    };
+
     struct AntennaInfo {
         std::string name;
         Eigen::Vector3d offset;
@@ -111,6 +124,7 @@ namespace tx_controller
         double link_establishment_start_time = -1.0;
         int establishment_step_count = 0;
         double last_rssi = -999.0;
+        int assigned_bs_idx = -1;  // マルチペア: 割り当てられた基地局インデックス (-1 = 未割当)
 
         struct LogRecord {
             double time_s;
@@ -376,14 +390,20 @@ namespace tx_controller
             YAML::Node config = YAML::LoadFile(config_path);
             
             // 1. Read simulation configurations
+            bool direct_params_found = false;
             if (config["simulation"]) {
                 this->logging_level = config["simulation"]["logging_level"].as<int>(1);
                 this->config_summary_filename = config["simulation"]["summary_filename"].as<std::string>("sweep_summary.csv");
                 this->config_output_subdir = config["simulation"]["output_subdir"].as<std::string>("");
                 this->config_output_dir = config["simulation"]["output_dir"].as<std::string>("/workspace/sim_results/");
+                if (config["simulation"]["y_position"] && config["simulation"]["angle_deg"]) {
+                    this->config_y_pos = config["simulation"]["y_position"].as<double>();
+                    this->config_angle = config["simulation"]["angle_deg"].as<double>();
+                    direct_params_found = true;
+                }
             }
             
-            if (config["spawn_entities"]) {
+            if (!direct_params_found && config["spawn_entities"]) {
                 for (auto const& node : config["spawn_entities"]) {
                     std::string key = node.first.as<std::string>();
                     if (key.find("antenna") != std::string::npos || key.find("Antenna") != std::string::npos) {
@@ -459,6 +479,7 @@ namespace tx_controller
             this->weight_distance = link_ctrl_params["weight_distance"].as<double>(0.7);
             this->weight_angle = link_ctrl_params["weight_angle"].as<double>(0.3);
             this->heatmap_resolution_m = link_ctrl_params["heatmap_resolution_m"].as<double>(0.2);
+            this->ff_max_pairs = link_ctrl_params["ff_max_pairs"].as<int>(-1);
 
             // 5. Load antennas configuration for this vehicle model
             std::string current_model_name = this->model.Name(_ecm);
@@ -527,6 +548,7 @@ namespace tx_controller
             }
 
             this->comms_initialized = true;
+            gzmsg << "[TxControllerPlugin] Loaded " << this->vehicle_antennas.size() << " antennas for UGV." << std::endl;
             gzmsg << "[TxControllerPlugin] Comms simulator initialized successfully!" << std::endl;
         }
 
@@ -540,23 +562,28 @@ namespace tx_controller
             if (samples.empty()) return;
 
             this->lut.clear();
-            std::string last_optimal_antenna = "";
+
+            size_t num_tx = this->vehicle_antennas.size();
+            size_t num_rx = this->base_stations_cfg.size();
+            size_t num_pairs = std::min(num_tx, num_rx);
+            if (this->ff_max_pairs > 0) {
+                num_pairs = std::min(num_pairs, static_cast<size_t>(this->ff_max_pairs));
+            }
 
             for (const auto &sample : samples) {
                 Eigen::Matrix3d vehicle_rotmat = this->antenna_parser->rpy_to_rotmat(0.0, 0.0, sample.yaw);
-                
-                double best_global_rssi = -999.0;
-                std::string best_antenna = "";
-                std::vector<std::pair<std::string, double>> ant_rssis;
 
-                for (const auto &ant : this->vehicle_antennas) {
+                // Step 1: 全 (TX, RX) 組み合わせのRSSIを計算
+                std::vector<std::vector<double>> rssi_matrix(num_tx, std::vector<double>(num_rx, -999.0));
+
+                for (size_t tx_idx = 0; tx_idx < num_tx; ++tx_idx) {
+                    const auto &ant = this->vehicle_antennas[tx_idx];
                     Eigen::Vector3d ant_pos_world = sample.pos + vehicle_rotmat * ant.offset;
                     Eigen::Vector3d ant_rpy = Eigen::Vector3d(0.0, 0.0, sample.yaw) + ant.relative_rpy;
                     Eigen::Matrix3d ant_rotmat = this->antenna_parser->rpy_to_rotmat(ant_rpy.x(), ant_rpy.y(), ant_rpy.z());
 
-                    double best_rssi = -999.0;
-
-                    for (const auto &bs : this->base_stations_cfg) {
+                    for (size_t rx_idx = 0; rx_idx < num_rx; ++rx_idx) {
+                        const auto &bs = this->base_stations_cfg[rx_idx];
                         Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
                         Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
                         Eigen::Matrix3d bs_rotmat = this->antenna_parser->rpy_to_rotmat(bs_ant_rpy.x(), bs_ant_rpy.y(), bs_ant_rpy.z());
@@ -566,53 +593,68 @@ namespace tx_controller
                             &ant_rotmat, &bs_rotmat);
 
                         auto [el, az] = this->antenna_parser->calculate_antenna_frame_angles(
-                            ant_pos_world, bs_antenna_pos, ant_rpy, &bs_rotmat);
-                        double off_boresight_e_deg = std::abs(el * 180.0 / M_PI);
-                        double off_boresight_h_deg = std::abs(az * 180.0 / M_PI);
-                        bool tx_in = this->antenna_parser->is_in_main_lobe(off_boresight_e_deg, off_boresight_h_deg);
+                            ant_pos_world, bs_antenna_pos, ant_rpy, &ant_rotmat);
+                        double off_e_deg = std::abs(el * 180.0 / M_PI);
+                        double off_h_deg = std::abs(az * 180.0 / M_PI);
+                        bool tx_in = this->antenna_parser->is_in_main_lobe(off_e_deg, off_h_deg);
 
                         auto [el_rx, az_rx] = this->antenna_parser->calculate_antenna_frame_angles(
-                            bs_antenna_pos, ant_pos_world, bs_ant_rpy, &ant_rotmat);
-                        double off_boresight_e_rx_deg = std::abs(el_rx * 180.0 / M_PI);
-                        double off_boresight_h_rx_deg = std::abs(az_rx * 180.0 / M_PI);
-                        bool rx_in = this->antenna_parser->is_in_main_lobe(off_boresight_e_rx_deg, off_boresight_h_rx_deg);
+                            bs_antenna_pos, ant_pos_world, bs_ant_rpy, &bs_rotmat);
+                        double off_e_rx_deg = std::abs(el_rx * 180.0 / M_PI);
+                        double off_h_rx_deg = std::abs(az_rx * 180.0 / M_PI);
+                        bool rx_in = this->antenna_parser->is_in_main_lobe(off_e_rx_deg, off_h_rx_deg);
 
                         bool in_main = tx_in && rx_in;
 
-                        double rssi = -999.0;
                         if (!this->filter_main_lobe || in_main) {
                             auto metrics = this->comms_calculator->calculate_all(ant_pos_world, bs_antenna_pos, gain_res.tx_total + gain_res.rx_total, false);
-                            rssi = metrics.rssi;
+                            rssi_matrix[tx_idx][rx_idx] = metrics.rssi;
                         }
-                        if (rssi > best_rssi) {
-                            best_rssi = rssi;
-                        }
-                    }
-                    ant_rssis.push_back({ant.name, best_rssi});
-                    if (best_rssi > best_global_rssi) {
-                        best_global_rssi = best_rssi;
-                        best_antenna = ant.name;
                     }
                 }
 
-                std::string optimal_antenna = best_antenna;
-                if (!last_optimal_antenna.empty()) {
-                    double current_rssi = -999.0;
-                    double last_rssi = -999.0;
-                    for (const auto &ar : ant_rssis) {
-                        if (ar.first == best_antenna) current_rssi = ar.second;
-                        if (ar.first == last_optimal_antenna) last_rssi = ar.second;
+                // Step 2: 全列挙で最適N個ペアを決定
+                std::vector<int> rx_indices(num_rx);
+                std::iota(rx_indices.begin(), rx_indices.end(), 0);
+
+                double best_total_rssi = -1e9;
+                std::vector<LutPair> best_pairs;
+
+                do {
+                    double total_rssi = 0.0;
+                    std::vector<LutPair> candidate_pairs;
+                    for (size_t p = 0; p < num_pairs; ++p) {
+                        size_t tx_idx = p;
+                        size_t rx_idx = static_cast<size_t>(rx_indices[p]);
+                        double rssi = rssi_matrix[tx_idx][rx_idx];
+                        total_rssi += rssi;
+                        candidate_pairs.push_back({
+                            this->vehicle_antennas[tx_idx].name,
+                            this->base_stations_cfg[rx_idx].name,
+                            rssi
+                        });
                     }
-                    if (current_rssi > last_rssi + 1.0 || (last_rssi <= -900.0 && current_rssi > -900.0)) {
-                        optimal_antenna = best_antenna;
-                    } else {
-                        optimal_antenna = last_optimal_antenna;
+                    if (total_rssi > best_total_rssi) {
+                        best_total_rssi = total_rssi;
+                        best_pairs = candidate_pairs;
                     }
-                }
-                last_optimal_antenna = optimal_antenna;
-                this->lut.push_back({sample.pos.x(), sample.pos.y(), sample.pos.z(), optimal_antenna, best_global_rssi});
+                } while (std::next_permutation(rx_indices.begin(), rx_indices.end()));
+
+                // RSSIの高い順にソート
+                std::sort(best_pairs.begin(), best_pairs.end(), [](const LutPair &a, const LutPair &b) {
+                    return a.rssi > b.rssi;
+                });
+
+                LutEntry entry;
+                entry.x = sample.pos.x();
+                entry.y = sample.pos.y();
+                entry.z = sample.pos.z();
+                entry.pairs = best_pairs;
+                this->lut.push_back(entry);
             }
-            gzmsg << "[TxControllerPlugin] Precalculated feedforward LUT with " << this->lut.size() << " entries." << std::endl;
+
+            gzmsg << "[TxControllerPlugin] Precalculated multi-pair feedforward LUT with " << this->lut.size() 
+                  << " entries, " << num_pairs << " pairs per entry." << std::endl;
         }
 
         void UpdateComms(const gz::sim::UpdateInfo &_info, gz::sim::EntityComponentManager &_ecm) {
@@ -683,6 +725,7 @@ namespace tx_controller
                 double off_boresight_h = 0.0;
             };
             std::vector<AntennaMetrics> ant_metrics_list(this->vehicle_antennas.size());
+            std::vector<std::vector<AntennaMetrics>> all_ant_bs_metrics(this->vehicle_antennas.size());
 
             for (size_t a_idx = 0; a_idx < this->vehicle_antennas.size(); ++a_idx) {
                 auto &ant = this->vehicle_antennas[a_idx];
@@ -691,9 +734,11 @@ namespace tx_controller
                 Eigen::Matrix3d ant_rotmat = this->antenna_parser->rpy_to_rotmat(ant_rpy.x(), ant_rpy.y(), ant_rpy.z());
 
                 double best_rssi = -999.0;
-                AntennaMetrics best_m;
+                int best_bs_idx = 0;
+                std::vector<AntennaMetrics> bs_metrics(this->base_stations.size());
                 
-                for (const auto &bs : this->base_stations) {
+                for (size_t bs_idx = 0; bs_idx < this->base_stations.size(); ++bs_idx) {
+                    const auto &bs = this->base_stations[bs_idx];
                     Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
                     Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
 
@@ -707,27 +752,38 @@ namespace tx_controller
                     auto metrics = this->comms_calculator->calculate_all(ant_pos_world, bs_antenna_pos, tx_tot + rx_tot, false);
                     
                     auto [el, az] = this->antenna_parser->calculate_antenna_frame_angles(
-                        ant_pos_world, bs_antenna_pos, ant_rpy, &bs.rotmat);
+                        ant_pos_world, bs_antenna_pos, ant_rpy, &ant_rotmat);
                     double off_boresight_e_deg = std::abs(el * 180.0 / M_PI);
                     double off_boresight_h_deg = std::abs(az * 180.0 / M_PI);
-                    bool in_main = this->antenna_parser->is_in_main_lobe(off_boresight_e_deg, off_boresight_h_deg);
+                    // TX && RX 双方向でメインローブ内か判定 (PrecalculateLUT と同一ロジック)
+                    bool tx_in_main = this->antenna_parser->is_in_main_lobe(off_boresight_e_deg, off_boresight_h_deg);
+                    auto [el_rx, az_rx] = this->antenna_parser->calculate_antenna_frame_angles(
+                        bs_antenna_pos, ant_pos_world, bs_ant_rpy, &bs.rotmat);
+                    double off_e_rx_deg = std::abs(el_rx * 180.0 / M_PI);
+                    double off_h_rx_deg = std::abs(az_rx * 180.0 / M_PI);
+                    bool rx_in_main = this->antenna_parser->is_in_main_lobe(off_e_rx_deg, off_h_rx_deg);
+                    bool in_main = tx_in_main && rx_in_main;
+
+                    AntennaMetrics &m = bs_metrics[bs_idx];
+                    m.best_rssi = metrics.rssi;
+                    m.distance = metrics.distance;
+                    m.path_loss = metrics.path_loss;
+                    m.throughput = metrics.throughput;
+                    m.e_gain = gain_res.tx_e;
+                    m.h_gain = gain_res.tx_h;
+                    m.bs_pos = bs_antenna_pos;
+                    m.in_main_lobe = in_main;
+                    m.off_boresight_e = off_boresight_e_deg;
+                    m.off_boresight_h = off_boresight_h_deg;
 
                     if (metrics.rssi > best_rssi) {
                         best_rssi = metrics.rssi;
-                        best_m.best_rssi = metrics.rssi;
-                        best_m.distance = metrics.distance;
-                        best_m.path_loss = metrics.path_loss;
-                        best_m.throughput = metrics.throughput;
-                        best_m.e_gain = gain_res.tx_e;
-                        best_m.h_gain = gain_res.tx_h;
-                        best_m.bs_pos = bs_antenna_pos;
-                        best_m.in_main_lobe = in_main;
-                        best_m.off_boresight_e = off_boresight_e_deg;
-                        best_m.off_boresight_h = off_boresight_h_deg;
+                        best_bs_idx = bs_idx;
                     }
                 }
-                ant.last_rssi = best_m.best_rssi;
-                ant_metrics_list[a_idx] = best_m;
+                all_ant_bs_metrics[a_idx] = bs_metrics;
+                ant.last_rssi = bs_metrics[best_bs_idx].best_rssi;
+                ant_metrics_list[a_idx] = bs_metrics[best_bs_idx];
             }
 
             // 3. Scheduling Policy
@@ -744,9 +800,9 @@ namespace tx_controller
                     int end_idx = std::min(n_points, this->last_lut_idx + 100);
                     for (int i = start_idx; i < end_idx; ++i) {
                         const auto &pt = this->lut[i];
-                        double dx = pos.x() - std::get<0>(pt);
-                        double dy = pos.y() - std::get<1>(pt);
-                        double dz = pos.z() - std::get<2>(pt);
+                        double dx = pos.x() - pt.x;
+                        double dy = pos.y() - pt.y;
+                        double dz = pos.z() - pt.z;
                         double dist_sq = dx*dx + dy*dy + dz*dz;
                         if (dist_sq < min_dist_sq) {
                             min_dist_sq = dist_sq;
@@ -757,9 +813,9 @@ namespace tx_controller
                     if (best_lut_idx == start_idx || best_lut_idx == end_idx - 1 || this->last_lut_idx == 0) {
                         for (int i = 0; i < n_points; ++i) {
                             const auto &pt = this->lut[i];
-                            double dx = pos.x() - std::get<0>(pt);
-                            double dy = pos.y() - std::get<1>(pt);
-                            double dz = pos.z() - std::get<2>(pt);
+                            double dx = pos.x() - pt.x;
+                            double dy = pos.y() - pt.y;
+                            double dz = pos.z() - pt.z;
                             double dist_sq = dx*dx + dy*dy + dz*dz;
                             if (dist_sq < min_dist_sq) {
                                 min_dist_sq = dist_sq;
@@ -768,19 +824,55 @@ namespace tx_controller
                         }
                     }
                     this->last_lut_idx = best_lut_idx;
-                    std::string optimal_ant = std::get<3>(this->lut[best_lut_idx]);
 
-                    for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
-                        if (this->vehicle_antennas[i].name == optimal_ant) {
-                            new_active_idx = i;
-                            break;
+                    // マルチペア: LUTの各ペアに基づきアンテナにBSを割り当て
+                    const auto &lut_entry = this->lut[best_lut_idx];
+                    
+                    // まず全アンテナの割り当てをリセット
+                    for (auto &ant : this->vehicle_antennas) {
+                        ant.assigned_bs_idx = -1;
+                    }
+
+                    for (const auto &pair : lut_entry.pairs) {
+                        // TX アンテナのインデックスを検索
+                        for (size_t ai = 0; ai < this->vehicle_antennas.size(); ++ai) {
+                            if (this->vehicle_antennas[ai].name == pair.tx_antenna) {
+                                // RX 基地局のインデックスを検索
+                                for (size_t bi = 0; bi < this->base_stations.size(); ++bi) {
+                                    if (this->base_stations[bi].name == pair.rx_antenna) {
+                                        this->vehicle_antennas[ai].assigned_bs_idx = static_cast<int>(bi);
+                                        break;
+                                    }
+                                }
+                                break;
+                            }
+                        }
+                    }
+
+                    // 後方互換: active_antenna_idx は最良ペア(pairs[0])のTXを設定
+                    if (!lut_entry.pairs.empty()) {
+                        for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
+                            if (this->vehicle_antennas[i].name == lut_entry.pairs[0].tx_antenna) {
+                                new_active_idx = static_cast<int>(i);
+                                break;
+                            }
                         }
                     }
                     
                     if (new_active_idx != this->active_antenna_idx) {
                         std::ostringstream ss;
-                        ss << "Switch by feedforward strategy at x=" << std::fixed << std::setprecision(2) << pos.x();
+                        ss << "Multi-pair feedforward switch at x=" << std::fixed << std::setprecision(2) << pos.x()
+                           << " (" << lut_entry.pairs.size() << " pairs)";
                         switch_details = ss.str();
+                    }
+
+                    // For feedforward_optimal, assign metrics based on assigned_bs_idx
+                    for (size_t a_idx = 0; a_idx < this->vehicle_antennas.size(); ++a_idx) {
+                        auto &ant = this->vehicle_antennas[a_idx];
+                        if (ant.assigned_bs_idx >= 0) {
+                            ant_metrics_list[a_idx] = all_ant_bs_metrics[a_idx][ant.assigned_bs_idx];
+                            ant.last_rssi = ant_metrics_list[a_idx].best_rssi;
+                        }
                     }
                 }
             } else if (this->scheduling_policy == "rssi_priority") {
@@ -888,7 +980,8 @@ namespace tx_controller
                 ctrl.vehicle_x = pos.x();
                 ctrl.vehicle_y = pos.y();
                 ctrl.vehicle_yaw = ori.z();
-                ctrl.nominal_antenna = std::get<3>(this->lut[this->last_lut_idx]);
+                // nominal_antenna: LUTの最良ペアのTXアンテナ名
+                ctrl.nominal_antenna = this->lut[this->last_lut_idx].pairs.empty() ? "" : this->lut[this->last_lut_idx].pairs[0].tx_antenna;
                 ctrl.active_antenna = this->vehicle_antennas[this->active_antenna_idx].name;
                 ctrl.switching_active = (new_active_idx != this->active_antenna_idx);
                 ctrl.last_switch_time_s = this->last_grant_change_time;
@@ -898,7 +991,14 @@ namespace tx_controller
             // 4. Update Link States and Data Accumulation
             for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
                 auto &ant = this->vehicle_antennas[i];
-                bool has_grant = (static_cast<int>(i) == this->active_antenna_idx);
+                // feedforward_optimal: assigned_bs_idx >= 0 ならグラント有り（マルチペア）
+                // 他のポリシー: active_antenna_idx と一致すればグラント有り（シングルペア）
+                bool has_grant;
+                if (this->scheduling_policy == "feedforward_optimal") {
+                    has_grant = (ant.assigned_bs_idx >= 0);
+                } else {
+                    has_grant = (static_cast<int>(i) == this->active_antenna_idx);
+                }
                 
                 bool link_ready = false;
                 if (!has_grant || !ant.comm_active) {
@@ -1053,6 +1153,7 @@ namespace tx_controller
             if (this->vehicle_antennas.empty()) return;
             std::string sample_csv_path = this->GetAntennaCSVPath(this->vehicle_antennas[0].name);
             std::filesystem::path run_dir_path = std::filesystem::path(sample_csv_path).parent_path().parent_path();
+            gzmsg << "[TxControllerPlugin] Saving logs to directory: " << run_dir_path.string() << " (antennas: " << this->vehicle_antennas.size() << ")" << std::endl;
             
             for (const auto &ant : this->vehicle_antennas) {
                 std::string csv_path = this->GetAntennaCSVPath(ant.name);
@@ -1228,6 +1329,7 @@ namespace tx_controller
         double weight_distance = 0.7;
         double weight_angle = 0.3;
         double heatmap_resolution_m = 0.2;
+        int ff_max_pairs = -1;
         std::string center_antenna_name = "shinkansen_mid";
 
         double comm_data_limit_mb = -1.0;
@@ -1244,7 +1346,7 @@ namespace tx_controller
         int active_antenna_idx = 0;
         double last_grant_change_time = 0.0;
         double start_time_sec = -1.0;
-        std::vector<std::tuple<double, double, double, std::string, double>> lut;
+        std::vector<LutEntry> lut;
         int last_lut_idx = 0;
 
         std::vector<EventRecord> event_logs;

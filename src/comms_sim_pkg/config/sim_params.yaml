@@ -35,6 +35,10 @@ simulation:
   # リアルタイム倍率 (1.0 = リアルタイム, >1.0 = 加速)
   real_time_factor: 5.0
 
+  # 物理演算の最大ステップサイズ [s] (通信品質計算のサンプリング周期と同期)
+  # 例: 0.001 = 1ms (1kHz), 0.0001 = 0.1ms (10kHz), 0.00001 = 10us (100kHz)
+  physics_max_step_size: 0.0001
+
   # ヘッドレスモード (true: GUI無し, false: GUI有り)
   headless: true
 
@@ -47,7 +51,7 @@ simulation:
   # 3: サマリー + イベント + 時系列(CONNECTED時のみ)
   # 4: サマリー + イベント + 時系列(常時記録)
   # 5: サマリー + イベント + 時系列(常時記録) + アンテナ制御ログ + ヒートマップ
-  logging_level: 5
+  logging_level: 3
 
   # ノード起動タイミング設定
   # headless sweep 向けに短縮済み（GUIなし・RTF=10 なら高速起動可能）
@@ -64,12 +68,6 @@ simulation:
 # -----------------------------------------------------------------------------
 comms_simulator_node:
   ros__parameters:
-    # 通信品質計算のサンプリングレート [kHz]
-    sampling_rate: 10.0
-
-    # パブリッシュレート [Hz]
-    publish_rate: 100.0
-
     # AWGN分散 [dB]
     noise_variance: 0.0
 
@@ -161,9 +159,12 @@ link_controller_node:
     #   geometric_weighted: 距離とアンテナゲインの正規化スコアを重み付け加算して評価
     #   feedforward_optimal: 事前計算された nominal RSSI LUT に基づくフィードフォワード制御
     scheduling_policy: "feedforward_optimal"
-
     # 軌道上の事前計算サンプリング解像度 [m]
     heatmap_resolution_m: 0.2
+
+    # 同時通信に使用する最大ペア数 (-1で全ペア使用)
+    ff_max_pairs: -1
+
 
     # タイムスロット長 [s] (round_robin ポリシー時のみ有効)
     time_slot_duration_s: 10.0

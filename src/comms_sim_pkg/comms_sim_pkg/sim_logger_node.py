@@ -140,18 +140,25 @@ class SimLoggerNode(Node):
         try:
             with open(self.config_file_path, 'r') as f:
                 config = yaml.safe_load(f)
-                spawn_ent = config.get('spawn_entities', {})
-                antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
-                antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
-                self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
-                raw_yaw = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
-                entity_yaw = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[5])
-                entity_yaw_deg = math.degrees(entity_yaw)
-                self.angle = round((math.degrees(raw_yaw) + entity_yaw_deg + 180.0) % 360.0, 1)
-                self.summary_filename = config.get('simulation', {}).get('summary_filename', 'sweep_summary.csv')
-                # YAML内でも output_subdir が定義されているかチェック（フォールバック）
+                sim_cfg = config.get('simulation', {})
+                self.summary_filename = sim_cfg.get('summary_filename', 'sweep_summary.csv')
                 if not self.output_subdir:
-                    self.output_subdir = config.get('simulation', {}).get('output_subdir', '')
+                    self.output_subdir = sim_cfg.get('output_subdir', '')
+                
+                # simulationブロックから y_position と angle_deg を直接取得
+                if 'y_position' in sim_cfg and 'angle_deg' in sim_cfg:
+                    self.y_pos = float(sim_cfg['y_position'])
+                    self.angle = float(sim_cfg['angle_deg'])
+                else:
+                    # 従来のフォールバック
+                    spawn_ent = config.get('spawn_entities', {})
+                    antenna_keys = [k for k in spawn_ent.keys() if 'antenna' in k.lower()]
+                    antenna_cfg = spawn_ent.get(antenna_keys[0]) if antenna_keys else {}
+                    self.y_pos = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[1])
+                    raw_yaw = float(antenna_cfg.get('antenna_relative_rpy', [0,0,0])[2])
+                    entity_yaw = float(antenna_cfg.get('pose', [0,0,0,0,0,0])[5])
+                    entity_yaw_deg = math.degrees(entity_yaw)
+                    self.angle = round((math.degrees(raw_yaw) + entity_yaw_deg + 180.0) % 360.0, 1)
         except Exception as e:
             self.get_logger().warn(f"Failed to read yaml for summary ({self.config_file_path}): {e}")
 
@@ -222,7 +229,7 @@ class SimLoggerNode(Node):
         self.event_file = None
         self.event_writer = None
         if self.logging_level >= 2:
-            event_path = os.path.join(control_dir, 'events.csv')
+            event_path = os.path.join(control_dir, 'events_ros.csv')
             self.event_file = open(event_path, 'w', newline='', encoding='utf-8')
             self.event_writer = csv.DictWriter(self.event_file, fieldnames=[
                 'time_s', 'vehicle_name', 'link_state', 'has_link_grant', 'rssi_dBm', 'distance_m'
@@ -463,30 +470,43 @@ class SimLoggerNode(Node):
                                 stats['tp_sum'] = sum(float(r['throughput_Gbps']) for r in connected_rows)
                                 stats['connected_count'] = cnt
                                 
-                                if self.logging_level >= 4:
+                                if self.logging_level == 3:
                                     conn_time = 0.0
+                                    ho_count = 0
                                     prev_t = None
                                     for r in rows:
                                         t = float(r['time_s'])
-                                        state = r.get('link_state')
-                                        if prev_t is not None:
+                                        if prev_t is None:
+                                            ho_count += 1
+                                        else:
                                             dt = t - prev_t
-                                            if state == 'CONNECTED':
+                                            if dt <= 0.05:
                                                 conn_time += dt
+                                            else:
+                                                ho_count += 1
                                         prev_t = t
                                     stats['connected_time'] = conn_time
+                                    stats['handover_count'] = ho_count
+                                elif self.logging_level >= 4:
+                                    conn_time = 0.0
+                                    ho_count = 0
+                                    prev_t = None
+                                    prev_state = 'DISCONNECTED'
+                                    for r in rows:
+                                        t = float(r['time_s'])
+                                        state = r.get('link_state', 'DISCONNECTED')
+                                        if prev_t is not None:
+                                            dt = t - prev_t
+                                            if prev_state == 'CONNECTED':
+                                                conn_time += dt
+                                        if prev_state != 'CONNECTED' and state == 'CONNECTED':
+                                            ho_count += 1
+                                        prev_t = t
+                                        prev_state = state
+                                    stats['connected_time'] = conn_time
+                                    stats['handover_count'] = ho_count
                                 
                                 stats['total_data'] = max(float(r['total_data_MB']) for r in rows)
-                                
-                                if self.logging_level >= 4:
-                                    ho_count = 0
-                                    prev_s = 'DISCONNECTED'
-                                    for r in rows:
-                                        s = r.get('link_state', 'DISCONNECTED')
-                                        if prev_s != 'CONNECTED' and s == 'CONNECTED':
-                                            ho_count += 1
-                                        prev_s = s
-                                    stats['handover_count'] = ho_count
                                 
                                 self.get_logger().info(f"[{vn}] Recalculated summary stats from C++ CSV (no drops)")
                     except Exception as e:

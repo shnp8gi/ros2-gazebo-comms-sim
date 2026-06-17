@@ -10,6 +10,8 @@
 #include <regex>
 #include <sstream>
 #include <iomanip>
+#include <numeric>
+#include <algorithm>
 
 namespace comms_sim {
 
@@ -588,6 +590,11 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
     double best_rx_total = 0.0;
     Eigen::Vector3d best_bs_pos = rx_nodes_[0].position + rx_nodes_[0].antenna_offset;
 
+    std::vector<CommsMetrics> all_metrics_list(rx_nodes_.size());
+    std::vector<double> all_tx_total(rx_nodes_.size());
+    std::vector<double> all_rx_total(rx_nodes_.size());
+    std::vector<Eigen::Vector3d> all_bs_pos(rx_nodes_.size());
+
     for (size_t i = 0; i < rx_nodes_.size(); ++i) {
         auto& bs = rx_nodes_[i];
         Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
@@ -600,6 +607,12 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
         double rx_tot = gain_res.rx_total;
 
         CommsMetrics metrics = comms_calculator_->calculate_all(tx_antenna_pos, bs_antenna_pos, tx_tot + rx_tot, true);
+        
+        all_metrics_list[i] = metrics;
+        all_tx_total[i] = tx_tot;
+        all_rx_total[i] = rx_tot;
+        all_bs_pos[i] = bs_antenna_pos;
+
         if (i == 0 || metrics.rssi > best_metrics.rssi) {
             best_metrics = metrics;
             best_bs_idx = static_cast<int>(i);
@@ -609,18 +622,116 @@ void CommsSimulatorNode::calculate_and_publish(const Eigen::Vector3d& pos, const
         }
     }
 
-    // Calculate off-boresight angles relative to the best BS
+    // Calculate off-boresight angles relative to the best BS (default)
     auto [best_el, best_az] = antenna_parser_.calculate_antenna_frame_angles(
         tx_antenna_pos, best_bs_pos, tx_ant_rpy, &rx_rotmat);
     double off_boresight_e_deg = std::abs(best_el * 180.0 / M_PI);
     double off_boresight_h_deg = std::abs(best_az * 180.0 / M_PI);
-    bool in_main_lobe = antenna_parser_.is_in_main_lobe(off_boresight_e_deg, off_boresight_h_deg);
+
+    auto& best_bs = rx_nodes_[best_bs_idx];
+    Eigen::Vector3d best_bs_ant_rpy = best_bs.rpy + best_bs.antenna_relative_rpy;
+    auto [best_el_rx, best_az_rx] = antenna_parser_.calculate_antenna_frame_angles(
+        best_bs_pos, tx_antenna_pos, best_bs_ant_rpy, &best_bs.rotmat);
+    double off_e_rx = std::abs(best_el_rx * 180.0 / M_PI);
+    double off_h_rx = std::abs(best_az_rx * 180.0 / M_PI);
+
+    bool in_main_lobe = antenna_parser_.is_in_main_lobe(off_boresight_e_deg, off_boresight_h_deg)
+                     && antenna_parser_.is_in_main_lobe(off_e_rx, off_h_rx);
 
     last_rssi_ = best_metrics.rssi;
 
     bool local_has_link_grant = has_link_grant_;
+    int assigned_bs_idx = best_bs_idx;
 
-    if ((scheduling_policy_ == "rssi_priority" || 
+    if (scheduling_policy_ == "feedforward_optimal" && !vehicle_antennas_.empty()) {
+        int num_tx = vehicle_antennas_.size();
+        int num_rx = rx_nodes_.size();
+        int num_pairs = std::min(num_tx, num_rx);
+
+        std::vector<std::vector<double>> rssi_matrix(num_tx, std::vector<double>(num_rx, -999.0));
+        for (int tx_idx = 0; tx_idx < num_tx; ++tx_idx) {
+            const auto& va = vehicle_antennas_[tx_idx];
+            Eigen::Vector3d va_pos_world = pos + vehicle_rotmat * va.offset;
+            
+            for (int rx_idx = 0; rx_idx < num_rx; ++rx_idx) {
+                const auto& bs = rx_nodes_[rx_idx];
+                Eigen::Vector3d bs_antenna_pos = bs.position + bs.antenna_offset;
+                Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
+                
+                auto gain_res2 = antenna_parser_.get_tx_rx_gains(
+                    va_pos_world, tx_ant_rpy, bs_antenna_pos, bs_ant_rpy,
+                    &rx_rotmat, &bs.rotmat);
+                double tx_tot = gain_res2.tx_total;
+                double rx_tot = gain_res2.rx_total;
+                
+                CommsMetrics metrics_va = comms_calculator_->calculate_all(
+                    va_pos_world, bs_antenna_pos, tx_tot + rx_tot, false);
+                rssi_matrix[tx_idx][rx_idx] = metrics_va.rssi;
+            }
+        }
+
+        std::vector<int> rx_indices(num_rx);
+        std::iota(rx_indices.begin(), rx_indices.end(), 0);
+
+        double best_total = -1e9;
+        std::vector<int> best_assignment(num_tx, -1);
+        
+        std::sort(rx_indices.begin(), rx_indices.end());
+
+        do {
+            double total = 0.0;
+            for (int tx_idx = 0; tx_idx < num_pairs; ++tx_idx) {
+                total += rssi_matrix[tx_idx][rx_indices[tx_idx]];
+            }
+            if (total > best_total) {
+                best_total = total;
+                for (int tx_idx = 0; tx_idx < num_tx; ++tx_idx) {
+                    if (tx_idx < num_pairs) {
+                        best_assignment[tx_idx] = rx_indices[tx_idx];
+                    } else {
+                        best_assignment[tx_idx] = -1;
+                    }
+                }
+            }
+        } while (std::next_permutation(rx_indices.begin(), rx_indices.end()));
+
+        int our_tx_idx = -1;
+        for (int tx_idx = 0; tx_idx < num_tx; ++tx_idx) {
+            if (vehicle_antennas_[tx_idx].name == vehicle_name_) {
+                our_tx_idx = tx_idx;
+                break;
+            }
+        }
+
+        if (our_tx_idx != -1 && best_assignment[our_tx_idx] != -1) {
+            local_has_link_grant = true;
+            assigned_bs_idx = best_assignment[our_tx_idx];
+            
+            best_metrics = all_metrics_list[assigned_bs_idx];
+            best_tx_total = all_tx_total[assigned_bs_idx];
+            best_rx_total = all_rx_total[assigned_bs_idx];
+            best_bs_pos = all_bs_pos[assigned_bs_idx];
+            best_bs_idx = assigned_bs_idx;
+
+            auto [el, az] = antenna_parser_.calculate_antenna_frame_angles(
+                tx_antenna_pos, best_bs_pos, tx_ant_rpy, &rx_rotmat);
+            off_boresight_e_deg = std::abs(el * 180.0 / M_PI);
+            off_boresight_h_deg = std::abs(az * 180.0 / M_PI);
+
+            auto& bs = rx_nodes_[best_bs_idx];
+            Eigen::Vector3d bs_ant_rpy = bs.rpy + bs.antenna_relative_rpy;
+            auto [el_rx, az_rx] = antenna_parser_.calculate_antenna_frame_angles(
+                best_bs_pos, tx_antenna_pos, bs_ant_rpy, &bs.rotmat);
+            double off_e_rx_val = std::abs(el_rx * 180.0 / M_PI);
+            double off_h_rx_val = std::abs(az_rx * 180.0 / M_PI);
+
+            in_main_lobe = antenna_parser_.is_in_main_lobe(off_boresight_e_deg, off_boresight_h_deg)
+                        && antenna_parser_.is_in_main_lobe(off_e_rx_val, off_h_rx_val);
+        } else {
+            local_has_link_grant = false;
+        }
+    }
+    else if ((scheduling_policy_ == "rssi_priority" || 
          scheduling_policy_ == "physical_score_priority" || scheduling_policy_ == "geometric_beam_priority" || 
          scheduling_policy_ == "geometric_weighted") && !vehicle_antennas_.empty()) 
     {

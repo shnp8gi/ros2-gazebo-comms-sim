@@ -196,7 +196,7 @@ def _resolve_model_uri(model_uri: str, model_prefix: str) -> str:
     return path + '/model.sdf'
 
 
-def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str, plugin_xml: str = "") -> str:
+def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str, plugin_xml: str = "", suffix: str = "") -> str:
     """
     車両固有のトピック名を持つSDFファイルを動的生成する。
 
@@ -206,6 +206,8 @@ def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str, plugin_xml:
     Args:
         original_sdf_path: 元のモデルSDFファイルパス
         vehicle_name: 車両名（トピックプレフィックスに使用）
+        plugin_xml: 追加するプラグインXML
+        suffix: 一時ファイル名をユニークにするためのサフィックス
 
     Returns:
         生成された一時SDFファイルのパス
@@ -240,7 +242,9 @@ def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str, plugin_xml:
     # 一時ファイルに保存
     tmp_dir = os.path.join(tempfile.gettempdir(), 'comms_sim_vehicles')
     os.makedirs(tmp_dir, exist_ok=True)
-    tmp_sdf_path = os.path.join(tmp_dir, f'{vehicle_name}_model.sdf')
+    
+    filename_suffix = f"_{suffix}" if suffix else ""
+    tmp_sdf_path = os.path.join(tmp_dir, f'{vehicle_name}_model{filename_suffix}.sdf')
 
     with open(tmp_sdf_path, 'w', encoding='utf-8') as f:
         f.write(sdf_content)
@@ -314,6 +318,36 @@ def launch_setup(context, *args, **kwargs):
             f"sim_params.yaml の 'simulation.world_file' を確認してください。\n"
             f"{'='*70}\n"
         )
+
+    # Dynamic replacement of physics_max_step_size from sim_params.yaml
+    physics_max_step_size = sim_config.get('physics_max_step_size', None)
+    if physics_max_step_size is not None:
+        try:
+            physics_max_step_size_val = float(physics_max_step_size)
+            with open(world_file, 'r', encoding='utf-8') as f:
+                world_content = f.read()
+
+            # Replace max_step_size
+            world_content = re.sub(
+                r'<max_step_size>\s*[0-9.eE+-]+\s*</max_step_size>',
+                f'<max_step_size>{physics_max_step_size_val}</max_step_size>',
+                world_content
+            )
+
+            # Save to temp file
+            tmp_dir = os.path.join(tempfile.gettempdir(), 'comms_sim_worlds')
+            os.makedirs(tmp_dir, exist_ok=True)
+            config_suffix = os.path.splitext(os.path.basename(config_path))[0]
+            tmp_world_path = os.path.join(tmp_dir, f'world_{config_suffix}.sdf')
+
+            with open(tmp_world_path, 'w', encoding='utf-8') as f:
+                f.write(world_content)
+
+            print(f"[sim_launch] Dynamic world generation: max_step_size set to {physics_max_step_size_val} s")
+            world_file = tmp_world_path
+        except Exception as e:
+            print(f"[sim_launch] Warning: failed to dynamically update world max_step_size: {e}")
+
     world_name = sim_config.get('world_name', 'comms_sim_world')
     verbosity = sim_config.get('verbosity', 3)
     headless = sim_config.get('headless', False)
@@ -538,7 +572,8 @@ def launch_setup(context, *args, **kwargs):
         """
 
         # 車両固有のSDFを生成（トピック名を書き換え + プラグイン追加）
-        vehicle_sdf_path = _generate_vehicle_sdf(original_sdf_path, v_name, plugin_xml)
+        config_suffix = os.path.splitext(os.path.basename(config_path))[0]
+        vehicle_sdf_path = _generate_vehicle_sdf(original_sdf_path, v_name, plugin_xml, suffix=config_suffix)
 
         actions.append(LogInfo(
             msg=f'[vehicle] {v_name}: SDF生成完了 → {vehicle_sdf_path}'

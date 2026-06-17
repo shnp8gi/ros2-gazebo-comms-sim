@@ -350,19 +350,37 @@ class GeometricWeightedStrategy(LinkSchedulingStrategy):
 
 class FeedforwardOptimalStrategy(LinkSchedulingStrategy):
     """
-    feedforward_optimal ポリシー:
-    事前計算された3D位置-アンテナ選択ルックアップテーブル（LUT）に基づき、
-    現在の車両位置に最も近いサンプリング点における最適な車載アンテナを選択する。
+    feedforward_optimal ポリシー (マルチペア対応):
+    事前計算された3D位置-アンテナペア割り当てルックアップテーブル（LUT）に基づき、
+    現在の車両位置に最も近いサンプリング点における最適なTX-RXペア群を選択する。
+    
+    LUTエントリ形式:
+      - 旧: (x, y, z, optimal_antenna_name, nominal_rssi)
+      - 新: (x, y, z, pairs_list, max_rssi) where pairs_list = [(tx_ant, rx_ant, rssi), ...]
     """
-    def __init__(self, lut: List[Tuple[float, float, float, str, float]], center_antenna_name: str = 'shinkansen_mid'):
+    def __init__(self, lut: list, center_antenna_name: str = 'shinkansen_mid'):
         """
         Args:
-            lut: (x, y, z, optimal_antenna_name, nominal_rssi) のリスト
+            lut: LUTリスト。各エントリは以下のいずれかの形式:
+                 - (x, y, z, optimal_antenna_name, nominal_rssi)  [旧形式: 後方互換]
+                 - (x, y, z, pairs_list, max_rssi) where pairs_list = [(tx, rx, rssi), ...]
             center_antenna_name: 車両の中心位置を示す基準アンテナ名
         """
         self.lut = lut
         self.center_antenna_name = center_antenna_name
         self._last_idx = 0
+        # マルチペア: 現在アクティブなペア割り当て {tx_name: rx_name}
+        self.active_pairs: dict = {}
+
+    def _get_pairs_from_entry(self, entry):
+        """LUTエントリからペアリストを取得 (新旧形式両対応)"""
+        field3 = entry[3]
+        if isinstance(field3, list):
+            # 新形式: [(tx_ant, rx_ant, rssi), ...]
+            return field3
+        else:
+            # 旧形式: 単一アンテナ名 → 1ペアとして返す
+            return [(field3, '', entry[4])]
 
     def determine_active_link(
         self, 
@@ -417,13 +435,24 @@ class FeedforwardOptimalStrategy(LinkSchedulingStrategy):
                     best_idx = idx
 
         self._last_idx = best_idx
-        optimal_ant = self.lut[best_idx][3]
+        pairs = self._get_pairs_from_entry(self.lut[best_idx])
 
-        if optimal_ant in vehicle_names:
-            new_idx = vehicle_names.index(optimal_ant)
+        # マルチペア: アクティブペアを更新
+        new_active_pairs = {}
+        for pair_entry in pairs:
+            tx_name = pair_entry[0]
+            rx_name = pair_entry[1] if len(pair_entry) > 1 else ''
+            if tx_name in vehicle_names:
+                new_active_pairs[tx_name] = rx_name
+        self.active_pairs = new_active_pairs
+
+        # 最良ペアのTXアンテナをプライマリとして返す (後方互換)
+        if pairs and pairs[0][0] in vehicle_names:
+            primary_name = pairs[0][0]
+            new_idx = vehicle_names.index(primary_name)
             if new_idx != current_active_idx:
-                old_name = vehicle_names[current_active_idx]
-                msg = f'リンク切替: {old_name} → {optimal_ant} (feedforward_optimal: 最寄点 x={self.lut[best_idx][0]:.1f}, y={self.lut[best_idx][1]:.1f})'
+                pair_strs = [f"{p[0]}↔{p[1]}" for p in pairs if len(p) > 1 and p[1]]
+                msg = f'リンク切替: マルチペア feedforward ({len(pairs)}ペア: {", ".join(pair_strs)}) 最寄点 x={self.lut[best_idx][0]:.1f}, y={self.lut[best_idx][1]:.1f}'
                 return new_idx, msg
 
         return current_active_idx, None

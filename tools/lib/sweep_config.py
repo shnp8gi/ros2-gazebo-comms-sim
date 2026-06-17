@@ -12,13 +12,13 @@ RX_YAW_DEG = -90.0
 # 角度スイープの設定 (下限, 上限, 刻み幅)
 START_ANGLE = 0.0# 下限 (deg)
 END_ANGLE = 180.0    # 上限 (deg)
-STEP_ANGLE = 1.0  # 刻み幅 (deg)
+STEP_ANGLE = 0.1  # 刻み幅 (deg)
 
 # パラメータスイープを繰り返す回数 (ラン数)
 NUM_RUNS = 1
 
 # 1タスクあたりの最大待機時間 [秒]
-TASK_TIMEOUT_SEC = 1200
+TASK_TIMEOUT_SEC = 500
 
 # スイープ時の加速倍率 (ヘッドレス時のみ有効.1.0=リアルタイム)
 SWEEP_REAL_TIME_FACTOR = 1.0

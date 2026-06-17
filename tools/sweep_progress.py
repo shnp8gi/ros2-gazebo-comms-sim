@@ -94,11 +94,14 @@ def parse_progress_log(log_path: str):
             # 開始行: START 2026-05-18T17:00:00 TOTAL=910 CONCURRENCY=8
             m = RE_START.match(line)
             if m:
-                start_time = datetime.datetime.fromisoformat(m.group(1))
-                total_tasks = int(m.group(2))
-                if m.group(3):
-                    concurrency = int(m.group(3))
-                running_tasks.clear()
+                try:
+                    start_time = datetime.datetime.fromisoformat(m.group(1))
+                    total_tasks = int(m.group(2))
+                    if m.group(3):
+                        concurrency = int(m.group(3))
+                    running_tasks.clear()
+                except ValueError:
+                    pass
                 continue
                 
             # 中断行: ABORT ts=2026-05-18T17:02:00
@@ -110,38 +113,44 @@ def parse_progress_log(log_path: str):
             # 実行中行: RUNNING task=6 y=1 angle=5 ts=2026-05-18T17:01:25
             m = RE_RUNNING.match(line)
             if m:
-                t_id = int(m.group(1))
-                y_val = float(m.group(2))
-                ang_val = float(m.group(3))
-                start_ts = datetime.datetime.fromisoformat(m.group(4))
-                
-                task_start_times[t_id] = start_ts
-                running_tasks[t_id] = {
-                    "task_no": t_id,
-                    "y": y_val,
-                    "angle": ang_val,
-                    "started_at": start_ts
-                }
+                try:
+                    t_id = int(m.group(1))
+                    y_val = float(m.group(2))
+                    ang_val = float(m.group(3))
+                    start_ts = datetime.datetime.fromisoformat(m.group(4))
+                    
+                    task_start_times[t_id] = start_ts
+                    running_tasks[t_id] = {
+                        "task_no": t_id,
+                        "y": y_val,
+                        "angle": ang_val,
+                        "started_at": start_ts
+                    }
+                except ValueError:
+                    pass
                 continue
 
             # 完了行: DONE task=5 y=1 angle=4 status=OK ts=2026-05-18T17:01:23
             m = RE_DONE.match(line)
             if m:
-                t_id = int(m.group(1))
-                status = m.group(4)
-                
-                if status == "SWEEP_COMPLETE":
-                    running_tasks.clear()
-                    continue
+                try:
+                    t_id = int(m.group(1))
+                    status = m.group(4)
                     
-                done_ts = datetime.datetime.fromisoformat(m.group(5))
-                completed_task_ids.add(t_id)
-                running_tasks.pop(t_id, None)
-                last_success_time = done_ts
-                
-                if t_id in task_start_times:
-                    duration = (done_ts - task_start_times[t_id]).total_seconds()
-                    task_durations.append(duration)
+                    if status == "SWEEP_COMPLETE":
+                        running_tasks.clear()
+                        continue
+                        
+                    done_ts = datetime.datetime.fromisoformat(m.group(5))
+                    completed_task_ids.add(t_id)
+                    running_tasks.pop(t_id, None)
+                    last_success_time = done_ts
+                    
+                    if t_id in task_start_times:
+                        duration = (done_ts - task_start_times[t_id]).total_seconds()
+                        task_durations.append(duration)
+                except ValueError:
+                    pass
                 continue
 
     return {

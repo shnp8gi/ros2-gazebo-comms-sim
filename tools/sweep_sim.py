@@ -446,8 +446,8 @@ def resource_monitor_loop():
         psutil.cpu_percent(interval=None)
     except Exception:
         pass
-    
-    while not shutdown_requested:
+
+    while not shutdown_requested and monitor_running:
         try:
             measure_resources()
         except Exception:
@@ -470,8 +470,8 @@ def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: b
     # --- CPU制約 ---
     cpu_val = cached_dyn_cpu_per_sim if cached_dyn_cpu_per_sim > 0.0 else DEFAULT_CPU_PER_SIM
     cpu_val = max(0.5, cpu_val)
-    # CPUコアの90%を使用可能とし、1インスタンスあたりのCPU消費で割る
-    safe_cpu_count = cpu_count * 0.9
+    # CPUコアの95%を使用可能とし、1インスタンスあたりのCPU消費で割る
+    safe_cpu_count = cpu_count * 0.95
     max_by_cpu = max(1, int(math.floor(safe_cpu_count / cpu_val)))
 
     # --- メモリ制約 ---
@@ -517,7 +517,44 @@ def log_progress(line: str):
             lf.write(line + "\n")
             lf.flush()
 
-def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, base_station_yaw_deg=-90.0, max_concurrency=4):
+def apply_dither(content, dither_x):
+    """
+    Apply spatial dithering to the vehicle starting pose and waypoints
+    to smooth out discrete time-step binning artifacts.
+    """
+    match = re.search(r'\nvehicles:\s*\n(.*?)(?=\n\w+:|\Z)', content, re.DOTALL)
+    if not match:
+        return content
+    vehicles_block = match.group(1)
+    
+    def repl_pose(m):
+        prefix = m.group(1)
+        val = float(m.group(2))
+        suffix = m.group(3)
+        return f"{prefix}{val + dither_x:.6f}{suffix}"
+    
+    new_vehicles_block = re.sub(
+        r'(pose:\s*\[\s*)([-\d\.]+)(.*?\])',
+        repl_pose,
+        vehicles_block
+    )
+    
+    def repl_wp(m):
+        prefix = m.group(1)
+        val = float(m.group(2))
+        suffix = m.group(3)
+        return f"{prefix}{val + dither_x:.6f}{suffix}"
+        
+    new_vehicles_block = re.sub(
+        r'(-\s*\[\s*)([-\d\.]+)(.*?\])',
+        repl_wp,
+        new_vehicles_block
+    )
+    
+    start, end = match.span(1)
+    return content[:start] + new_vehicles_block + content[end:]
+
+def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, base_station_yaw_deg=-90.0, max_concurrency=4, num_runs=1):
     if len(task_info) == 5:
         run_idx, y, angle_deg, overall_task_no, local_task_no = task_info
     else:
@@ -528,7 +565,9 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     entity_yaw = math.radians(base_station_yaw_deg)
     antenna_yaw = world_yaw - entity_yaw
  
-    summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_w{worker_id}.csv"
+    y_str = f"{round(y, 2):g}"
+    angle_str = f"{angle_deg:g}"
+    summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_y{y_str}_a{angle_str}_w{worker_id}.csv"
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
     ros_domain_id = 10 + worker_id
  
@@ -590,12 +629,22 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
 
             with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
                 content = f.read()
+
+            # Apply spatial dithering to UGV starting pose/waypoints if running multiple loops
+            if num_runs > 1:
+                wp_matches = re.findall(r'-\s*\[\s*([-\d\.]+),\s*([-\d\.]+),\s*([-\d\.]+),\s*([\d\.]+)\s*\]', content)
+                speed = float(wp_matches[0][3]) if wp_matches else 83.33
+                dx = speed * 0.001
+                dither_x = (((run_idx - 1) / num_runs) - 0.5) * dx
+                content = apply_dither(content, dither_x)
      
             content = re.sub(r'\n\s*summary_filename:\s*["\']?[^"\']*["\']?', '', content)
             content = re.sub(r'\n\s*output_subdir:\s*["\']?[^"\']*["\']?', '', content)
+            content = re.sub(r'\n\s*y_position:\s*[-\d\.]+', '', content)
+            content = re.sub(r'\n\s*angle_deg:\s*[-\d\.]+', '', content)
             content = re.sub(
                 r'(simulation:)', 
-                rf'\1\n  summary_filename: "{summary_filename}"\n  output_subdir: "sweep_{sweep_start_time}"', 
+                rf'\1\n  summary_filename: "{summary_filename}"\n  output_subdir: "sweep_{sweep_start_time}"\n  y_position: {y}\n  angle_deg: {angle_deg}', 
                 content
             )
      
@@ -615,7 +664,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 content
             )
      
-            ugv_antenna_yaw = world_yaw - math.pi
+            # [-π, π] に正規化して Gazebo/SDF に渡す値を明確にする
+            ugv_antenna_yaw = math.atan2(math.sin(world_yaw - math.pi), math.cos(world_yaw - math.pi))
             for ant_name in ["shinkansen_front", "shinkansen_mid", "shinkansen_rear"]:
                 content = re.sub(
                     rf'(name:\s*"{ant_name}".*?relative_rpy:\s*\[\s*[-\d\.]+,\s*[-\d\.]+,\s*)[-\d\.]+(\s*\])',
@@ -663,8 +713,10 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()}")
 
         start_time = time.time()
-        out_log_path = f"/workspace/sim_results/stdout_worker_{worker_id}.log"
-        err_log_path = f"/workspace/sim_results/stderr_worker_{worker_id}.log"
+        log_dir = f"tools/log/{sweep_start_time}"
+        os.makedirs(log_dir, exist_ok=True)
+        out_log_path = os.path.join(log_dir, f"stdout_worker_{worker_id}.log")
+        err_log_path = os.path.join(log_dir, f"stderr_worker_{worker_id}.log")
         out_f = open(out_log_path, "w")
         err_f = open(err_log_path, "w")
         proc = subprocess.Popen(
@@ -712,9 +764,17 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         reason = ""
         
         summary_path = os.path.join(os.getcwd(), "sim_results", f"sweep_{sweep_start_time}", summary_filename)
+        
+        min_allowed_duration = 3.0
+        if t_expected is not None:
+            min_allowed_duration = max(3.0, 0.5 * t_expected)
+
         if timed_out:
             is_valid = False
             reason = "Timeout"
+        elif actual_duration < min_allowed_duration:
+            is_valid = False
+            reason = f"Simulation ended too quickly (took {actual_duration:.1f}s, expected at least {min_allowed_duration:.1f}s)"
         elif proc.returncode != 0 and proc.returncode not in (-2, -15):
             if not os.path.exists(summary_path):
                 is_valid = False
@@ -729,17 +789,14 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation finished successfully in {actual_duration:.1f}s (Expected: {expected_str}): Y={y}, Angle={angle_deg}")
             log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=OK ts={datetime.datetime.now().isoformat()}")
 
-            # RTFフィードバック用: タスク実行時間を記録
-            if not hasattr(get_optimal_concurrency, '_recent_durations'):
-                get_optimal_concurrency._recent_durations = []
-            get_optimal_concurrency._recent_durations.append(actual_duration)
-            # 最初の成功タスクの期待時間をベースラインとして記録
-            if t_expected is not None and not hasattr(get_optimal_concurrency, '_baseline_duration'):
-                get_optimal_concurrency._baseline_duration = t_expected
-
             increment_completed_tasks()
             return True
         else:
+            if os.path.exists(summary_path):
+                try:
+                    os.remove(summary_path)
+                except Exception:
+                    pass
             attempt_info = f"Attempt {attempt + 1}/{max_retries}"
             print(f"[Worker {worker_id}] {attempt_info} FAILED: {reason}. Re-running task with same parameters...")
             time.sleep(2.0)
@@ -803,12 +860,14 @@ def main():
 
     manifest_data = None
     chunk_idx = None
+    manifest_path = None
     if args.manifest:
         import json
-        if not os.path.exists(args.manifest):
+        manifest_path = os.path.abspath(os.path.expanduser(os.path.expandvars(args.manifest)))
+        if not os.path.exists(manifest_path):
             print(f"Error: Manifest file {args.manifest} does not exist.")
             sys.exit(1)
-        with open(args.manifest, 'r', encoding='utf-8') as f:
+        with open(manifest_path, 'r', encoding='utf-8') as f:
             manifest_data = json.load(f)
         
         sweep_start_time = manifest_data['sweep_id']
@@ -870,17 +929,31 @@ def main():
             print(f"Warning: Failed to clean up leftover config file {f}: {e}")
 
     if args.resume:
-        resume_input = args.resume.strip()
+        resume_input = os.path.expanduser(os.path.expandvars(args.resume.strip()))
         
         if resume_input == 'latest':
-            # 直近に実行されたスイープディレクトリを自動検出
-            sweep_dirs = sorted(glob.glob("sim_results/sweep_*"), key=os.path.getmtime, reverse=True)
-            if not sweep_dirs:
-                print("Error: No previous sweep directories found in sim_results/.")
-                sys.exit(1)
-            sweep_dir = sweep_dirs[0]
-            sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
-            print(f"[Sweep Sim] Auto-detected most recent sweep: {sweep_dir}")
+            if manifest_data:
+                target_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
+                if os.path.exists(target_dir):
+                    sweep_dir = target_dir
+                    print(f"[Sweep Sim] Resuming distributed sweep chunk from manifest-defined directory: {sweep_dir}")
+                else:
+                    sweep_dirs = sorted(glob.glob("sim_results/sweep_*"), key=os.path.getmtime, reverse=True)
+                    if not sweep_dirs:
+                        print("Error: No previous sweep directories found in sim_results/.")
+                        sys.exit(1)
+                    sweep_dir = sweep_dirs[0]
+                    sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
+                    print(f"[Sweep Sim] Auto-detected most recent sweep (fallback): {sweep_dir}")
+            else:
+                # 直近に実行されたスイープディレクトリを自動検出
+                sweep_dirs = sorted(glob.glob("sim_results/sweep_*"), key=os.path.getmtime, reverse=True)
+                if not sweep_dirs:
+                    print("Error: No previous sweep directories found in sim_results/.")
+                    sys.exit(1)
+                sweep_dir = sweep_dirs[0]
+                sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
+                print(f"[Sweep Sim] Auto-detected most recent sweep: {sweep_dir}")
         elif '/' in resume_input or '\\' in resume_input:
             sweep_dir = resume_input
             sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
@@ -907,11 +980,11 @@ def main():
         os.remove(PROGRESS_LOG)
 
     # Copy manifest to results folder if chunk_idx is not None
-    if chunk_idx is not None and args.manifest:
+    if chunk_idx is not None and manifest_path:
         os.makedirs(sweep_dir, exist_ok=True)
         dest_manifest = os.path.join(sweep_dir, f"manifest_chunk_{chunk_idx}.json")
         try:
-            shutil.copy2(args.manifest, dest_manifest)
+            shutil.copy2(manifest_path, dest_manifest)
             print(f"[Sweep Sim] Preserved manifest to results directory: {dest_manifest}")
         except Exception as e:
             print(f"[Sweep Sim] Warning: Failed to copy manifest: {e}")
@@ -991,7 +1064,7 @@ def main():
     def worker_thread_fn(task_info):
         worker_id = worker_queue.get()
         try:
-            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=rtf, timeout=timeout, base_station_yaw_deg=base_station_yaw_deg, max_concurrency=concurrency)
+            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=rtf, timeout=timeout, base_station_yaw_deg=base_station_yaw_deg, max_concurrency=concurrency, num_runs=num_runs)
             return success
         finally:
             worker_queue.put(worker_id)
@@ -1039,7 +1112,7 @@ def main():
             except Exception:
                 pass
 
-        pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_{sweep_start_time}_run{run_idx}_w*.csv")
+        pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_{sweep_start_time}_run{run_idx}_*_w*.csv")
         worker_csvs = glob.glob(pattern)
         
         for worker_csv in sorted(worker_csvs):

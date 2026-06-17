@@ -857,6 +857,7 @@ class CommsSimulatorNode(Node):
             rx_rotmat = self.antenna_parser._rpy_to_rotmat(float(tx_ant_rpy[0]), float(tx_ant_rpy[1]), float(tx_ant_rpy[2]))
 
             # 基地局の選定
+            all_bs_metrics = []
             best_metrics = None
             best_bs_idx = 0
             best_tx_total = 0.0
@@ -887,6 +888,14 @@ class CommsSimulatorNode(Node):
                     add_noise=True,
                 )
 
+                all_bs_metrics.append({
+                    'metrics': metrics,
+                    'tx_total': tx_total,
+                    'rx_total': rx_total,
+                    'bs_antenna_pos': bs_antenna_pos,
+                    'bs_idx': idx
+                })
+
                 if best_metrics is None or metrics['rssi'] > best_metrics['rssi']:
                     best_metrics = metrics
                     best_bs_idx = idx
@@ -899,31 +908,26 @@ class CommsSimulatorNode(Node):
             tx_total = best_tx_total
             rx_total = best_rx_total
             bs_antenna_pos = best_bs_antenna_pos
-
-            # 選択された基地局の情報を更新
-            self.rx_position = self.rx_nodes[best_bs_idx]['position']
-            self.rx_antenna_offset = self.rx_nodes[best_bs_idx]['antenna_offset']
-            self.rx_entity_rpy = self.rx_nodes[best_bs_idx]['rpy']
-            self.rx_antenna_relative_rpy = list(self.rx_nodes[best_bs_idx]['antenna_relative_rpy'])
-
-            # 最新RSSIをキャッシュ
-            self._last_rssi = metrics['rssi']
+            assigned_bs_idx = best_bs_idx
 
             # ローカルでのリンク権判定（高精度スケジューリングの遅延回避）
             local_has_link_grant = self.has_link_grant
             if (self.scheduling_policy in ('feedforward_optimal', 'rssi_priority', 'physical_score_priority', 'geometric_beam_priority', 'geometric_weighted') and 
                 self.vehicle_antennas):
-                best_rssi_per_ant = {}
-                for va in self.vehicle_antennas:
-                    is_current_va = (va['name'] == self.vehicle_name)
-                    if is_current_va and self.comms_calculator.noise_variance == 0.0:
-                        best_va_rssi = metrics['rssi']
-                    else:
+                
+                if self.scheduling_policy == 'feedforward_optimal':
+                    # マルチペア: 全(TX, RX)のRSSI行列を計算し、最適N個ペアを決定
+                    from itertools import permutations
+                    num_tx = len(self.vehicle_antennas)
+                    num_rx = len(self.rx_nodes)
+                    num_pairs = min(num_tx, num_rx)
+                    
+                    rssi_matrix = [[-999.0] * num_rx for _ in range(num_tx)]
+                    for tx_idx, va in enumerate(self.vehicle_antennas):
                         va_offset = np.asarray(va['offset'], dtype=float)
                         va_pos_world = pos_sub + va_offset
                         
-                        best_va_rssi = float('-inf')
-                        for bs in self.rx_nodes:
+                        for rx_idx, bs in enumerate(self.rx_nodes):
                             bs_antenna_pos = bs['position'] + bs['antenna_offset']
                             bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
                             
@@ -931,7 +935,7 @@ class CommsSimulatorNode(Node):
                                 tx_pos_world=bs_antenna_pos,
                                 tx_rpy_world=bs_ant_rpy,
                                 rx_pos_world=va_pos_world,
-                                rx_rpy_world=tx_ant_rpy, # since relative RPY are identical, we can use tx_ant_rpy and rx_rotmat!
+                                rx_rpy_world=tx_ant_rpy,
                                 tx_rotmat=bs.get('rotmat'),
                                 rx_rotmat=rx_rotmat,
                             )
@@ -943,13 +947,74 @@ class CommsSimulatorNode(Node):
                                 antenna_gain_db=antenna_gain_db,
                                 add_noise=False,
                             )
-                            if metrics_va['rssi'] > best_va_rssi:
-                                best_va_rssi = metrics_va['rssi']
+                            rssi_matrix[tx_idx][rx_idx] = metrics_va['rssi']
                     
-                    best_rssi_per_ant[va['name']] = best_va_rssi
-                
-                best_ant_name = max(best_rssi_per_ant, key=best_rssi_per_ant.get)
-                local_has_link_grant = (self.vehicle_name == best_ant_name)
+                    # 全列挙で最適N個ペアを決定
+                    best_total = -1e9
+                    best_paired_antennas = set()
+                    best_pairs_map = {}
+                    for perm in permutations(range(num_rx)):
+                        total = sum(rssi_matrix[tx_idx][perm[tx_idx]] for tx_idx in range(num_pairs))
+                        if total > best_total:
+                            best_total = total
+                            best_paired_antennas = {self.vehicle_antennas[tx_idx]['name'] for tx_idx in range(num_pairs)}
+                            best_pairs_map = {self.vehicle_antennas[tx_idx]['name']: perm[tx_idx] for tx_idx in range(num_pairs)}
+                    
+                    local_has_link_grant = (self.vehicle_name in best_paired_antennas)
+                    if local_has_link_grant and self.vehicle_name in best_pairs_map:
+                        assigned_bs_idx = best_pairs_map[self.vehicle_name]
+                        metrics = all_bs_metrics[assigned_bs_idx]['metrics']
+                        tx_total = all_bs_metrics[assigned_bs_idx]['tx_total']
+                        rx_total = all_bs_metrics[assigned_bs_idx]['rx_total']
+                        bs_antenna_pos = all_bs_metrics[assigned_bs_idx]['bs_antenna_pos']
+
+            # 選択された基地局の情報を更新
+            self.rx_position = self.rx_nodes[assigned_bs_idx]['position']
+            self.rx_antenna_offset = self.rx_nodes[assigned_bs_idx]['antenna_offset']
+            self.rx_entity_rpy = self.rx_nodes[assigned_bs_idx]['rpy']
+            self.rx_antenna_relative_rpy = list(self.rx_nodes[assigned_bs_idx]['antenna_relative_rpy'])
+
+            # 最新RSSIをキャッシュ
+            self._last_rssi = metrics['rssi']
+                else:
+                    # 他のポリシー: 従来のシングルペア判定
+                    best_rssi_per_ant = {}
+                    for va in self.vehicle_antennas:
+                        is_current_va = (va['name'] == self.vehicle_name)
+                        if is_current_va and self.comms_calculator.noise_variance == 0.0:
+                            best_va_rssi = metrics['rssi']
+                        else:
+                            va_offset = np.asarray(va['offset'], dtype=float)
+                            va_pos_world = pos_sub + va_offset
+                            
+                            best_va_rssi = float('-inf')
+                            for bs in self.rx_nodes:
+                                bs_antenna_pos = bs['position'] + bs['antenna_offset']
+                                bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
+                                
+                                tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = self.antenna_parser.get_tx_rx_gains(
+                                    tx_pos_world=bs_antenna_pos,
+                                    tx_rpy_world=bs_ant_rpy,
+                                    rx_pos_world=va_pos_world,
+                                    rx_rpy_world=tx_ant_rpy,
+                                    tx_rotmat=bs.get('rotmat'),
+                                    rx_rotmat=rx_rotmat,
+                                )
+                                antenna_gain_db = float(tx_total + rx_total)
+                                
+                                metrics_va = self.comms_calculator.calculate_all(
+                                    va_pos_world,
+                                    bs_antenna_pos,
+                                    antenna_gain_db=antenna_gain_db,
+                                    add_noise=False,
+                                )
+                                if metrics_va['rssi'] > best_va_rssi:
+                                    best_va_rssi = metrics_va['rssi']
+                        
+                        best_rssi_per_ant[va['name']] = best_va_rssi
+                    
+                    best_ant_name = max(best_rssi_per_ant, key=best_rssi_per_ant.get)
+                    local_has_link_grant = (self.vehicle_name == best_ant_name)
 
             # リンク状態の更新
             link_ready = self._update_link_state(metrics['rssi'], t_sub, has_link_grant=local_has_link_grant)
