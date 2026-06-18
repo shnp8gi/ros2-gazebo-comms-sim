@@ -34,7 +34,15 @@ RUN apt-get update && apt-get install -y gz-harmonic && rm -rf /var/lib/apt/list
 
 # ROS-Gazebo Bridge (ros_gz) & Python Dependencies
 RUN apt-get update && apt-get install -y ros-humble-ros-gzharmonic \
-    python3-numpy python3-scipy python3-pandas && rm -rf /var/lib/apt/lists/*
+    python3-numpy python3-scipy python3-pandas python3-matplotlib && rm -rf /var/lib/apt/lists/*
+
+# Accept EULA for MS TrueType fonts and install Times New Roman (msttcorefonts)
+RUN echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
+    apt-get update && apt-get install -y --no-install-recommends \
+    ttf-mscorefonts-installer \
+    && rm -rf /var/lib/apt/lists/* && \
+    fc-cache -f -v && \
+    python3 -c "import matplotlib.font_manager as fm; fm.fontManager.ttflist"
 
 # VirtualGL Installation for Remote GPU Rendering
 RUN wget https://github.com/VirtualGL/virtualgl/releases/download/3.1.1/virtualgl_3.1.1_amd64.deb -O /tmp/virtualgl.deb && \

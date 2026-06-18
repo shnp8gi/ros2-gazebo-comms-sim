@@ -50,7 +50,7 @@ from lib.sweep_config import (
 )
 
 from lib.sweep_kinematics import estimate_expected_duration
-from lib.sweep_data import average_summaries, get_completed_tasks
+from lib.sweep_data import average_summaries, get_completed_tasks, validate_sweep_summary
 
 # 動的プロファイリングがまだ十分に機能していない場合の初期想定負荷パラメータ
 DEFAULT_CPU_PER_SIM = 1.5
@@ -860,14 +860,12 @@ def main():
 
     manifest_data = None
     chunk_idx = None
-    manifest_path = None
     if args.manifest:
         import json
-        manifest_path = os.path.abspath(os.path.expanduser(os.path.expandvars(args.manifest)))
-        if not os.path.exists(manifest_path):
+        if not os.path.exists(args.manifest):
             print(f"Error: Manifest file {args.manifest} does not exist.")
             sys.exit(1)
-        with open(manifest_path, 'r', encoding='utf-8') as f:
+        with open(args.manifest, 'r', encoding='utf-8') as f:
             manifest_data = json.load(f)
         
         sweep_start_time = manifest_data['sweep_id']
@@ -929,31 +927,17 @@ def main():
             print(f"Warning: Failed to clean up leftover config file {f}: {e}")
 
     if args.resume:
-        resume_input = os.path.expanduser(os.path.expandvars(args.resume.strip()))
+        resume_input = args.resume.strip()
         
         if resume_input == 'latest':
-            if manifest_data:
-                target_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
-                if os.path.exists(target_dir):
-                    sweep_dir = target_dir
-                    print(f"[Sweep Sim] Resuming distributed sweep chunk from manifest-defined directory: {sweep_dir}")
-                else:
-                    sweep_dirs = sorted(glob.glob("sim_results/sweep_*"), key=os.path.getmtime, reverse=True)
-                    if not sweep_dirs:
-                        print("Error: No previous sweep directories found in sim_results/.")
-                        sys.exit(1)
-                    sweep_dir = sweep_dirs[0]
-                    sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
-                    print(f"[Sweep Sim] Auto-detected most recent sweep (fallback): {sweep_dir}")
-            else:
-                # 直近に実行されたスイープディレクトリを自動検出
-                sweep_dirs = sorted(glob.glob("sim_results/sweep_*"), key=os.path.getmtime, reverse=True)
-                if not sweep_dirs:
-                    print("Error: No previous sweep directories found in sim_results/.")
-                    sys.exit(1)
-                sweep_dir = sweep_dirs[0]
-                sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
-                print(f"[Sweep Sim] Auto-detected most recent sweep: {sweep_dir}")
+            # 直近に実行されたスイープディレクトリを自動検出
+            sweep_dirs = sorted(glob.glob("sim_results/sweep_*"), key=os.path.getmtime, reverse=True)
+            if not sweep_dirs:
+                print("Error: No previous sweep directories found in sim_results/.")
+                sys.exit(1)
+            sweep_dir = sweep_dirs[0]
+            sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
+            print(f"[Sweep Sim] Auto-detected most recent sweep: {sweep_dir}")
         elif '/' in resume_input or '\\' in resume_input:
             sweep_dir = resume_input
             sweep_start_time = os.path.basename(sweep_dir).replace("sweep_", "")
@@ -980,11 +964,11 @@ def main():
         os.remove(PROGRESS_LOG)
 
     # Copy manifest to results folder if chunk_idx is not None
-    if chunk_idx is not None and manifest_path:
+    if chunk_idx is not None and args.manifest:
         os.makedirs(sweep_dir, exist_ok=True)
         dest_manifest = os.path.join(sweep_dir, f"manifest_chunk_{chunk_idx}.json")
         try:
-            shutil.copy2(manifest_path, dest_manifest)
+            shutil.copy2(args.manifest, dest_manifest)
             print(f"[Sweep Sim] Preserved manifest to results directory: {dest_manifest}")
         except Exception as e:
             print(f"[Sweep Sim] Warning: Failed to copy manifest: {e}")
@@ -1004,7 +988,7 @@ def main():
             is_completed = False
             if args.resume:
                 if r_idx not in completed_cache:
-                    completed_cache[r_idx] = get_completed_tasks(sweep_dir, r_idx)
+                    completed_cache[r_idx] = get_completed_tasks(sweep_dir, r_idx, config_path=CONFIG_PATH)
                 for cy, cang in completed_cache[r_idx]:
                     if abs(cy - y_val) < 0.01 and abs(cang - ang_val) < 0.05:
                         is_completed = True
@@ -1021,7 +1005,7 @@ def main():
         for run_idx in range(1, num_runs + 1):
             completed_set = set()
             if args.resume:
-                completed_set = get_completed_tasks(sweep_dir, run_idx)
+                completed_set = get_completed_tasks(sweep_dir, run_idx, config_path=CONFIG_PATH)
                 
             for y in y_positions:
                 for angle_deg in angles_deg:
@@ -1070,90 +1054,191 @@ def main():
             worker_queue.put(worker_id)
             time.sleep(0.5)
 
+    # 統合バリデーションと自動再実行ループ
+    max_retries = 2
+    retry_count = 0
+    current_tasks_list = list(tasks_list)
+    sweep_dir = os.path.join("sim_results", f"sweep_{sweep_start_time}")
+
     try:
-        with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
-            futures = {executor.submit(worker_thread_fn, t): t for t in tasks_list}
-            concurrent.futures.wait(futures.keys())
-            for future in futures:
+        while True:
+            if current_tasks_list:
+                print(f"\n[Validation Loop {retry_count}/{max_retries}] Executing {len(current_tasks_list)} tasks...")
+                with concurrent.futures.ThreadPoolExecutor(max_workers=concurrency) as executor:
+                    futures = {executor.submit(worker_thread_fn, t): t for t in current_tasks_list}
+                    concurrent.futures.wait(futures.keys())
+                    for future in futures:
+                        try:
+                            future.result()
+                        except Exception as e:
+                            print(f"Exception in worker thread: {e}")
+                            import traceback
+                            traceback.print_exc()
+            else:
+                print("\nNo tasks left to execute.")
+
+            fix_ownership(sweep_start_time)
+
+            print("\nMerging worker results...")
+            for run_idx in range(1, num_runs + 1):
+                if chunk_idx is not None:
+                    merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}_chunk{chunk_idx}.csv")
+                else:
+                    merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv")
+                os.makedirs(os.path.dirname(merged_summary_file), exist_ok=True)
+                
+                merged_rows = []
+                header = None
+                if os.path.exists(merged_summary_file):
+                    try:
+                        with open(merged_summary_file, 'r', encoding='utf-8') as f:
+                            lines = f.readlines()
+                            if lines:
+                                header = lines[0]
+                                merged_rows.extend(lines[1:])
+                    except Exception:
+                        pass
+
+                pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_{sweep_start_time}_run{run_idx}_*_w*.csv")
+                worker_csvs = glob.glob(pattern)
+                
+                for worker_csv in sorted(worker_csvs):
+                    if os.path.exists(worker_csv):
+                        try:
+                            with open(worker_csv, 'r', encoding='utf-8') as infile:
+                                lines = infile.readlines()
+                                if lines:
+                                    if not header:
+                                        header = lines[0]
+                                    merged_rows.extend(lines[1:])
+                        except Exception as e:
+                            print(f"Warning: Failed to read worker csv {worker_csv}: {e}")
+                        
+                        try:
+                            os.remove(worker_csv)
+                        except Exception as e:
+                            print(f"Warning: Failed to delete worker csv {worker_csv}: {e}")
+                
+                if header and merged_rows:
+                    with open(merged_summary_file, 'w', encoding='utf-8') as outfile:
+                        outfile.write(header)
+                        outfile.writelines(merged_rows)
+
+            if chunk_idx is None:
+                print("\nAveraging results across all runs...")
                 try:
-                    future.result()
+                    final_summary_file = f"sim_results/sweep_{sweep_start_time}/sweep_summary.csv"
+                    summary_files = [os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv") for run_idx in range(1, num_runs + 1)]
+                    average_summaries(summary_files, final_summary_file)
+                    print(f"Averaged summary successfully saved to: {final_summary_file}")
                 except Exception as e:
-                    print(f"Exception in worker thread: {e}")
-                    import traceback
-                    traceback.print_exc()
+                    print(f"Failed to average summaries: {e}")
+            else:
+                print(f"\nChunk {chunk_idx} execution finished. Results merged into chunk-specific files.")
+
+            # データ完全性検証の実行
+            print("\nChecking data integrity of sweep results...")
+            is_valid, failed_list = validate_sweep_summary(sweep_dir, CONFIG_PATH, y_positions, angles_deg, num_runs)
+
+            # バリデーションレポートの出力
+            report_path = os.path.join(sweep_dir, "validation_report.txt")
+            if not is_valid:
+                print(f"\n[Validation] ⚠️ WARNING: Found {len(failed_list)} missing or invalid records!")
+                try:
+                    with open(report_path, 'w', encoding='utf-8') as rf:
+                        rf.write("=== SWEEP SUMMARY DATA INTEGRITY REPORT ===\n")
+                        rf.write(f"Timestamp: {datetime.datetime.now().isoformat()}\n")
+                        rf.write(f"Total anomalies/missing records: {len(failed_list)}\n\n")
+                        for idx, err in enumerate(failed_list):
+                            rf.write(f"#{idx+1}: Run {err['run_idx']}, Y={err['y']}, Angle={err['angle']} -> Reason: {err['reason']}\n")
+                    print(f"[Validation] Detailed report written to: {report_path}")
+                except Exception as e:
+                    print(f"[Validation] Failed to write report: {e}")
+            else:
+                print("\n[Validation] ✅ Data integrity check: PASSED (All records complete and valid).")
+                if os.path.exists(report_path):
+                    try:
+                        os.remove(report_path)
+                    except Exception:
+                        pass
+
+            if is_valid:
+                break
+
+            if retry_count >= max_retries:
+                print(f"\n[Validation] ❌ Reached maximum retry limit ({max_retries}). Exiting with warnings.")
+                break
+
+            retry_count += 1
+            print(f"\n[Validation] Preparing to re-run {len(failed_list)} failed/incomplete tasks (Retry {retry_count}/{max_retries})...")
+
+            # 再実行前に、マージ済みの CSV からエラー該当行を削除して重複を防止
+            failed_by_run = {}
+            for err in failed_list:
+                r_idx = err['run_idx']
+                if r_idx not in failed_by_run:
+                    failed_by_run[r_idx] = []
+                failed_by_run[r_idx].append(err)
+
+            for r_idx, errs in failed_by_run.items():
+                if chunk_idx is not None:
+                    run_file = os.path.join(sweep_dir, f"sweep_summary_run{r_idx}_chunk{chunk_idx}.csv")
+                else:
+                    run_file = os.path.join(sweep_dir, f"sweep_summary_run{r_idx}.csv")
+                
+                if not os.path.exists(run_file):
+                    continue
+
+                header = None
+                rows_to_keep = []
+                try:
+                    with open(run_file, 'r', encoding='utf-8') as f:
+                        reader = csv.DictReader(f)
+                        header = reader.fieldnames
+                        for row in reader:
+                            y_val = float(row['y_position'])
+                            ang_val = float(row['antenna_angle'])
+                            is_failed = False
+                            for e in errs:
+                                if abs(e['y'] - y_val) < 0.01 and abs(e['angle'] - ang_val) < 0.05:
+                                    is_failed = True
+                                    break
+                            if not is_failed:
+                                rows_to_keep.append(row)
+
+                    with open(run_file, 'w', encoding='utf-8', newline='') as outfile:
+                        writer = csv.DictWriter(outfile, fieldnames=header)
+                        writer.writeheader()
+                        writer.writerows(rows_to_keep)
+                    print(f"[Validation] Cleaned up {len(errs)} failed records from {os.path.basename(run_file)}.")
+                except Exception as e:
+                    print(f"[Validation] Error cleaning up run summary file {run_file} for retry: {e}")
+
+            # 次に実行すべき失敗タスクのリストを作成
+            next_tasks_list = []
+            for task in tasks_list:
+                t_run, t_y, t_angle = task[0], task[1], task[2]
+                for err in failed_list:
+                    if err['run_idx'] == t_run and abs(err['y'] - t_y) < 0.01 and abs(err['angle'] - t_angle) < 0.05:
+                        next_tasks_list.append(task)
+                        break
+            current_tasks_list = next_tasks_list
+
     finally:
         monitor_running = False
-        # Clean up temporary config files
+        # クリーンアップ
         for f in glob.glob("tools/sweep_build/sim_params_tmp_*.yaml"):
             try:
                 os.remove(f)
             except Exception:
                 pass
 
-    fix_ownership(sweep_start_time)
-
-    print("\nMerging worker results...")
-    for run_idx in range(1, num_runs + 1):
-        if chunk_idx is not None:
-            merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}_chunk{chunk_idx}.csv")
-        else:
-            merged_summary_file = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv")
-        os.makedirs(os.path.dirname(merged_summary_file), exist_ok=True)
-        
-        merged_rows = []
-        header = None
-        if os.path.exists(merged_summary_file):
-            try:
-                with open(merged_summary_file, 'r', encoding='utf-8') as f:
-                    lines = f.readlines()
-                    if lines:
-                        header = lines[0]
-                        merged_rows.extend(lines[1:])
-            except Exception:
-                pass
-
-        pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_{sweep_start_time}_run{run_idx}_*_w*.csv")
-        worker_csvs = glob.glob(pattern)
-        
-        for worker_csv in sorted(worker_csvs):
-            if os.path.exists(worker_csv):
-                try:
-                    with open(worker_csv, 'r', encoding='utf-8') as infile:
-                        lines = infile.readlines()
-                        if lines:
-                            if not header:
-                                header = lines[0]
-                            merged_rows.extend(lines[1:])
-                except Exception as e:
-                    print(f"Warning: Failed to read worker csv {worker_csv}: {e}")
-                
-                try:
-                    os.remove(worker_csv)
-                except Exception as e:
-                    print(f"Warning: Failed to delete worker csv {worker_csv}: {e}")
-        
-        if header and merged_rows:
-            with open(merged_summary_file, 'w', encoding='utf-8') as outfile:
-                outfile.write(header)
-                outfile.writelines(merged_rows)
-
-    if chunk_idx is None:
-        print("\nAveraging results across all runs...")
-        try:
-            final_summary_file = f"sim_results/sweep_{sweep_start_time}/sweep_summary.csv"
-            summary_files = [os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_run{run_idx}.csv") for run_idx in range(1, num_runs + 1)]
-            average_summaries(summary_files, final_summary_file)
-            print(f"Averaged summary successfully saved to: {final_summary_file}")
-        except Exception as e:
-            print(f"Failed to average summaries: {e}")
-    else:
+    if chunk_idx is not None:
         print(f"\nChunk {chunk_idx} execution finished. Results merged into chunk-specific files.")
         print(f"Please copy the directory 'sim_results/sweep_{sweep_start_time}' back to your primary PC and run the merge tool:")
         print(f"  python3 tools/sweep_dist.py merge --sweep-dir sim_results/sweep_{sweep_start_time}")
 
-    # すべてのファイル生成が完了したため、再度所有権を修正
     fix_ownership(sweep_start_time)
-
     log_progress(f"DONE task={total_runs_tasks} y=- angle=- status=SWEEP_COMPLETE ts={datetime.datetime.now().isoformat()}")
     print("\nSweep completed! Restoring original config...")
     shutil.copy2(BACKUP_PATH, CONFIG_PATH)

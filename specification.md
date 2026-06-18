@@ -16,6 +16,7 @@
 | 2026/05/15 | ver 7.0    | カスタムモデルの追加要件（SDF記述ルール）の明文化、タイヤの空転による誤差を排除するGround Truthオドメトリ（`OdometryPublisher`）の採用、`VelocityControl`を用いた物理干渉なしの厳密な加速度制御の導入、複数アンテナ搭載時のロギング終了判定の修正、およびGazebo初期化時の座標ズレを自動修正する「初期位置検証・自己補正機能」の追加 |
 | 2026/05/21 | ver 8.0    | nominal RSSIヒートマップ事前計算に基づく車載アンテナのフィードフォワード制御ポリシー（`feedforward_optimal`）の追加、ロギングレベル5（ヒートマップ出力＋制御ログ）の導入、およびログ保存ディレクトリの3階層フォルダリング（`comms/`, `control/`, `heatmap/`）によるカプセル化（可視性向上）の実装 |
 | 2026/06/08 | ver 9.0    | メインローブフィルタリング機能の追加（ROSパラメータ `filter_main_lobe` およびアンテナ境界設定による足切り制御）、C++およびPythonのアンテナパーサーへのヌル点自動検出とメインローブ判定の移植、ならびに事前ヒートマップ（LUT）生成への連動を実装 |
+| 2026/06/18 | ver 10.0   | UGV制御・通信計算のGazebo C++システムプラグイン（`TxControllerPlugin`）移行に伴うROS 2ノード処理の集約、物理演算周期（`physics_max_step_size`）との同期、`feedforward_optimal` ポリシーにおける複数アンテナの同時割り当ておよび最大同時ペア数（`ff_max_pairs`）制限機能の追加、ログ集約ノード（`sim_logger_node.py`）の集計再計算ロジックへのリファクタリングを記述 |
 
 ---
 
@@ -34,7 +35,7 @@ Gazebo Simで駆動する複数台の移動車両と固定基地局間の通信�
 | **ROS 2**        | ディストリビューション | **Humble Hawksbill (LTS)**          | サポート期間: 2027年5月まで。                    |
 | **シミュレータ** | 種類                   | **Gazebo Sim (Harmonic)**           | ROS 2との連携、将来性を重視。                    |
 | **開発環境**     | コンテナ               | **Docker** (推奨)                   | 環境の再現性、GUI/CUI切り替えをサポート。        |
-| **実装言語**     | 主言語                 | **Python 3**                        | 通信計算（数理モデル）の柔軟性と開発速度を優先。 |
+| **実装言語**     | 主言語                 | **Python 3** / **C++**              | 実行制御や集計は Python 3、物理・通信のコアシミュレーションは C++ プラグインで実装。 |
 
 ---
 
@@ -119,20 +120,32 @@ ros2-gazebo-comms-sim/
 │       ├── meshes/
 │       └── thumbnails/
 │
-├── comms_sim_pkg/                 # ROS 2パッケージ
+├── comms_sim_pkg/                 # ROS 2 / Gazebo パッケージ
 │   ├── CMakeLists.txt
 │   ├── package.xml
 │   ├── setup.py
 │   │
-│   ├── comms_sim_pkg/             # Pythonモジュール
+│   ├── include/comms_sim_pkg/     # C++ ヘッダー
+│   │   ├── antenna_pattern_parser.hpp
+│   │   ├── comms_calculator.hpp
+│   │   └── comms_node.hpp
+│   │
+│   ├── src/                       # C++ ソースコード（GazeboシステムプラグインおよびROS2 C++ノード）
+│   │   ├── TxControllerPlugin.cc  # 物理追従 + 通信品質計算/制御/ログ保存 Gazebo プラグイン
+│   │   ├── antenna_pattern_parser.cpp
+│   │   ├── comms_calculator.cpp
+│   │   └── comms_node.cpp         # ROS 2 C++ 通信ノード（C++プラグイン非使用時のフォールバック用）
+│   │
+│   ├── comms_sim_pkg/             # Pythonモジュール（制御およびロギングノード）
 │   │   ├── __init__.py
-│   │   ├── comms_node.py          # 通信シミュレータノード
-│   │   ├── comms_calculator.py    # 通信品質計算エンジン
-│   │   ├── antenna_parser.py      # アンテナパターン処理
-│   │   ├── link_controller_node.py# 集中通信アクセス調停（スケジュール）ノード
-│   │   ├── link_scheduling_strategy.py # スケジュール戦略パターン（RSSI優先等）
-│   │   ├── sim_logger_node.py     # ログ集約・CSV自動保存ノード
-│   │   └── tx_controller_node.py # TX制御ノード
+│   │   ├── antenna_parser.py      # アンテナパターン処理（Python版）
+│   │   ├── comms_calculator.py    # 通信品質計算エンジン（Python版）
+│   │   ├── comms_node.py          # 通信シミュレータノード（Python版）
+│   │   ├── link_controller_node.py# 集中通信アクセス調停ノード（Python版）
+│   │   ├── link_scheduling_strategy.py # スケジュール戦略（Python版）
+│   │   ├── sim_logger_node.py     # ミッション完了監視、ログ読み込み＆統計サマリー集計・保存
+│   │   ├── sim_ready_gate_node.py # 全車両の初期化・準備完了を一斉スタート同期するゲートノード
+│   │   └── tx_controller_node.py # TX制御ノード（Python版）
 │   │
 │   ├── launch/                    # 起動ファイル
 │   │   └── sim_launch.py          # メインランチファイル
@@ -147,14 +160,14 @@ ros2-gazebo-comms-sim/
 │       └── CommsQuality.msg       # 通信品質メッセージ
 │
 ├── log/                           # colcon/実行ログ
-├── sim_results/                   # CSVログ出力ディレクトリ（実装の出力先）
-│   └── sweep_<sweep_timestamp>/   # スイープ全体の実行ログフォルダ（単一実行時は run_<run_timestamp>）
-│       ├── sweep_summary.csv      # スイープ全体のサマリーCSV（または sweep_summary_run*.csv）
+├── sim_results/                   # CSVログ出力ディレクトリ
+│   └── sweep_<sweep_timestamp>/   # スイープ全体の実行ログフォルダ
+│       ├── sweep_summary.csv      # スイープ全体のサマリーCSV
 │       └── runs/                  # 各個別シミュレーションランの結果
 │           └── run_<run_idx>_y<Y>_a<ANGLE>/ # 個別ランのパラメータフォルダ
-│               ├── comms/         # 通信品質関連の時系列データ ({vehicle_name}_connected.csv / {vehicle_name}_full.csv)
-│               ├── control/       # 制御およびハンドオーバーイベントデータ (events.csv, feedforward_log.csv)
-│               └── heatmap/       # アンテナ制御用事前計算ヒートマップ (rssi_heatmap.csv)
+│               ├── comms/         # 通信品質関連の時系列データ (C++プラグインが直接保存)
+│               ├── control/       # 制御およびハンドオーバーイベントデータ
+│               └── heatmap/       # アンテナ制御用事前計算ヒートマップ
 │
 ├── docker-compose.yml             # Docker Compose設定
 ├── Dockerfile                     # Dockerイメージ定義
@@ -335,12 +348,13 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 | `simulation.logging_level` | int | 5 | ログ記録レベル (1〜5)。<br>1: サマリーのみ<br>2: サマリー + イベントログ<br>3: サマリー + イベント + 時系列 (CONNECTEDのみ)<br>4: サマリー + イベント + 時系列 (常時)<br>5: サマリー + イベント + 時系列 (常時) + アンテナ制御ログ + ヒートマップ |
 | `simulation.headless` | bool | true | ヘッドレスモード (true: GUIなし, false: GUIあり)。 |
 | `simulation.real_time_factor` | float | 5.0 | リアルタイム倍率。 |
+| `simulation.physics_max_step_size` | float | 0.0001 | 物理演算の最大ステップサイズ [s]。通信品質計算および車両制御のサンプリング同期基準となる。 |
 
 #### 通信シミュレータノードパラメータ
 
 | パラメータ                          | 型             | デフォルト値                                  | 説明                                                           |
 | :---------------------------------- | :------------- | :-------------------------------------------- | :------------------------------------------------------------- |
-| `sampling_rate`                     | float          | 1000.0                                        | 通信計算の更新頻度 [Hz]。                                      |
+| `sampling_rate` (廃止)               | float          | -                                             | C++プラグイン移行に伴い廃止（物理ステップに同期）。              |
 | `tx_power`                          | float          | -7.0                                          | 送信電力 [dBm]。                                               |
 | `noise_variance`                    | float          | 1.0                                           | AWGNの分散値 [dB]。                                            |
 | `mcs_table_path`                    | string         | `/workspace/config/MCStable.csv`              | MCSテーブルCSVファイルへのパス。                               |
@@ -368,6 +382,7 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 | :--------------------- | :----- | :------------------------ | :----------------------------------------------------------------------- |
 | `scheduling_policy`    | string | `physical_score_priority` | スケジューリングポリシー。(`sequential`, `round_robin`, `rssi_priority`, `geometric_beam_priority`, `physical_score_priority`, `geometric_weighted`, `feedforward_optimal`) |
 | `heatmap_resolution_m` | float  | 0.2                       | 軌道上の事前計算サンプリング解像度 [m] (`feedforward_optimal` または `logging_level >= 5` で有効)。 |
+| `ff_max_pairs`         | int    | -1                        | `feedforward_optimal` ポリシーにおける最大同時通信アンテナペア数（`-1` で全ペア使用）。 |
 | `time_slot_duration_s` | float  | 10.0                      | `round_robin` 指定時のタイムスロット長 [s]。                             |
 | `rssi_threshold`       | float  | -75                       | `rssi_priority` 指定時の最低RSSI閾値 [dBm]。                             |
 | `beam_gain_threshold`  | float  | 5.0                       | 幾何学ベースポリシー時のアンテナゲイン足切り閾値 [dBi]。                 |
@@ -391,9 +406,10 @@ DISCONNECTED → ESTABLISHING → CONNECTED
 
 ## 7. TX制御とシミュレーションシナリオ
 
-### 7.1. TXの動作 (`tx_controller_node`)
+### 7.1. TXの動作 (`TxControllerPlugin`)
 
-- **経路設定**: TXは、設定ファイル (`sim_params.yaml`) から読み込んだ**マルチウェイポイントリスト**を順次追従する。（※最新版では5台のTXが近接・高密度で走行するシナリオを設定）
+- **経路設定**: TXは、設定ファイル (`sim_params.yaml`) から読み込んだ**マルチウェイポイントリスト**を順次追従する。
+- **物理・制御エンジンのC++統合**: 以前は独立した Python ノード `tx_controller_node.py` で行っていた UGV の軌道制御（ヘディング追従、PID、加速度制限など）は、現在すべて C++ の `TxControllerPlugin` 上で実行される。これにより物理モデルへの直接的な力/速度の反映がミリ秒未満のステップ精度で行われる。
 - **初期位置検証と自己補正**: 起動直後、Gazeboのスポーン処理による遅延や物理エンジンの荒ぶりが原因で発生する「スポーン座標と実際のオドメトリ座標のズレ」を自動検知する。ズレが10m以上の場合は異常とみなし、ワールド座標系のオフセットを動的に再計算することで、シミュレーションの破綻を未然に防ぐ。
 - **区間速度制御**: 各ウェイポイントは目標直線速度 (`V`) を持ち、TXはその区間の目標速度を維持するように走行する。
 - **スリップ防止（加速度制御）**: 高速走行（50km/h等）時の急加速によるタイヤの空転やオドメトリ誤差を防ぐため、`max_acceleration` により速度指令（`/cmd_vel`）の変化率に制限をかける。
@@ -424,15 +440,15 @@ tx_controller_node:
 
 ## 8. ログ出力仕様
 
-`comms_simulator_node` は収集したデータをCSV形式で出力する。
+シミュレーション中の通信ログおよび制御ログは、以下の二段階のプロセスで安全・確実に保存および集計される。
 
-| 項目                 | 詳細                                                                                                                                                                       |
-| :------------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **保存ノード**       | 専用の `sim_logger_node.py` が担当する。`logging_level` に応じて出力データを制御する。                                                                                     |
-| **出力タイミング**   | 全車両のミッション完了通知（`/mission_complete`）が揃った時、またはプロセス終了・終了割込時（`atexit`フック）。                                                                                  |
+| 項目 | 詳細 |
+| :--- | :--- |
+| **保存エンジン** | コアログ（通信品質時系列、イベント、フィードフォワード制御、ヒートマップ）は、**`TxControllerPlugin` (C++) が直接ディスクへ高速書き込み**を行う。これによりROSトピックの詰まりや損失の影響を回避する。<br>統計サマリー（`sweep_summary.csv`）は、全車両のミッション完了を検知した **`sim_logger_node.py` (Python) がC++出力のCSVを直接ロードし、データ欠損のない正確な数値を再集計・追記**して保存する。 |
+| **出力タイミング** | 各車両プラグイン：設定されたウェイポイントを完走した（ミッション完了）タイミング、またはシミュレーション終了時。<br>`sim_logger_node`：全車両のミッション完了通知（`/mission_complete`）が揃ってから約1秒後（ファイル書き込み猶予時間）。 |
 | **出力ディレクトリ** | `/workspace/sim_results/`（コンテナ内の所有権はホストマウント権限に自動追従して可読・編集可能化される。スイープ実行時：`sim_results/sweep_<sweep_timestamp>/`、単一実行時：`sim_results/run_<timestamp>/`） |
 | **ファイル出力形式** | 3階層フォルダリング（`comms/`, `control/`, `heatmap/`）により整理して出力。ファイル名から重複するタイムスタンプを排除。<br>- **サマリー**: `sweep_summary.csv` または `sweep_summary_run*.csv`<br>- **通信時系列**: `comms/{vehicle_name}_connected.csv` (`logging_level` 3) または `comms/{vehicle_name}_full.csv` (`logging_level` 4以上)<br>- **イベント**: `control/events.csv` (`logging_level` 2以上)<br>- **制御ログ**: `control/feedforward_log.csv` (`logging_level` 5のみ)<br>- **ヒートマップ**: `heatmap/rssi_heatmap.csv` (`logging_level` 5のみ) |
-| **時間軸の起点**     | 各車両の `/cmd_vel` メッセージを監視し、**いずれかの車両が最初に動き出した瞬間**を `time_s = 0.0` とする。また、**各車両ごとの個別開始時間**も `vehicle_time_s = 0.0` として計算される。距離への換算を容易にするための仕様。 |
+| **時間軸の起点**     | プラグインおよびノードが車両の動き出しを監視し、**いずれかの車両が最初に動き出した瞬間**を `time_s = 0.0` とする。また、**各車両ごとの個別開始時間**も `vehicle_time_s = 0.0` として計算される。距離への換算を容易にするための仕様。 |
 
 ### CSV出力項目
 
@@ -611,7 +627,7 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 
 ---
 
-**Document Version**: 9.0<br>
-**Last Updated**: 2026年06月08日<br>
+**Document Version**: 10.0<br>
+**Last Updated**: 2026年06月18日<br>
 **Status**: Active Development
 

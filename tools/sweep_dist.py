@@ -23,9 +23,10 @@ from lib.sweep_config import (
     NUM_RUNS,
     TASK_TIMEOUT_SEC,
     SWEEP_REAL_TIME_FACTOR,
-    ANGLES_DEG
+    ANGLES_DEG,
+    CONFIG_PATH
 )
-from lib.sweep_data import average_summaries
+from lib.sweep_data import average_summaries, validate_sweep_summary
 
 def fix_ownership(sweep_dir):
     is_docker = os.path.exists('/.dockerenv')
@@ -146,7 +147,7 @@ def handle_split(args):
         print(f"  PC {i+1}: python3 tools/sweep_sim.py --manifest {dist_dir}/manifest_chunk_{i}.json")
 
 def handle_merge(args):
-    sweep_dir = os.path.abspath(os.path.expanduser(os.path.expandvars(args.sweep_dir)))
+    sweep_dir = args.sweep_dir
     if not sweep_dir:
         print("Error: Please specify the --sweep-dir path.")
         sys.exit(1)
@@ -255,6 +256,30 @@ def handle_merge(args):
     except Exception as e:
         print(f"Error during averaging: {e}")
         
+    # Run data integrity validation on the merged output
+    print("\nChecking data integrity of merged sweep results...")
+    is_valid, failed_list = validate_sweep_summary(sweep_dir, CONFIG_PATH, Y_POSITIONS, ANGLES_DEG, num_runs)
+    report_path = os.path.join(sweep_dir, "validation_report.txt")
+    if not is_valid:
+        print(f"\n[Validation] ⚠️ WARNING: Found {len(failed_list)} missing or invalid records!")
+        try:
+            with open(report_path, 'w', encoding='utf-8') as rf:
+                rf.write("=== SWEEP SUMMARY DATA INTEGRITY REPORT ===\n")
+                rf.write(f"Timestamp: {datetime.datetime.now().isoformat()}\n")
+                rf.write(f"Total anomalies/missing records: {len(failed_list)}\n\n")
+                for idx, err in enumerate(failed_list):
+                    rf.write(f"#{idx+1}: Run {err['run_idx']}, Y={err['y']}, Angle={err['angle']} -> Reason: {err['reason']}\n")
+            print(f"[Validation] Detailed report written to: {report_path}")
+        except Exception as e:
+            print(f"[Validation] Failed to write report: {e}")
+    else:
+        print("\n[Validation] ✅ Data integrity check: PASSED (All records complete and valid).")
+        if os.path.exists(report_path):
+            try:
+                os.remove(report_path)
+            except Exception:
+                pass
+
     fix_ownership(sweep_dir)
     print("\nMerge completed successfully!")
 

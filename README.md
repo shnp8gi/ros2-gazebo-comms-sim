@@ -4,20 +4,23 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（TX/SUV）と固�
 
 ## 📋 概要
 
-本シミュレータは、Gazebo Sim上で駆動する移動車両と固定基地局間の通信品質（RSSI/スループット）を、数理モデルを用いてシミュレーションします。
+本シミュレータは、Gazebo Sim上で駆動する移動車両と固定基地局間の通信品質（RSSI/スループット）を、ミリ秒未満の物理計算ステップに同期させてシミュレーションします。
 
 ### 主な機能
 
-- **リアルタイム通信品質計算**: RSSI、スループット、パスロスを動的に計算
-- **MCSテーブルベースのスループット推定**: CSVファイルから読み込み、ステップ関数によるMCSインデックス選択
-- **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始
-- **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）
-- **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（Strategyパターンで差し替え可能）
-- **マルチ車両・高密度・マルチウェイポイント追従**: 複数台のTXによる同期待機、区間速度制御（スリップ防止用加速度制御対応）、および自動経路追従
-- **集中スケジューリング**: 基地局側で通信権（Grant）を1台ずつ排他的に付与。RSSI優先、アンテナアライメント（幾何学スコア）、推定受信電力ベースに加え、事前計算されたnominal RSSIヒートマップに基づくフィードフォワード制御ポリシー（`feedforward_optimal`）を搭載。
-- **プロアクティブハンドオーバーと自律的権限譲渡**: 通信データ上限到達時の自律的な譲渡のほか、リンク切断（DISCONNECTED）時に即座に最適な幾何学スコアを持つ後続車両へ通信権を強制切替する機能
-- **GPUアクセラレーション対応**: Docker Composeでの NVIDIA GPU リソース割り当てにより、GUIモードでの高速なGazeboレンダリングをサポート
-- **ミッション完了時の自動終了とCSV保存**: 全車両のミッション完了を検知して安全に自動シャットダウン。ロギングレベル1〜5に対応し、3階層のフォルダ構造（`comms/`, `control/`, `heatmap/`）で結果を出力。
+- **物理エンジン・通信計算のC++統合**: 移動車両（UGV）の追従制御、および無線伝搬路計算を Gazebo システムプラグイン (`TxControllerPlugin`) に移植し、ROS 2 メッセージングによるジッターやパケット損失を完全に排除。
+- **物理ステップサイズ (`physics_max_step_size`) 同期**: 計算周期を Gazebo の物理更新周期（例：10kHz）と完全に同期。
+- **リアルタイム通信品質計算**: RSSI、スループット、パスロスを動的に計算。
+- **MCSテーブルベースのスループット推定**: CSVファイルから読み込み、ステップ関数によるMCSインデックス選択。
+- **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始。
+- **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）。
+- **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（C++のStrategyパターンで差し替え可能）。
+- **マルチ車両・高密度・マルチウェイポイント追従**: 複数台のTXによる同期待機、C++プラグインによる厳密な区間速度制御（スリップ防止用加速度制御対応）、および自動経路追従。
+- **集中スケジューリングとマルチアンテナ・ペアリング**: 基地局側で通信アクセス権（Grant）を排他的に付与。RSSI優先、幾何学スコア、推定受信電力ベースに加え、事前計算された nominal RSSI ヒートマップに基づくフィードフォワード制御ポリシー（`feedforward_optimal`）を搭載。
+- **複数ペア同時通信**: `feedforward_optimal` ポリシーにおいて、同時通信に使用する最大アンテナペア数（`ff_max_pairs`）を設定可能。デフォルトでは利用可能な全ペアで並行通信をサポート。
+- **プロアクティブハンドオーバーと自律的権限譲渡**: 通信データ上限到達時の自律的な譲渡のほか、リンク切断（DISCONNECTED）時に即座に最適な幾何学スコアを持つ後続車両へ通信権を強制切替する機能。
+- **GPUアクセラレーション対応**: Docker Composeでの NVIDIA GPU リソース割り当てにより、GUIモードでの高速なGazeboレンダリングをサポート。
+- **ミッション完了時の自動終了と集計**: 全車両のミッション完了を検知して安全に自動終了。プラグインがログCSVを直接保存した後、`sim_logger_node.py` がファイルを直接パースして正確なサマリー（`sweep_summary.csv`）を再集計・保存。
 
 ## 🛠️ 技術スタック
 
@@ -26,7 +29,7 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（TX/SUV）と固�
 | OS           | Ubuntu 22.04 LTS (Docker) |
 | ROS 2        | Humble Hawksbill          |
 | シミュレータ | Gazebo Sim (Harmonic)     |
-| 言語         | Python 3                  |
+| 言語         | Python 3 / C++            |
 | 開発環境     | Docker / Docker Compose (NVIDIA GPU対応) |
 
 ## 📁 ディレクトリ構造
@@ -49,22 +52,31 @@ ros2-gazebo-comms-sim/
 │       ├── model.sdf
 │       └── meshes/
 │
-├── comms_sim_pkg/                   # ROS 2パッケージ（ノード/launch）
-│   ├── comms_sim_pkg/              # Pythonモジュール
-│   │   ├── comms_node.py          # 通信シミュレータノード（/comms/quality publish）
-│   │   ├── comms_calculator.py    # 通信品質計算（RSSI/Throughput）
-│   │   ├── antenna_parser.py      # アンテナパターン処理（E/H面CSV補間）
-│   │   ├── link_controller_node.py# 基地局側調停ノード（アクセス許可付与、フィードフォワード制御、LUT事前計算）
-│   │   ├── link_scheduling_strategy.py # スケジューリング戦略（feedforward_optimal等）
-│   │   ├── sim_logger_node.py     # ログノード（ミッション監視、フォルダ分け保存、サマリー集計）
-│   │   └── tx_controller_node.py # TX制御ノード（/cmd_vel publish）
+├── comms_sim_pkg/                   # ROS 2 / Gazebo パッケージ
+│   ├── include/comms_sim_pkg/       # C++ ヘッダー
+│   │   ├── antenna_pattern_parser.hpp
+│   │   ├── comms_calculator.hpp
+│   │   └── comms_node.hpp
+│   ├── src/                         # C++ ソースコード
+│   │   ├── TxControllerPlugin.cc    # 制御、通信、調停、ログ書き込みを統合したGazeboプラグイン
+│   │   ├── antenna_pattern_parser.cpp
+│   │   ├── comms_calculator.cpp
+│   │   └── comms_node.cpp           # ROS 2 C++ノード (C++プラグイン非使用時のフォールバック用)
+│   ├── comms_sim_pkg/               # Pythonモジュール（制御およびロギングノード）
+│   │   ├── antenna_parser.py
+│   │   ├── comms_calculator.py
+│   │   ├── comms_node.py
+│   │   ├── link_controller_node.py
+│   │   ├── link_scheduling_strategy.py
+│   │   ├── sim_ready_gate_node.py   # 全プラグイン準備完了を同期してシミュレーションを開始するゲート
+│   │   ├── sim_logger_node.py       # ミッション完了時のログ収集、サマリー集計・CSV保存
+│   │   └── tx_controller_node.py
 │   ├── launch/
 │   │   └── sim_launch.py          # Gazebo起動/スポーン/ブリッジ/ノード起動
 │   ├── resource/
 │   │   └── minimal_world.sdf
 │   ├── CMakeLists.txt
-│   ├── package.xml
-│   └── setup.py
+│   └── package.xml
 │
 ├── comms_sim_msgs/                   # メッセージ定義パッケージ
 │   └── msg/
@@ -372,6 +384,10 @@ python3 tools/sweep_sim.py --manifest manifest_chunk_X.json
 - ※結果は `sim_results/sweep_{スイープID}/` 内に出力され、ファイル名は `sweep_summary_run{run_idx}_chunk{chunk_idx}.csv` のように他のPCと衝突しない名前で出力されます。
 - ※実行途中で中断した場合も、`--resume` オプションで再開可能です。
 
+> #### 実行環境に関する注意 
+> sv12以外のサーバーで実行する場合、処理落ち等の影響によりデータ欠損が発生し、正常にデータを取得できない可能性があります。実行環境には十分ご注意ください。
+
+
 #### ③ データの収集と統合 (メインPC)
 1. 各PCでの実行完了後、生成されたフォルダ（例: `sim_results/sweep_{スイープID}/`）内のファイルをすべてメインPCの同じフォルダにコピーしてまとめます（個別の詳細データが入る `runs/` ディレクトリ配下も名前が衝突しないように設計されています）。
 2. メインPCで結合先のフォルダパスを指定して、以下のコマンドを実行します。
@@ -398,14 +414,14 @@ simulation:
                               # 5: サマリー + イベント + 時系列 (常時記録) + アンテナ制御ログ + ヒートマップ
   headless: value             # ヘッドレスモード (true: GUIなし, false: GUIあり) (default: true)
   real_time_factor: value     # リアルタイム倍率 (default: 5.0)
+  physics_max_step_size: value # 物理演算の最大ステップサイズ [s]。通信品質計算周期と完全同期 (default: 0.0001)
 ```
 
-#### 通信シミュレーションパラメータ
+#### 通信シミュレーションパラメータ（プラグイン内ロード）
 
 ```yaml
 comms_simulator_node:
   ros__parameters:
-    sampling_rate: value # 計算頻度 [Hz] (default: 100.0)
     noise_variance: value # AWGN分散 [dB] (default: 0.0)
     e_plane_path: value # E面アンテナCSV (default: "/workspace/config/e_plane.csv")
     h_plane_path: value # H面アンテナCSV (default: "/workspace/config/h_plane.csv")
@@ -423,13 +439,14 @@ comms_simulator_node:
     tx_power: value # 送信電力 [dBm] (default: -7.0)
 ```
 
-#### リンク制御パラメータ（集中スケジューラ）
+#### リンク制御パラメータ（集中スケジューラ / プラグイン内ロード）
 
 ```yaml
 link_controller_node:
   ros__parameters:
     scheduling_policy: value # スケジューリングポリシー (例: sequential, round_robin, rssi_priority, geometric_beam_priority, physical_score_priority, geometric_weighted, feedforward_optimal)
     heatmap_resolution_m: value # 軌道上の事前計算サンプリング解像度 [m] (feedforward_optimal または logging_level >= 5 で有効) (default: 0.2)
+    ff_max_pairs: value # 同時通信に使用する最大アンテナペア数 (-1で全ペア使用) (default: -1)
     time_slot_duration_s: value # round_robin時のスロット長 [s] (default: 10.0)
     rssi_threshold: value # rssi_priority時の閾値 [dBm] (default: -75)
     beam_gain_threshold: value # geometric_beam_priority用の最小ゲイン閾値 [dBi] (default: 5.0)
@@ -439,21 +456,18 @@ link_controller_node:
 
 ※ 通信距離はワールド座標で計算されます。`/odom`（相対座標）からワールド座標へ変換するため、通常は `spawn_entities.suv.pose` と同じ値を指定します（launch が自動で渡します）。
 
-#### TX制御パラメータ
+#### UGV制御・追従パラメータ（プラグイン内ロード）
 
 ```yaml
-tx_controller_node:
-  ros__parameters:
-    waypoints:
-      - [value, value, value, value] # [X, Y, Z, V] (ワールド座標)
-      # ...
-    waypoint_tolerance: value # 到達判定距離 [m] (default: 2.0)
-    control_rate: value # 制御ループ周波数 [Hz] (default: 10.0)
-    max_angular_velocity: value # 最大角速度 [rad/s] (default: 1.0)
-    heading_gain: value # 方向制御ゲイン (default: 1.5)
+tx_controller_common:
+  waypoint_tolerance: value # ウェイポイント到達判定距離 [m] (default: 3.0)
+  control_rate: value # 制御ループ周波数 [Hz] (default: 100.0)
+  max_angular_velocity: value # 最大角速度 [rad/s] (default: 0.3)
+  heading_gain: value # 方向制御ゲイン (default: 0.6)
+  max_acceleration: value # 最大加速度 [m/s^2] (default: 10.0)
 ```
 
-> **Note**: `waypoints` はワールド座標として扱われます。`sim_launch.py` は `spawn_entities.suv.pose` を元に `spawn_pose` を自動生成して `tx_controller_node` に渡し、`/odom` とワールド座標の差分を補正します。
+> **Note**: `vehicles` 以下の各車両パラメータに定義される `waypoints`（ワールド座標 `[X, Y, Z, V]`）を順次追従します。
 
 #### エンティティスポーン設定
 
