@@ -46,11 +46,14 @@ from lib.sweep_config import (
     PROGRESS_LOG,
     CONFIG_PATH,
     BACKUP_PATH,
-    ANGLES_DEG
+    ANGLES_DEG,
+    load_sweep_config
 )
+import lib.sweep_config as sweep_config
 
 from lib.sweep_kinematics import estimate_expected_duration
 from lib.sweep_data import average_summaries, get_completed_tasks, validate_sweep_summary
+from lib.scenario_loader import load_scenario, generate_sim_params, write_sim_params
 
 # 動的プロファイリングがまだ十分に機能していない場合の初期想定負荷パラメータ
 DEFAULT_CPU_PER_SIM = 1.5
@@ -556,10 +559,13 @@ def apply_dither(content, dither_x):
 
 def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, base_station_yaw_deg=-90.0, max_concurrency=4, num_runs=1):
     if len(task_info) == 5:
-        run_idx, y, angle_deg, overall_task_no, local_task_no = task_info
+        run_idx, task_vars, overall_task_no, local_task_no = task_info[:4]
     else:
-        run_idx, y, angle_deg, overall_task_no = task_info
+        run_idx, task_vars, overall_task_no = task_info[:3]
         local_task_no = overall_task_no
+        
+    y = task_vars.get('rx_y_position', getattr(sweep_config, 'Y_POSITIONS', [3.0])[0])
+    angle_deg = task_vars.get('rx_antenna_yaw', getattr(sweep_config, 'START_ANGLE', 0.0))
     
     world_yaw = math.radians(angle_deg) - math.pi
     entity_yaw = math.radians(base_station_yaw_deg)
@@ -573,10 +579,10 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
  
     pct = (local_task_no - 1) / total_runs_tasks * 100
     print(f"\n=======================================================")
-    print(f"[Worker {worker_id}] [Run {run_idx}/{NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) Y = {y} m, Angle = {angle_deg} deg")
+    print(f"[Worker {worker_id}] [Run {run_idx}/{NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) " + ", ".join([f"{k}={v}" for k,v in task_vars.items()]))
     print(f"=======================================================")
  
-    t_expected = estimate_expected_duration(CONFIG_PATH, rtf)
+    t_expected = None
     
     # Use the user-defined timeout. Under high parallelization, actual simulation RTF drops
     # significantly below the target RTF. Terminating via a dynamic expected time is too aggressive.
@@ -627,61 +633,80 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                     last_wait_log_time = now_time
                 time.sleep(2.0)
 
-            with open(CONFIG_PATH, 'r', encoding='utf-8') as f:
-                content = f.read()
-
             # Apply spatial dithering to UGV starting pose/waypoints if running multiple loops
+            dither_x = 0.0
             if num_runs > 1:
-                wp_matches = re.findall(r'-\s*\[\s*([-\d\.]+),\s*([-\d\.]+),\s*([-\d\.]+),\s*([\d\.]+)\s*\]', content)
-                speed = float(wp_matches[0][3]) if wp_matches else 83.33
-                dx = speed * 0.001
+                # Approximate dithering based on constant speed 83.33 m/s for Shinkansen (as fallback)
+                dx = 83.33 * 0.001
                 dither_x = (((run_idx - 1) / num_runs) - 0.5) * dx
-                content = apply_dither(content, dither_x)
-     
-            content = re.sub(r'\n\s*summary_filename:\s*["\']?[^"\']*["\']?', '', content)
-            content = re.sub(r'\n\s*output_subdir:\s*["\']?[^"\']*["\']?', '', content)
-            content = re.sub(r'\n\s*y_position:\s*[-\d\.]+', '', content)
-            content = re.sub(r'\n\s*angle_deg:\s*[-\d\.]+', '', content)
-            content = re.sub(
-                r'(simulation:)', 
-                rf'\1\n  summary_filename: "{summary_filename}"\n  output_subdir: "sweep_{sweep_start_time}"\n  y_position: {y}\n  angle_deg: {angle_deg}', 
-                content
-            )
-     
-            content = re.sub(r'headless:\s*false', 'headless: true', content)
-            content = re.sub(r'real_time_factor:\s*[\d\.]+', f'real_time_factor: {rtf}', content)
-     
-            content = re.sub(
-                r'(antenna\w*:\s*.*?pose:\s*\[\s*)([-\d\.]+),\s*[-\d\.]+,\s*([-\d\.]+),\s*([-\d\.]+),\s*([-\d\.]+),\s*([-\d\.]+)(\s*\])',
-                rf'\g<1>\g<2>, {y}, \g<3>, \g<4>, \g<5>, {entity_yaw:.4f}\g<7>',
-                content,
-                flags=re.DOTALL
-            )
-     
-            content = re.sub(
-                r'(antenna_relative_rpy:\s*\[\s*[-\d\.]+,\s*[-\d\.]+,\s*)[-\d\.]+(\s*\])',
-                rf'\g<1>{antenna_yaw:.4f}\g<2>',
-                content
-            )
-     
-            # [-π, π] に正規化して Gazebo/SDF に渡す値を明確にする
-            ugv_antenna_yaw = math.atan2(math.sin(world_yaw - math.pi), math.cos(world_yaw - math.pi))
-            for ant_name in ["shinkansen_front", "shinkansen_mid", "shinkansen_rear"]:
-                content = re.sub(
-                    rf'(name:\s*"{ant_name}".*?relative_rpy:\s*\[\s*[-\d\.]+,\s*[-\d\.]+,\s*)[-\d\.]+(\s*\])',
-                    rf'\g<1>{ugv_antenna_yaw:.4f}\g<2>',
-                    content,
-                    flags=re.DOTALL
-                )
-     
-            with open(tmp_config_path, 'w', encoding='utf-8') as f:
-                f.write(content)
+                
+            # Define overrides
+            overrides = [
+                {'role': 'rx', 'field': 'pose[1]', 'value': y},
+                {'role': 'rx', 'field': 'antennas.*.relative_rpy[2]', 'value': antenna_yaw},
+                {'role': 'rx', 'field': 'pose[5]', 'value': entity_yaw}
+            ]
+            
+            # Additional overrides based on global generic configuration
+            if hasattr(sweep_config, 'GENERIC_VARIABLES'):
+                for gv in sweep_config.GENERIC_VARIABLES:
+                    name = gv['name']
+                    if name in ['rx_y_position', 'rx_antenna_yaw']:
+                        continue
+                    if name in task_vars:
+                        target = dict(gv['target'])
+                        target['value'] = task_vars[name]
+                        if 'entity_role' in target:
+                            target['role'] = target.pop('entity_role')
+                        if 'entity_name' in target:
+                            # Keep it as entity_name since scenario_loader uses it directly via ovr.get('entity_name')
+                            pass
+                        overrides.append(target)
+            
+            # Additional overrides based on global sweep configuration
+            if 'global_sweep_data' in globals() and global_sweep_data:
+                scen_path = global_sweep_data.get('scenario', 'config/scenarios/default.yaml')
+            else:
+                scen_path = 'config/scenarios/default.yaml'
+                
+            scenario = load_scenario(scen_path)
+            
+            target_scenario = scenario['scenario'] if 'scenario' in scenario else scenario
+            if 'simulation_overrides' not in target_scenario:
+                target_scenario['simulation_overrides'] = {}
+            target_scenario['simulation_overrides']['summary_filename'] = summary_filename
+            target_scenario['simulation_overrides']['output_subdir'] = f"sweep_{sweep_start_time}"
+            target_scenario['simulation_overrides']['y_position'] = y
+            target_scenario['simulation_overrides']['angle_deg'] = angle_deg
+            target_scenario['simulation_overrides']['headless'] = True
+            target_scenario['simulation_overrides']['real_time_factor'] = rtf
+            
+            # Generate dict
+            config_dict = generate_sim_params(scenario, overrides)
+            
+            # Apply dithering to vehicles manually
+            if dither_x != 0.0 and 'vehicles' in config_dict:
+                for v in config_dict['vehicles']:
+                    if 'pose' in v and len(v['pose']) >= 1:
+                        v['pose'][0] += dither_x
+                    if 'waypoints' in v:
+                        for wp in v['waypoints']:
+                            if len(wp) >= 1:
+                                wp[0] += dither_x
+            
+            write_sim_params(config_dict, tmp_config_path)
+            
+            # Now that tmp_config_path is written, we can estimate duration
+            actual_rtf = config_dict.get('simulation', {}).get('real_time_factor', rtf)
+            t_expected = estimate_expected_duration(tmp_config_path, actual_rtf)
                 
         except Exception as e:
             with active_tasks_lock:
                 active_tasks.pop(worker_id, None)
             print(f"[Worker {worker_id}] Error creating config {tmp_config_path}: {e}")
             log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()}")
+            import traceback
+            traceback.print_exc()
             return False
      
         ros_domain_id = 10 + worker_id
@@ -766,8 +791,10 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         summary_path = os.path.join(os.getcwd(), "sim_results", f"sweep_{sweep_start_time}", summary_filename)
         
         min_allowed_duration = 3.0
+        min_allowed_duration = 3.0
         if t_expected is not None:
             min_allowed_duration = max(3.0, 0.5 * t_expected)
+            print(f"[Worker {worker_id}] Debug: t_expected={t_expected:.2f}, min_allowed={min_allowed_duration:.2f}")
 
         if timed_out:
             is_valid = False
@@ -823,7 +850,17 @@ def main():
     parser.add_argument("--resume", type=str, nargs='?', default=None, const='latest', help="Resume a previous sweep. Without a value, resumes the most recently executed sweep. Optionally specify a timestamp or directory path.")
     parser.add_argument("--no-build", action="store_true", help="Skip automatic colcon build at start")
     parser.add_argument("--manifest", type=str, default=None, help="Path to a JSON manifest file for split sweep execution")
+    parser.add_argument("--sweep-config", type=str, default=None, help="Path to sweep YAML configuration")
     args = parser.parse_args()
+
+    global global_sweep_data
+    global_sweep_data = None
+    if args.sweep_config:
+        print(f"[Sweep Sim] Loading sweep config from {args.sweep_config}")
+        global_sweep_data = load_sweep_config(args.sweep_config)
+    else:
+        # Re-load defaults to get them into global scope cleanly
+        global_sweep_data = load_sweep_config(None)
 
     is_docker = os.path.exists('/.dockerenv')
 
@@ -981,6 +1018,7 @@ def main():
         completed_cache = {}
         for local_idx, task in enumerate(manifest_tasks):
             r_idx = task['run_idx']
+            task_vars = {'rx_y_position': task['y'], 'rx_antenna_yaw': task['angle_deg']}
             y_val = task['y']
             ang_val = task['angle_deg']
             t_no = task['overall_task_no']
@@ -997,30 +1035,41 @@ def main():
             if is_completed:
                 skipped_count += 1
             else:
-                tasks_list.append((r_idx, y_val, ang_val, t_no, local_idx + 1))
+                tasks_list.append((r_idx, task_vars, t_no, local_idx + 1))
         
         total_runs_tasks = len(manifest_tasks)
     else:
         overall_task_no = 1
+        
+        # Build Cartesian product of all GENERIC_VARIABLES
+        import itertools
+        generic_vars = getattr(sweep_config, 'GENERIC_VARIABLES', [])
+        var_names = [v['name'] for v in generic_vars]
+        var_values_lists = [v['values'] for v in generic_vars]
+        combinations = list(itertools.product(*var_values_lists))
+        
         for run_idx in range(1, num_runs + 1):
             completed_set = set()
             if args.resume:
                 completed_set = get_completed_tasks(sweep_dir, run_idx, config_path=CONFIG_PATH)
                 
-            for y in y_positions:
-                for angle_deg in angles_deg:
-                    is_completed = False
-                    for cy, cang in completed_set:
-                        if abs(cy - y) < 0.01 and abs(cang - angle_deg) < 0.05:
-                            is_completed = True
-                            break
-                    
-                    if is_completed:
-                        skipped_count += 1
-                    else:
-                        tasks_list.append((run_idx, y, angle_deg, overall_task_no, overall_task_no))
-                    overall_task_no += 1
-        total_tasks_per_run = len(y_positions) * len(angles_deg)
+            for combo in combinations:
+                task_vars = dict(zip(var_names, combo))
+                y = task_vars.get('rx_y_position', getattr(sweep_config, 'Y_POSITIONS', [3.0])[0])
+                angle_deg = task_vars.get('rx_antenna_yaw', getattr(sweep_config, 'START_ANGLE', 0.0))
+                
+                is_completed = False
+                for cy, cang in completed_set:
+                    if abs(cy - y) < 0.01 and abs(cang - angle_deg) < 0.05:
+                        is_completed = True
+                        break
+                
+                if is_completed:
+                    skipped_count += 1
+                else:
+                    tasks_list.append((run_idx, task_vars, overall_task_no, overall_task_no))
+                overall_task_no += 1
+        total_tasks_per_run = len(combinations)
         total_runs_tasks = total_tasks_per_run * num_runs
 
     log_progress(f"START {datetime.datetime.now().isoformat()} TOTAL={total_runs_tasks} CONCURRENCY={concurrency}")

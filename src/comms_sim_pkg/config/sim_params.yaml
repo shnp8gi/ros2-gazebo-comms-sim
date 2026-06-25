@@ -22,7 +22,7 @@ ros_gz_bridge:
 # シミュレーション設定
 # -----------------------------------------------------------------------------
 simulation:
-  summary_filename: "sweep_summary_20260522_105809_run1.csv"
+  summary_filename: ""
   # ワールドファイルパス
   world_file: "/workspace/comms_sim_pkg/resource/minimal_world.sdf"
 

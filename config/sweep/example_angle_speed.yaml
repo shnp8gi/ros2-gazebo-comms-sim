@@ -1,0 +1,29 @@
+# スイープ設定ファイル例
+sweep:
+  name: "angle_speed_sweep"
+  description: "基地局アンテナ角度と車両速度のスイープ"
+  
+  scenario: "config/scenarios/example_multi_model.yaml"
+  
+  variables:
+    - name: "rx_antenna_yaw"
+      target:
+        entity_role: "rx"
+        field: "antennas.*.relative_rpy[2]"
+      range:
+        start: -45.0
+        end: 45.0
+        step: 5.0
+
+    - name: "suv_speed"
+      target:
+        entity_name: "suv_1"
+        field: "waypoints.*[3]"
+      values: [16.67, 33.33] # 60km/h, 120km/h
+
+  execution:
+    num_runs: 1
+    task_timeout_sec: 300
+    real_time_factor: 5.0
+    max_concurrency: 4
+    base_station_yaw_deg: 0.0

@@ -406,29 +406,27 @@ namespace tx_controller
             if (!direct_params_found && config["spawn_entities"]) {
                 for (auto const& node : config["spawn_entities"]) {
                     std::string key = node.first.as<std::string>();
-                    if (key.find("antenna") != std::string::npos || key.find("Antenna") != std::string::npos) {
-                        auto antenna_cfg = node.second;
-                        if (antenna_cfg["pose"]) {
-                            auto pose = antenna_cfg["pose"].as<std::vector<double>>();
-                            if (pose.size() >= 6) {
-                                this->config_y_pos = pose[1];
-                                double entity_yaw = pose[5];
-                                double entity_yaw_deg = entity_yaw * 180.0 / M_PI;
-                                double raw_yaw = 0.0;
-                                if (antenna_cfg["antenna_relative_rpy"]) {
-                                    auto rel_rpy = antenna_cfg["antenna_relative_rpy"].as<std::vector<double>>();
-                                    if (rel_rpy.size() >= 3) {
-                                        raw_yaw = rel_rpy[2];
-                                    }
+                    auto antenna_cfg = node.second;
+                    if (antenna_cfg["pose"]) {
+                        auto pose = antenna_cfg["pose"].as<std::vector<double>>();
+                        if (pose.size() >= 6) {
+                            this->config_y_pos = pose[1];
+                            double entity_yaw = pose[5];
+                            double entity_yaw_deg = entity_yaw * 180.0 / M_PI;
+                            double raw_yaw = 0.0;
+                            if (antenna_cfg["antenna_relative_rpy"]) {
+                                auto rel_rpy = antenna_cfg["antenna_relative_rpy"].as<std::vector<double>>();
+                                if (rel_rpy.size() >= 3) {
+                                    raw_yaw = rel_rpy[2];
                                 }
-                                double raw_yaw_deg = raw_yaw * 180.0 / M_PI;
-                                double angle_val = std::round(std::fmod(raw_yaw_deg + entity_yaw_deg + 180.0, 360.0) * 10.0) / 10.0;
-                                if (angle_val < 0) angle_val += 360.0;
-                                this->config_angle = angle_val;
                             }
+                            double raw_yaw_deg = raw_yaw * 180.0 / M_PI;
+                            double angle_val = std::round(std::fmod(raw_yaw_deg + entity_yaw_deg + 180.0, 360.0) * 10.0) / 10.0;
+                            if (angle_val < 0) angle_val += 360.0;
+                            this->config_angle = angle_val;
                         }
-                        break;
                     }
+                    break; // Just use the first one as fallback
                 }
             }
             
@@ -513,21 +511,19 @@ namespace tx_controller
             if (config["spawn_entities"]) {
                 for (auto const &node : config["spawn_entities"]) {
                     std::string key = node.first.as<std::string>();
-                    if (key.rfind("antenna_", 0) == 0) {
-                        auto bs_cfg = node.second;
-                        BaseStationInfo bs;
-                        bs.name = key;
-                        auto pose_vec = bs_cfg["pose"].as<std::vector<double>>();
-                        bs.position = Eigen::Vector3d(pose_vec[0], pose_vec[1], pose_vec[2]);
-                        bs.rpy = Eigen::Vector3d(pose_vec[3], pose_vec[4], pose_vec[5]);
-                        
-                        auto offset_vec = bs_cfg["antenna_offset"].as<std::vector<double>>();
-                        bs.antenna_offset = Eigen::Vector3d(offset_vec[0], offset_vec[1], offset_vec[2]);
-                        
-                        auto rel_rpy_vec = bs_cfg["antenna_relative_rpy"].as<std::vector<double>>();
-                        bs.antenna_relative_rpy = Eigen::Vector3d(rel_rpy_vec[0], rel_rpy_vec[1], rel_rpy_vec[2]);
-                        this->base_stations_cfg.push_back(bs);
-                    }
+                    auto bs_cfg = node.second;
+                    BaseStationInfo bs;
+                    bs.name = key;
+                    auto pose_vec = bs_cfg["pose"].as<std::vector<double>>();
+                    bs.position = Eigen::Vector3d(pose_vec[0], pose_vec[1], pose_vec[2]);
+                    bs.rpy = Eigen::Vector3d(pose_vec[3], pose_vec[4], pose_vec[5]);
+                    
+                    auto offset_vec = bs_cfg["antenna_offset"].as<std::vector<double>>();
+                    bs.antenna_offset = Eigen::Vector3d(offset_vec[0], offset_vec[1], offset_vec[2]);
+                    
+                    auto rel_rpy_vec = bs_cfg["antenna_relative_rpy"].as<std::vector<double>>();
+                    bs.antenna_relative_rpy = Eigen::Vector3d(rel_rpy_vec[0], rel_rpy_vec[1], rel_rpy_vec[2]);
+                    this->base_stations_cfg.push_back(bs);
                 }
             }
 
@@ -669,20 +665,18 @@ namespace tx_controller
                         const gz::sim::components::Name *_name) -> bool
                     {
                         std::string name = _name->Data();
-                        if (name.rfind("antenna_", 0) == 0) {
-                            for (auto &bs : this->base_stations_cfg) {
-                                if (bs.name == name) {
-                                    BaseStationInfo bs_info = bs;
-                                    auto poseComp = _ecm.Component<gz::sim::components::Pose>(_ent);
-                                    if (poseComp) {
-                                        gz::math::Pose3d p = poseComp->Data();
-                                        bs_info.position = Eigen::Vector3d(p.Pos().X(), p.Pos().Y(), p.Pos().Z());
-                                        bs_info.rpy = Eigen::Vector3d(p.Rot().Roll(), p.Rot().Pitch(), p.Rot().Yaw());
-                                        Eigen::Vector3d ant_rpy_updated = bs_info.rpy + bs_info.antenna_relative_rpy;
-                                        bs_info.rotmat = this->antenna_parser->rpy_to_rotmat(ant_rpy_updated.x(), ant_rpy_updated.y(), ant_rpy_updated.z());
-                                    }
-                                    this->base_stations.push_back(bs_info);
+                        for (auto &bs : this->base_stations_cfg) {
+                            if (bs.name == name) {
+                                BaseStationInfo bs_info = bs;
+                                auto poseComp = _ecm.Component<gz::sim::components::Pose>(_ent);
+                                if (poseComp) {
+                                    gz::math::Pose3d p = poseComp->Data();
+                                    bs_info.position = Eigen::Vector3d(p.Pos().X(), p.Pos().Y(), p.Pos().Z());
+                                    bs_info.rpy = Eigen::Vector3d(p.Rot().Roll(), p.Rot().Pitch(), p.Rot().Yaw());
+                                    Eigen::Vector3d ant_rpy_updated = bs_info.rpy + bs_info.antenna_relative_rpy;
+                                    bs_info.rotmat = this->antenna_parser->rpy_to_rotmat(ant_rpy_updated.x(), ant_rpy_updated.y(), ant_rpy_updated.z());
                                 }
+                                this->base_stations.push_back(bs_info);
                             }
                         }
                         return true;
@@ -981,8 +975,17 @@ namespace tx_controller
                 ctrl.vehicle_y = pos.y();
                 ctrl.vehicle_yaw = ori.z();
                 // nominal_antenna: LUTの最良ペアのTXアンテナ名
-                ctrl.nominal_antenna = this->lut[this->last_lut_idx].pairs.empty() ? "" : this->lut[this->last_lut_idx].pairs[0].tx_antenna;
-                ctrl.active_antenna = this->vehicle_antennas[this->active_antenna_idx].name;
+                if (!this->lut.empty() && this->last_lut_idx >= 0 && this->last_lut_idx < static_cast<int>(this->lut.size()) && !this->lut[this->last_lut_idx].pairs.empty()) {
+                    ctrl.nominal_antenna = this->lut[this->last_lut_idx].pairs[0].tx_antenna;
+                } else {
+                    ctrl.nominal_antenna = "";
+                }
+                
+                if (this->active_antenna_idx >= 0 && this->active_antenna_idx < static_cast<int>(this->vehicle_antennas.size())) {
+                    ctrl.active_antenna = this->vehicle_antennas[this->active_antenna_idx].name;
+                } else {
+                    ctrl.active_antenna = "";
+                }
                 ctrl.switching_active = (new_active_idx != this->active_antenna_idx);
                 ctrl.last_switch_time_s = this->last_grant_change_time;
                 this->control_logs.push_back(ctrl);

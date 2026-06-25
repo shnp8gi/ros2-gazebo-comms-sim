@@ -148,6 +148,19 @@ def load_yaml_config(yaml_path: str) -> dict:
     try:
         with open(yaml_path, 'r', encoding='utf-8') as f:
             config = yaml.safe_load(f)
+            
+        # Support new scenario format directly from launch
+        if config and 'scenario' in config:
+            import sys
+            workspace_root = get_workspace_root()
+            tools_lib_path = os.path.join(workspace_root, 'tools', 'lib')
+            if tools_lib_path not in sys.path:
+                sys.path.insert(0, tools_lib_path)
+            try:
+                from scenario_loader import generate_sim_params
+                config = generate_sim_params(config)
+            except ImportError as e:
+                print(f"Warning: Could not import scenario_loader for scenario resolution: {e}")
 
         if config is None:
             raise ValueError(
@@ -674,8 +687,8 @@ def launch_setup(context, *args, **kwargs):
     bs_relative_rpys = []
 
     if isinstance(spawn_entities, dict):
-        # 鍵に "antenna" が含まれるものをソートして取得
-        antenna_keys = sorted([k for k in spawn_entities.keys() if 'antenna' in k.lower()])
+        # すべてのエンティティを基地局として取得 (role=rx のものが入っている前提)
+        antenna_keys = sorted(list(spawn_entities.keys()))
         for key in antenna_keys:
             cfg = spawn_entities[key]
             if isinstance(cfg, dict):
@@ -760,68 +773,14 @@ def launch_setup(context, *args, **kwargs):
             if isinstance(v_rpy, list) and len(v_rpy) >= 3:
                 v_antenna_relative_rpy = [float(r) for r in v_rpy[:3]]
 
-            comms_node = TimerAction(
-                period=comms_node_delay,
-                actions=[
-                    Node(
-                        package='comms_sim_pkg',
-                        executable='comms_node_cpp',
-                        name=f'comms_simulator_{ant_name}',
-                        output='screen',
-                        parameters=[
-                            {
-                                'vehicle_name': ant_name,
-                                'sampling_rate': float(comms_params.get('sampling_rate', 1.0)),
-                                'publish_rate': float(comms_params.get('publish_rate', 100.0)),
-                                'noise_variance': float(comms_params.get('noise_variance', 2.0)),
-                                'e_plane_path': resolve_path(comms_params.get('e_plane_path', ''), pkg_share),
-                                'h_plane_path': resolve_path(comms_params.get('h_plane_path', ''), pkg_share),
-                                'mcs_table_path': resolve_path(comms_params.get('mcs_table_path', ''), pkg_share),
-                                'link_establishment_time_ms': float(comms_params.get('link_establishment_time_ms', comms_params.get('link_establishment_time', 2.0))),
-                                'comm_data_limit_mb': float(comms_params.get('comm_data_limit_mb', comms_params.get('comm_data_limit', 100.0))),
-                                'path_loss.c': float(comms_params.get('path_loss', {}).get('c', 299792458)),
-                                'path_loss.frequency': float(comms_params.get('path_loss', {}).get('frequency', 6.0e10)),
-                                'path_loss.exponent': float(comms_params.get('path_loss', {}).get('exponent', 2.0)),
-                                'path_loss.d0': float(comms_params.get('path_loss', {}).get('d0', 1.0)),
-                                'path_loss.pl_d0': float(comms_params.get('path_loss', {}).get('pl_d0', -1.0)),
-                                'tx_power': float(comms_params.get('tx_power', -7.0)),
-                                'max_antenna_attenuation': float(comms_params.get('max_antenna_attenuation', 30.0)),
-                                'logging_start_trigger': str(comms_params.get('logging_start_trigger', 'on_movement')),
-                                'logging_start_topic': str(comms_params.get('logging_start_topic', '/logging/start')),
-                                'tx_spawn_pose': suv_pose,
-                                'rx_position': antenna_base_position,
-                                'rx_antenna_offset': antenna_antenna_offset,
-                                'rx_rpy': antenna_base_rpy,
-                                'tx_antenna_offset': v_antenna_offset,
-                                'rx_antenna_relative_rpy': antenna_relative_rpy,
-                                'tx_antenna_relative_rpy': v_antenna_relative_rpy,
-                                'rx_positions': bs_positions,
-                                'rx_antenna_offsets': bs_antenna_offsets,
-                                'rx_rpys': bs_rpys,
-                                'rx_antenna_relative_rpys': bs_relative_rpys,
-                                'odom_topic': f'/{v_name}/odom',
-                                'cmd_vel_topic': f'/{v_name}/cmd_vel',
-                                'mission_complete_topic': f'/{v_name}/mission_complete',
-                                'use_sim_time': use_sim_time == 'true',
-                                'config_file_path': config_path
-                            },
-                        ],
-                        remappings=[
-                            ('/imu/data', f'/world/{world_name}/model/{v_name}/link/chassis/sensor/imu_sensor/imu'),
-                        ]
-                    )
-                ]
-            )
-            # actions.append(comms_node)
-
-        # -----------------------------------------------------------------
-        # TXコントローラノード（車両ごと）
-        # -----------------------------------------------------------------
-        # C++ Gazebo Plugin (TxControllerPlugin.cc) に移行したため、
-        # Python版ノードの起動はスキップします。
-        actions.append(LogInfo(
-            msg=f'[tx_controller_{v_name}] Pythonノード起動をスキップし、C++プラグインを使用します。'
-        ))
+            # -----------------------------------------------------------------
+            # TXコントローラノードおよび通信ノード（車両ごと）
+            # -----------------------------------------------------------------
+            # C++ Gazebo Plugin (TxControllerPlugin.cc) に移行したため、
+            # Python版ノードの起動はスキップします。
+            actions.append(LogInfo(
+                msg=f'[tx_controller_{v_name}] Pythonノード起動をスキップし、C++プラグインを使用します。'
+            ))
 
     # =========================================================================
     # link_controller_node & sim_logger_node の起動
@@ -843,43 +802,7 @@ def launch_setup(context, *args, **kwargs):
     run_timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
 
     if len(vehicle_names) > 0:
-        link_controller_node = TimerAction(
-            period=comms_node_delay,
-            actions=[
-                Node(
-                    package='comms_sim_pkg',
-                    executable='link_controller_node.py',
-                    name='link_controller_node',
-                    output='screen',
-                    parameters=[
-                        {
-                            'vehicle_names': vehicle_names,
-                            'scheduling_rate_hz': float(link_ctrl_params.get('scheduling_rate_hz', 1000.0)),
-                            'scheduling_policy': str(link_ctrl_params.get('scheduling_policy', 'sequential')),
-                            'time_slot_duration_s': float(link_ctrl_params.get('time_slot_duration_s', 10.0)),
-                            'rssi_threshold': float(link_ctrl_params.get('rssi_threshold', -75.0)),
-                            'beam_gain_threshold': float(link_ctrl_params.get('beam_gain_threshold', 5.0)),
-                            'weight_distance': float(link_ctrl_params.get('weight_distance', 0.7)),
-                            'weight_angle': float(link_ctrl_params.get('weight_angle', 0.3)),
-                            'proactive_handover_score_threshold': float(
-                                link_ctrl_params.get('proactive_handover_score_threshold', -80.0)
-                            ),
-                            'min_hold_time_s': float(link_ctrl_params.get('min_hold_time_s', 1.0)),
-                            'switch_margin_db': float(link_ctrl_params.get('switch_margin_db', 2.0)),
-                            'proactive_grace_period_s': float(link_ctrl_params.get('proactive_grace_period_s', 0.5)),
-                            'logging_level': int(sim_config.get('logging_level', 1)),
-                            'heatmap_resolution_m': float(link_ctrl_params.get('heatmap_resolution_m', 0.2)),
-                            'run_timestamp': run_timestamp,
-                            'use_sim_time': False,
-                            'config_file_path': config_path,
-                            'output_subdir': output_subdir
-                        }
-                    ]
-                )
-            ]
-        )
-        # actions.append(link_controller_node)
-        
+        # link_controller_node は C++ Gazebo Plugin (TxControllerPlugin.cc) に移行したため起動をスキップします。
         sim_logger_node_action = Node(
             package='comms_sim_pkg',
             executable='sim_logger_node.py',

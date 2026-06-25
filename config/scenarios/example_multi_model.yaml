@@ -1,0 +1,102 @@
+# 複数モデル混在シナリオの例
+scenario:
+  name: "multi_vehicle_5bs"
+  description: "SUV 2台 + 新幹線 1台 + 基地局 5台"
+  base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+  
+  model_catalog:
+    SUV:
+      sdf_path: "models://SUV"
+      default_antenna_offset: [0.0, 0.0, 2.23]
+    Shinkansen:
+      sdf_path: "models://Shinkansen"
+      default_antenna_offset: [0.0, 0.0, 1.0]
+      is_rail_vehicle: true
+    antenna:
+      sdf_path: "models://antenna"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+
+  entities:
+    # 5基地局 (Rx)
+    - name: "bs_0"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-10.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "bs_0_ant"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, 0.0]
+    - name: "bs_1"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "bs_1_ant"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, 0.0]
+    - name: "bs_2"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [0.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "bs_2_ant"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, 0.0]
+    - name: "bs_3"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "bs_3_ant"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, 0.0]
+    - name: "bs_4"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [10.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "bs_4_ant"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, 0.0]
+    
+    # SUV 2台 (Tx)
+    - name: "suv_1"
+      model: "SUV"
+      role: "tx"
+      pose: [-60.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-60.0, 0.0, 0.0, 16.67] # 60km/h
+        - [100.0, 0.0, 0.0, 16.67]
+      antennas:
+        - name: "suv_1_top"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
+    - name: "suv_2"
+      model: "SUV"
+      role: "tx"
+      pose: [-80.0, 1.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-80.0, 1.0, 0.0, 16.67] # 60km/h
+        - [100.0, 1.0, 0.0, 16.67]
+      antennas:
+        - name: "suv_2_top"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
+    
+    # 新幹線 (Tx)
+    - name: "shinkansen"
+      model: "Shinkansen"
+      role: "tx"
+      pose: [-1000, 3.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-1000, 3.0, 0.0, 83.33] # 300km/h
+        - [100.0, 3.0, 0.0, 83.33]
+      antennas:
+        - name: "shinkansen_front"
+          offset: [10.0, 1.5, 1.0]
+          relative_rpy: [0.0, 0.0, 0.0]

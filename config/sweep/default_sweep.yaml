@@ -1,0 +1,34 @@
+# デフォルトのスイープ設定ファイル
+sweep:
+  name: "angle_sweep_default"
+  description: "基地局アンテナ角度スイープ"
+  
+  # ベースとなるシナリオファイル
+  scenario: "config/scenarios/default.yaml"
+  
+  # スイープ変数の定義
+  variables:
+    - name: "rx_antenna_yaw"
+      description: "基地局アンテナの相対ヨー角"
+      target:
+        entity_role: "rx"             # rx ロールの全エンティティに適用
+        field: "antennas.*.relative_rpy[2]"  # yaw成分
+      range:
+        start: 0.0      # deg
+        end: 180.0      # deg  
+        step: 0.1       # deg
+
+    - name: "rx_y_position"
+      description: "基地局のY位置"
+      target:
+        entity_role: "rx"
+        field: "pose[1]"
+      values: [3.0]      # 離散値リスト
+
+  # スイープ実行設定
+  execution:
+    num_runs: 1
+    task_timeout_sec: 300
+    real_time_factor: 5.0
+    max_concurrency: 4
+    base_station_yaw_deg: -90.0
