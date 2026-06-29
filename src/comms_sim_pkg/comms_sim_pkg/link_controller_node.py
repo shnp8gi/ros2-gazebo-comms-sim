@@ -307,7 +307,7 @@ class LinkControllerNode(Node):
         valid_policies = (
             'sequential', 'round_robin', 'rssi_priority',
             'geometric_beam_priority', 'physical_score_priority', 'geometric_weighted',
-            'feedforward_optimal'
+            'feedforward_optimal', 'simple_no_handover'
         )
         if self.scheduling_policy not in valid_policies:
             self.get_logger().warn(
@@ -666,6 +666,8 @@ class LinkControllerNode(Node):
                 self.proactive_handover_score_threshold,
                 self.filter_main_lobe
             )
+        elif self.scheduling_policy == 'simple_no_handover':
+            self.strategy = SequentialStrategy()
 
         elif self.scheduling_policy == 'geometric_weighted':
             self.strategy = GeometricWeightedStrategy(self.weight_distance, self.weight_angle)

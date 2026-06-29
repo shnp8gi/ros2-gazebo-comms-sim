@@ -253,6 +253,14 @@ namespace tx_controller
             // Setup publishers
             this->mission_complete_pub = this->node.Advertise<gz::msgs::Boolean>(mission_topic);
             this->ready_pub = this->node.Advertise<gz::msgs::Boolean>(ready_pub_topic);
+            this->mission_progress_pub = this->node.Advertise<gz::msgs::Double>("/" + this->model.Name(_ecm) + "/mission_progress");
+
+            this->total_path_distance = 0.0;
+            for (size_t i = 1; i < this->waypoints.size(); ++i) {
+                double dx = this->waypoints[i].x - this->waypoints[i-1].x;
+                double dy = this->waypoints[i].y - this->waypoints[i-1].y;
+                this->total_path_distance += std::sqrt(dx*dx + dy*dy);
+            }
 
             // Setup subscriber
             this->node.Subscribe(all_ready_topic, &TxControllerPlugin::OnAllReady, this);
@@ -383,6 +391,44 @@ namespace tx_controller
             }
 
             this->SetVelocity(_ecm, this->current_v, w);
+
+            this->PublishProgress(_info, current_x, current_y);
+        }
+
+        void PublishProgress(const gz::sim::UpdateInfo &_info, double current_x, double current_y) {
+            double covered_dist = 0.0;
+            for (size_t i = 1; i < this->current_waypoint_idx && i < this->waypoints.size(); ++i) {
+                double dx = this->waypoints[i].x - this->waypoints[i-1].x;
+                double dy = this->waypoints[i].y - this->waypoints[i-1].y;
+                covered_dist += std::sqrt(dx*dx + dy*dy);
+            }
+            if (this->current_waypoint_idx < this->waypoints.size() && this->current_waypoint_idx > 0) {
+                double px = this->waypoints[this->current_waypoint_idx - 1].x;
+                double py = this->waypoints[this->current_waypoint_idx - 1].y;
+                double cx = this->waypoints[this->current_waypoint_idx].x;
+                double cy = this->waypoints[this->current_waypoint_idx].y;
+                double segment_dist = std::sqrt((cx-px)*(cx-px) + (cy-py)*(cy-py));
+                
+                double dist_to_target = std::sqrt((cx - current_x)*(cx - current_x) + (cy - current_y)*(cy - current_y));
+                double segment_progress = segment_dist - dist_to_target;
+                if (segment_progress < 0) segment_progress = 0;
+                covered_dist += segment_progress;
+            }
+            
+            double progress = 1.0;
+            if (this->total_path_distance > 0.001) {
+                progress = std::min(1.0, std::max(0.0, covered_dist / this->total_path_distance));
+            } else if (!this->mission_complete && this->waypoints.size() <= 1) {
+                progress = 0.0; 
+            }
+            if (this->mission_complete) progress = 1.0;
+            
+            if (_info.simTime.count() - this->last_progress_pub_time > 500000000) { // 0.5s
+                gz::msgs::Double msg;
+                msg.set_data(progress);
+                this->mission_progress_pub.Publish(msg);
+                this->last_progress_pub_time = _info.simTime.count();
+            }
         }
 
     private:
@@ -717,6 +763,7 @@ namespace tx_controller
                 bool in_main_lobe = false;
                 double off_boresight_e = 0.0;
                 double off_boresight_h = 0.0;
+                int bs_idx = -1;
             };
             std::vector<AntennaMetrics> ant_metrics_list(this->vehicle_antennas.size());
             std::vector<std::vector<AntennaMetrics>> all_ant_bs_metrics(this->vehicle_antennas.size());
@@ -769,6 +816,7 @@ namespace tx_controller
                     m.in_main_lobe = in_main;
                     m.off_boresight_e = off_boresight_e_deg;
                     m.off_boresight_h = off_boresight_h_deg;
+                    m.bs_idx = static_cast<int>(bs_idx);
 
                     if (metrics.rssi > best_rssi) {
                         best_rssi = metrics.rssi;
@@ -885,6 +933,46 @@ namespace tx_controller
                     ss << "RSSI-based switch (RSSI: " << std::fixed << std::setprecision(2) << max_rssi << " dBm)";
                     switch_details = ss.str();
                 }
+            } else if (this->scheduling_policy == "simple_no_handover") {
+                std::vector<bool> bs_in_use(this->base_stations.size(), false);
+                
+                // 1. Maintain connected antennas
+                for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
+                    auto &ant = this->vehicle_antennas[i];
+                    if (ant.assigned_bs_idx >= 0 && ant.assigned_bs_idx < static_cast<int>(this->base_stations.size())) {
+                        double current_rssi = all_ant_bs_metrics[i][ant.assigned_bs_idx].best_rssi;
+                        if (current_rssi >= this->comms_calculator->rssi_min) {
+                            bs_in_use[ant.assigned_bs_idx] = true;
+                            ant_metrics_list[i] = all_ant_bs_metrics[i][ant.assigned_bs_idx];
+                            ant.last_rssi = current_rssi;
+                        } else {
+                            ant.assigned_bs_idx = -1; // Disconnect
+                        }
+                    }
+                }
+                
+                // 2. Connect disconnected antennas to best available BS
+                for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
+                    auto &ant = this->vehicle_antennas[i];
+                    if (ant.assigned_bs_idx < 0) {
+                        double best_rssi = -999.0;
+                        int best_bs = -1;
+                        for (size_t bs_idx = 0; bs_idx < this->base_stations.size(); ++bs_idx) {
+                            if (bs_in_use[bs_idx]) continue;
+                            double rssi = all_ant_bs_metrics[i][bs_idx].best_rssi;
+                            if (rssi > best_rssi) {
+                                best_rssi = rssi;
+                                best_bs = static_cast<int>(bs_idx);
+                            }
+                        }
+                        if (best_bs >= 0 && best_rssi >= this->comms_calculator->rssi_min) {
+                            ant.assigned_bs_idx = best_bs;
+                            bs_in_use[best_bs] = true;
+                            ant_metrics_list[i] = all_ant_bs_metrics[i][best_bs];
+                            ant.last_rssi = best_rssi;
+                        }
+                    }
+                }
             } else if (this->scheduling_policy == "physical_score_priority") {
                 double max_score = -1e9;
                 int best_ant = new_active_idx;
@@ -924,7 +1012,7 @@ namespace tx_controller
             }
 
             // Proactive handover check
-            if (this->scheduling_policy != "feedforward_optimal") {
+            if (this->scheduling_policy != "feedforward_optimal" && this->scheduling_policy != "simple_no_handover") {
                 bool grace_passed = (current_time - this->last_grant_change_time) > this->proactive_grace_period_s;
                 bool hold_passed = (current_time - this->last_grant_change_time) >= this->min_hold_time_s;
                 std::string active_state = this->vehicle_antennas[this->active_antenna_idx].link_state;
@@ -943,6 +1031,7 @@ namespace tx_controller
                             best_idx = i;
                         }
                     }
+                    
                     if (best_idx != -1 && best_score >= this->proactive_handover_score_threshold) {
                         new_active_idx = best_idx;
                         std::ostringstream ss;
@@ -994,10 +1083,10 @@ namespace tx_controller
             // 4. Update Link States and Data Accumulation
             for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
                 auto &ant = this->vehicle_antennas[i];
-                // feedforward_optimal: assigned_bs_idx >= 0 ならグラント有り（マルチペア）
+                // feedforward_optimal と simple_no_handover: assigned_bs_idx >= 0 ならグラント有り（マルチペア）
                 // 他のポリシー: active_antenna_idx と一致すればグラント有り（シングルペア）
                 bool has_grant;
-                if (this->scheduling_policy == "feedforward_optimal") {
+                if (this->scheduling_policy == "feedforward_optimal" || this->scheduling_policy == "simple_no_handover") {
                     has_grant = (ant.assigned_bs_idx >= 0);
                 } else {
                     has_grant = (static_cast<int>(i) == this->active_antenna_idx);
@@ -1276,6 +1365,19 @@ namespace tx_controller
                     }
                 } catch(...) {}
             }
+
+            // Copy config file to result directory if it's a single launch
+            if (run_dir_path.string().find("/sweep_") == std::string::npos) {
+                if (!this->config_file_path.empty() && std::filesystem::exists(this->config_file_path)) {
+                    std::string backup_path = (run_dir_path / "scenario_config_backup.yaml").string();
+                    try {
+                        std::filesystem::copy_file(this->config_file_path, backup_path, std::filesystem::copy_options::overwrite_existing);
+                        std::filesystem::permissions(backup_path, std::filesystem::perms::all);
+                    } catch(const std::exception& e) {
+                        std::cerr << "[TxControllerPlugin] Failed to copy scenario config: " << e.what() << std::endl;
+                    }
+                }
+            }
         }
 
         void SetVelocity(gz::sim::EntityComponentManager &_ecm, double v, double w) {
@@ -1315,6 +1417,10 @@ namespace tx_controller
         gz::transport::Node node;
         gz::transport::Node::Publisher mission_complete_pub;
         gz::transport::Node::Publisher ready_pub;
+        gz::transport::Node::Publisher mission_progress_pub;
+        
+        double total_path_distance = 0.0;
+        int64_t last_progress_pub_time = 0;
 
         // Comms configurations and state variables
         bool comms_initialized = false;

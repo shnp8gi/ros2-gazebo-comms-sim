@@ -1,0 +1,41 @@
+# 5台のSUVすれ違いシナリオに対するアンテナ角度スイープ設定
+sweep:
+  name: "5suv_antenna_sweep"
+  description: "5台SUVすれ違い時のアンテナ角度によるデータ量比較"
+
+  # ベースとなるシナリオファイル
+  scenario: "config/scenarios/5suv_passing_1bs.yaml"
+
+  # スイープ変数の定義（同じgroup内の変数は同期して動き、別groupや単独変数とは総当たりになります）
+  variables:
+    - group:
+        - name: "rx_antenna_yaw"
+          description: "基地局アンテナの相対ヨー角"
+          target:
+            entity_role: "rx" # 基地局に適用
+            field: "antennas.*.relative_rpy[2]" # yaw成分
+          range:
+            start: -90.0 # deg
+            end: 90.0 # deg
+            step: 5.0 # deg
+
+        - name: "tx_antenna_yaw"
+          description: "SUVアンテナの相対ヨー角"
+          target:
+            entity_role: "tx"
+            field: "antennas.*.relative_rpy[2]"
+          range:
+            start: 0.0
+            end: 180.0
+            step: 5.0
+
+    # 【例】別の変数（別グループ）を追加すると、上のグループの37パターン × 下の2パターン = 74パターンになります
+    # - name: "rx_y_position"
+    #   values: [3.0, 5.0]
+
+  # スイープ実行設定
+  execution:
+    num_runs: 1
+    task_timeout_sec: 500
+    real_time_factor: 5.0
+    max_concurrency: 4

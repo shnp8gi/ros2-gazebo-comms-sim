@@ -18,7 +18,7 @@ import yaml
 import rclpy
 from rclpy.node import Node
 from rclpy.qos import QoSProfile, ReliabilityPolicy, DurabilityPolicy, HistoryPolicy
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, Float64
 from geometry_msgs.msg import Twist
 
 from comms_sim_msgs.msg import CommsQuality
@@ -271,6 +271,8 @@ class SimLoggerNode(Node):
         self._quality_subs = []
         self._grant_subs = []
         self._mission_subs = []
+        self._progress_subs = []
+        self._latest_progress = {name: 0.0 for name in self.base_vehicle_names}
         
         # タイマー代わりの最新時刻
         self._start_time = None
@@ -297,6 +299,14 @@ class SimLoggerNode(Node):
                 _MISSION_QOS
             )
             self._mission_subs.append(sub_mission)
+            
+            sub_progress = self.create_subscription(
+                Float64,
+                f'/{name}/mission_progress',
+                lambda msg, vn=name: self._on_mission_progress(vn, msg),
+                10
+            )
+            self._progress_subs.append(sub_progress)
 
         self.get_logger().info(f'SimLoggerNode (Level {self.logging_level}) 初期化完了')
         atexit.register(self.save_summary_and_close)
@@ -311,12 +321,17 @@ class SimLoggerNode(Node):
     def _on_link_grant(self, vehicle_name: str, msg: Bool):
         self._link_grants[vehicle_name] = msg.data
 
-    def _on_mission_complete(self, vehicle_name: str, msg: Bool):
-        if msg.data and not self._mission_status[vehicle_name]:
+    def _on_mission_complete(self, vehicle_name: str, msg: Bool) -> None:
+        if msg.data:
+            self.get_logger().info(f'Vehicle {vehicle_name} reached its destination (mission complete).')
             self._mission_status[vehicle_name] = True
+            self._latest_progress[vehicle_name] = 1.0
             if all(self._mission_status.values()):
                 self.get_logger().info('=== ミッション完了。すべてのデータを受信するため 3 秒後にシミュレーションを終了します ===')
                 self._exit_timer = self.create_timer(3.0, self._exit_now)
+            
+    def _on_mission_progress(self, vehicle_name: str, msg: Float64) -> None:
+        self._latest_progress[vehicle_name] = msg.data
 
     def _exit_now(self):
         self.get_logger().info('=== 終了タイマー満了。シミュレーションを終了します ===')
@@ -325,6 +340,10 @@ class SimLoggerNode(Node):
 
     def _watchdog_tick(self) -> None:
         """車両が停止してから _WATCHDOG_STOP_TIMEOUT_SEC 秒後に強制シャットダウン。"""
+        if hasattr(self, '_latest_progress') and self._latest_progress:
+            avg_prog = sum(self._latest_progress.values()) / max(1, len(self._latest_progress))
+            print(f"PROGRESS: {avg_prog*100:.1f}%", flush=True)
+
         if all(self._mission_status.values()):
             return  # 正常終了済み
         if not self._vehicle_ever_moved:

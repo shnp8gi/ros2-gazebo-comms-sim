@@ -653,6 +653,11 @@ def launch_setup(context, *args, **kwargs):
         bridge_topic.append(
             f"/tx_controller_{v_name}/ready@std_msgs/msg/Bool[gz.msgs.Boolean"
         )
+
+        # C++プラグインからの進捗シグナル
+        bridge_topic.append(
+            f"/{v_name}/mission_progress@std_msgs/msg/Float64[gz.msgs.Double"
+        )
         
         # 全体Readyシグナル (ROS → Gazebo)
         bridge_topic.append(

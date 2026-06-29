@@ -644,6 +644,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             overrides = [
                 {'role': 'rx', 'field': 'pose[1]', 'value': y},
                 {'role': 'rx', 'field': 'antennas.*.relative_rpy[2]', 'value': antenna_yaw},
+                {'role': 'tx', 'field': 'antennas.*.relative_rpy[2]', 'value': math.radians(angle_deg)},
                 {'role': 'rx', 'field': 'pose[5]', 'value': entity_yaw}
             ]
             
@@ -704,7 +705,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             with active_tasks_lock:
                 active_tasks.pop(worker_id, None)
             print(f"[Worker {worker_id}] Error creating config {tmp_config_path}: {e}")
-            log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()}")
+            log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()} worker={worker_id}")
             import traceback
             traceback.print_exc()
             return False
@@ -735,7 +736,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 active_tasks.pop(worker_id, None)
             return False
 
-        log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()}")
+        log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()} worker={worker_id}")
 
         start_time = time.time()
         log_dir = f"tools/log/{sweep_start_time}"
@@ -814,7 +815,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         if is_valid:
             expected_str = f"{t_expected:.1f}s" if t_expected is not None else "Unknown"
             print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation finished successfully in {actual_duration:.1f}s (Expected: {expected_str}): Y={y}, Angle={angle_deg}")
-            log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=OK ts={datetime.datetime.now().isoformat()}")
+            log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=OK ts={datetime.datetime.now().isoformat()} worker={worker_id}")
 
             increment_completed_tasks()
             return True
@@ -829,7 +830,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             time.sleep(2.0)
 
     print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} All {max_retries} attempts failed: Y={y}, Angle={angle_deg}")
-    log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()}")
+    log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()} worker={worker_id}")
     increment_completed_tasks()
     return False
 
@@ -999,6 +1000,24 @@ def main():
 
     if not args.resume and os.path.exists(PROGRESS_LOG):
         os.remove(PROGRESS_LOG)
+
+    # Ensure sweep_dir exists
+    os.makedirs(sweep_dir, exist_ok=True)
+    
+    # Backup configuration files for the sweep
+    if not args.resume:
+        try:
+            if args.sweep_config and os.path.exists(args.sweep_config):
+                shutil.copy2(args.sweep_config, os.path.join(sweep_dir, "sweep_config_backup.yaml"))
+                
+            scen_path = 'config/scenarios/default.yaml'
+            if global_sweep_data and 'scenario' in global_sweep_data:
+                scen_path = global_sweep_data['scenario']
+            
+            if os.path.exists(scen_path):
+                shutil.copy2(scen_path, os.path.join(sweep_dir, "scenario_config_backup.yaml"))
+        except Exception as e:
+            print(f"[Sweep Sim] Failed to backup configuration files: {e}")
 
     # Copy manifest to results folder if chunk_idx is not None
     if chunk_idx is not None and args.manifest:

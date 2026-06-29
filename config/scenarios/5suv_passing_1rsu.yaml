@@ -1,0 +1,105 @@
+# シナリオ定義ファイル
+scenario:
+  name: "5suv_passing_1bs"
+  description: "1基地局の横を同じ方向から通過する5台のSUVシナリオ"
+
+  # ベースコンフィグ
+  base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+
+  # シミュレーション設定の上書き
+  simulation_overrides:
+    headless: true
+    real_time_factor: 5.0
+    logging_level: 3
+    physics_max_step_size: 0.0001
+
+  # ====================================================
+  # モデルカタログ
+  # ====================================================
+  model_catalog:
+    SUV:
+      sdf_path: "models://SUV"
+      description: "標準SUVモデル"
+      default_antenna_offset: [0.0, 0.0, 2.23]
+
+    antenna:
+      sdf_path: "models://antenna"
+      description: "基地局アンテナモデル"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+
+  # ====================================================
+  # エンティティ定義
+  # ====================================================
+  entities:
+    # --- Rx（基地局）エンティティ ---
+    - name: "bs_0"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [0.0, 3.0, 0.0, 0.0, 0.0, -1.5708] # Y=3.0, 下向き(Y=0方向)
+      antennas:
+        - name: "bs_0_ant"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
+
+    # --- Tx（車両）エンティティ ---
+    # 全車両を左から右へ移動 (Y = 0.0)
+    - name: "suv_1"
+      model: "SUV"
+      role: "tx"
+      pose: [-60.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-60.0, 0.0, 0.0, 16.67] # 60km/h
+        - [140.0, 0.0, 0.0, 16.67]
+      antennas:
+        - name: "suv_1_top"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
+
+    - name: "suv_2"
+      model: "SUV"
+      role: "tx"
+      pose: [-80.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-80.0, 0.0, 0.0, 16.67]
+        - [130.0, 0.0, 0.0, 16.67]
+      antennas:
+        - name: "suv_2_top"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
+
+    - name: "suv_3"
+      model: "SUV"
+      role: "tx"
+      pose: [-100.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-100.0, 0.0, 0.0, 16.67]
+        - [120.0, 0.0, 0.0, 16.67]
+      antennas:
+        - name: "suv_3_top"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
+
+    - name: "suv_4"
+      model: "SUV"
+      role: "tx"
+      pose: [-120.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-120.0, 0.0, 0.0, 16.67]
+        - [110.0, 0.0, 0.0, 16.67]
+      antennas:
+        - name: "suv_4_top"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
+
+    - name: "suv_5"
+      model: "SUV"
+      role: "tx"
+      pose: [-140.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-140.0, 0.0, 0.0, 16.67]
+        - [100.0, 0.0, 0.0, 16.67]
+      antennas:
+        - name: "suv_5_top"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]

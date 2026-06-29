@@ -1,0 +1,89 @@
+# シナリオ定義ファイル
+scenario:
+  name: "default_shinkansen_no_ho"
+  description: "新幹線 + 3基地局のハンドオーバーなしシナリオ"
+  
+  # ベースコンフィグ（変更点: sim_params_no_ho.yamlを使用）
+  base_config: "src/comms_sim_pkg/config/sim_params_no_ho.yaml"
+  
+  # シミュレーション設定の上書き（base_configの値をマージ）
+  simulation_overrides:
+    headless: true
+    real_time_factor: 5.0
+    logging_level: 3
+    physics_max_step_size: 0.0001
+
+  # ====================================================
+  # モデルカタログ: 利用可能なモデルの定義
+  # models/ ディレクトリのサブフォルダ名と対応
+  # ====================================================
+  model_catalog:
+    SUV:
+      sdf_path: "models://SUV"
+      description: "標準SUVモデル"
+      default_antenna_offset: [0.0, 0.0, 2.23]
+      
+    Shinkansen:
+      sdf_path: "models://Shinkansen"
+      description: "新幹線モデル（75m長）"
+      default_antenna_offset: [0.0, 0.0, 1.0]
+      is_rail_vehicle: true
+      
+    antenna:
+      sdf_path: "models://antenna"
+      description: "基地局アンテナモデル"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+
+  # ====================================================
+  # エンティティ定義: 実際にシーンに配置するもの
+  # ====================================================
+  entities:
+    # --- Rx（基地局）エンティティ ---
+    - name: "antenna_0"
+      model: "antenna"                # model_catalog のキー
+      role: "rx"                      # rx = 基地局（受信側）
+      static: true
+      pose: [-5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "antenna_0"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, -1.5115]
+
+    - name: "antenna_1"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [0.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "antenna_1"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, -1.5115]
+
+    - name: "antenna_2"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [5.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "antenna_2"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, -1.5115]
+
+    # --- Tx（車両）エンティティ ---
+    - name: "shinkansen"
+      model: "Shinkansen"             # model_catalog のキー
+      role: "tx"                      # tx = 車両（送信側）
+      pose: [-1000, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-1000, 0.0, 0.0, 83.33]
+        - [100.0, 0.0, 0.0, 83.33]
+      antennas:
+        - name: "shinkansen_front"
+          offset: [10.0, 1.5, 1.0]
+          relative_rpy: [0.0, 0.0, 0.0593]
+        - name: "shinkansen_mid"
+          offset: [0.0, 1.5, 1.0]
+          relative_rpy: [0.0, 0.0, 0.0593]
+        - name: "shinkansen_rear"
+          offset: [-10.0, 1.5, 1.0]
+          relative_rpy: [0.0, 0.0, 0.0593]

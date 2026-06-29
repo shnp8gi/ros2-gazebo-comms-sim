@@ -25,19 +25,27 @@ import shutil
 
 # 同一ディレクトリの lib から設定を読み込むためにパスを追加
 script_dir = os.path.dirname(os.path.abspath(__file__))
+project_root = os.path.dirname(script_dir)
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
 try:
-    from lib.sweep_config import Y_POSITIONS, ANGLES_DEG, NUM_RUNS
-    TOTAL_TASKS = len(Y_POSITIONS) * len(ANGLES_DEG) * NUM_RUNS
+    import lib.sweep_config as sweep_config
+    NUM_RUNS = getattr(sweep_config, 'NUM_RUNS', 1)
+    if hasattr(sweep_config, 'GENERIC_VARIABLES') and sweep_config.GENERIC_VARIABLES:
+        task_count = 1
+        for gv in sweep_config.GENERIC_VARIABLES:
+            task_count *= len(gv['values'])
+    else:
+        Y_POSITIONS = getattr(sweep_config, 'Y_POSITIONS', [1.0])
+        ANGLES_DEG = getattr(sweep_config, 'ANGLES_DEG', [0.0])
+        task_count = len(Y_POSITIONS) * len(ANGLES_DEG)
+    TOTAL_TASKS = task_count * NUM_RUNS
 except Exception:
-    Y_POSITIONS = [1.0]
-    ANGLES_DEG  = [round(0.2 * i, 2) for i in range(76)]
-    TOTAL_TASKS = len(Y_POSITIONS) * len(ANGLES_DEG) * 10
+    TOTAL_TASKS = 760
 
-PROGRESS_LOG_DEFAULT = "tools/log/sweep_progress.log"
-SIM_RESULTS_DIR = "sim_results"
+PROGRESS_LOG_DEFAULT = os.path.join(project_root, "tools", "log", "sweep_progress.log")
+SIM_RESULTS_DIR = os.path.join(project_root, "sim_results")
 
 # システムリソース検出ライブラリのロード試行
 try:
@@ -48,19 +56,19 @@ except ImportError:
 
 # 進捗ログ解析用のコンパイル済み正規表現
 RE_START = re.compile(r"START (\S+) TOTAL=(\d+)(?:\s+CONCURRENCY=(\d+))?")
-RE_RUNNING = re.compile(r"RUNNING task=(\d+) y=([\d\.]+) angle=([-\d\.]+) ts=(\S+)")
-RE_DONE = re.compile(r"DONE task=(\d+) y=([\d\.-]+) angle=([-\d\.-]+) status=(\w+) ts=(\S+)")
+RE_RUNNING = re.compile(r"RUNNING task=(\d+) y=([-\d\.]+) angle=([-\d\.]+) ts=(\S+)(?:\s+worker=(\d+))?")
+RE_DONE = re.compile(r"DONE task=(\d+) y=([-\d\.-]+) angle=([-\d\.-]+) status=(\w+) ts=(\S+)(?:\s+worker=(\d+))?")
 RE_ABORT = re.compile(r"ABORT ts=(\S+)")
 
 def find_latest_progress_log():
     """sweep/log/ 配下から最も新しいタイムスタンプフォルダ内の sweep_progress.log を探す"""
-    pattern = os.path.join("tools", "log", "*", "sweep_progress.log")
+    pattern = os.path.join(project_root, "tools", "log", "*", "sweep_progress.log")
     logs = glob.glob(pattern)
     if not logs:
         # フォールバックとして tools/log/sweep_progress.log や sweep_progress.log も探す
         fallback_patterns = [
-            os.path.join("tools", "log", "sweep_progress.log"),
-            "sweep_progress.log"
+            os.path.join(project_root, "tools", "log", "sweep_progress.log"),
+            os.path.join(project_root, "sweep_progress.log")
         ]
         for p in fallback_patterns:
             if os.path.exists(p):
@@ -118,13 +126,14 @@ def parse_progress_log(log_path: str):
                     y_val = float(m.group(2))
                     ang_val = float(m.group(3))
                     start_ts = datetime.datetime.fromisoformat(m.group(4))
-                    
+                    worker_id = int(m.group(5)) if m.group(5) else None
                     task_start_times[t_id] = start_ts
                     running_tasks[t_id] = {
                         "task_no": t_id,
                         "y": y_val,
                         "angle": ang_val,
-                        "started_at": start_ts
+                        "started_at": start_ts,
+                        "worker_id": worker_id
                     }
                 except ValueError:
                     pass
@@ -405,7 +414,31 @@ def render(log_path: str):
             ct = running_tasks[t_id]
             running_for = now - ct["started_at"]
             run_sec = int(running_for.total_seconds())
-            print(f"    ▶ タスク #{ct['task_no']:3d} | Y={ct['y']:4.1f}m, 角度={ct['angle']:5.1f}° | 実行時間: {run_sec:3d}秒")
+            
+            progress_val = 0.0
+            if ct.get("worker_id") is not None:
+                log_dir = os.path.dirname(log_path)
+                stdout_file = os.path.join(log_dir, f"stdout_worker_{ct['worker_id']}.log")
+                if os.path.exists(stdout_file):
+                    try:
+                        with open(stdout_file, 'rb') as f:
+                            f.seek(0, 2)
+                            filesize = f.tell()
+                            read_size = min(4096, filesize)
+                            f.seek(-read_size, 2)
+                            lines = f.read().decode('utf-8', errors='ignore').splitlines()
+                            for line in reversed(lines):
+                                if "PROGRESS:" in line:
+                                    import re as _re
+                                    m = _re.search(r'PROGRESS:\s*([\d\.]+)%', line)
+                                    if m:
+                                        progress_val = float(m.group(1))
+                                        break
+                    except Exception:
+                        pass
+                        
+            prog_bar = make_progress_bar(progress_val, width=20)
+            print(f"    ▶ タスク #{ct['task_no']:3d} | Y={ct['y']:4.1f}m, 角度={ct['angle']:5.1f}° | 実行時間: {run_sec:3d}秒 | 進捗: [{prog_bar}] {progress_val:5.1f}%")
     elif completed == total:
         print("    ✅ 全タスク完了しました!")
     else:
