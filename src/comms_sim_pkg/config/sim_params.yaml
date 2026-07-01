@@ -164,6 +164,7 @@ link_controller_node:
 
     # 同時通信に使用する最大ペア数 (-1で全ペア使用)
     ff_max_pairs: -1
+    ff_hysteresis_margin_db: 2.0
 
 
     # タイムスロット長 [s] (round_robin ポリシー時のみ有効)

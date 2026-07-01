@@ -51,6 +51,10 @@ try:
         LogDistancePathLossModel,
         TwoRayGroundModel,
     )
+    from comms_sim_pkg.lut_generator import FeedforwardLutGenerator
+    from comms_sim_pkg.link_scheduling_strategy import (
+        SchedulingStrategyFactory,
+    )
 except ImportError:
     from .antenna_parser import AntennaPatternParser  # type: ignore
     from .comms_calculator import (  # type: ignore
@@ -219,6 +223,7 @@ class LinkControllerNode(Node):
         self.declare_parameter('logging_level', 1)
         self.declare_parameter('heatmap_resolution_m', 0.2)
         self.declare_parameter('ff_max_pairs', -1)
+        self.declare_parameter('ff_hysteresis_margin_db', 0.0)
         self.declare_parameter('run_timestamp', '')
         self.declare_parameter('config_file_path', resolve_path('/workspace/config/sim_params.yaml'))
         self.declare_parameter('output_subdir', '')
@@ -267,6 +272,9 @@ class LinkControllerNode(Node):
         )
         self.ff_max_pairs: int = int(
             self.get_parameter('ff_max_pairs').value
+        )
+        self.ff_hysteresis_margin_db: float = float(
+            self.get_parameter('ff_hysteresis_margin_db').value
         )
         self.run_timestamp: str = str(
             self.get_parameter('run_timestamp').value
@@ -509,89 +517,16 @@ class LinkControllerNode(Node):
                     noise_variance=noise_variance,
                     mcs_table_path=mcs_table_path
                 )
-                from itertools import permutations
-                
-                num_tx = len(vehicle_antennas)
-                num_rx = len(rx_nodes)
-                num_pairs = min(num_tx, num_rx)
-                if self.ff_max_pairs > 0:
-                    num_pairs = min(num_pairs, self.ff_max_pairs)
-                
-                heatmap_rows = []
-                for pt, yaw in samples:
-                    tx_orientation = np.array([0.0, 0.0, yaw])
-                    
-                    row = {
-                        'x_m': round(pt[0], 4),
-                        'y_m': round(pt[1], 4),
-                        'z_m': round(pt[2], 4),
-                        'yaw_rad': round(yaw, 4)
-                    }
-                    
-                    # Step 1: 全 (TX, RX) 組み合わせのRSSIを計算
-                    # rssi_matrix[tx_idx][rx_idx] = RSSI
-                    R_veh = parser._rpy_to_rotmat(tx_orientation[0], tx_orientation[1], tx_orientation[2])
-                    rssi_matrix = [[-999.0] * num_rx for _ in range(num_tx)]
-                    
-                    for tx_idx, va in enumerate(vehicle_antennas):
-                        tx_antenna_pos = pt + R_veh.dot(np.asarray(va['offset'], dtype=float))
-                        tx_ant_rpy = tx_orientation + np.asarray(va['relative_rpy'], dtype=float)
-                        
-                        for rx_idx, bs in enumerate(rx_nodes):
-                            bs_antenna_pos = bs['position'] + bs['antenna_offset']
-                            bs_ant_rpy = bs['rpy'] + bs['antenna_relative_rpy']
-                            
-                            tx_e, tx_h, tx_total, rx_e, rx_h, rx_total = parser.get_tx_rx_gains(
-                                tx_pos_world=bs_antenna_pos,
-                                tx_rpy_world=bs_ant_rpy,
-                                rx_pos_world=tx_antenna_pos,
-                                rx_rpy_world=tx_ant_rpy,
-                            )
-                            antenna_gain_db = float(tx_total + rx_total)
-                            
-                            in_main = True
-                            if self.filter_main_lobe:
-                                tx_el, tx_az = parser.calculate_antenna_frame_angles(bs_antenna_pos, tx_antenna_pos, bs_ant_rpy)
-                                rx_el, rx_az = parser.calculate_antenna_frame_angles(tx_antenna_pos, bs_antenna_pos, tx_ant_rpy)
-                                tx_in = parser.is_in_main_lobe(np.degrees(abs(tx_el)), np.degrees(abs(tx_az)))
-                                rx_in = parser.is_in_main_lobe(np.degrees(abs(rx_el)), np.degrees(abs(rx_az)))
-                                if not (tx_in and rx_in):
-                                    in_main = False
-
-                            if in_main:
-                                metrics = calculator.calculate_all(
-                                    tx_antenna_pos,
-                                    bs_antenna_pos,
-                                    antenna_gain_db=antenna_gain_db,
-                                    add_noise=False
-                                )
-                                rssi_matrix[tx_idx][rx_idx] = metrics['rssi']
-                            
-                            col_name = f"rssi_{bs['name']}_{va['name']}"
-                            row[col_name] = round(rssi_matrix[tx_idx][rx_idx], 2)
-                    
-                    # Step 2: 全列挙で最適N個ペアを決定
-                    best_total_rssi = -1e9
-                    best_pairs = []
-                    
-                    for perm in permutations(range(num_rx)):
-                        total_rssi = sum(rssi_matrix[tx_idx][perm[tx_idx]] for tx_idx in range(num_pairs))
-                        if total_rssi > best_total_rssi:
-                            best_total_rssi = total_rssi
-                            best_pairs = [
-                                (vehicle_antennas[tx_idx]['name'], rx_nodes[perm[tx_idx]]['name'], rssi_matrix[tx_idx][perm[tx_idx]])
-                                for tx_idx in range(num_pairs)
-                            ]
-                    
-                    # RSSIの高い順にソート
-                    best_pairs_sorted = sorted(best_pairs, key=lambda p: p[2], reverse=True)
-                    max_rssi = best_pairs_sorted[0][2] if best_pairs_sorted else -999.0
-                    
-                    row['optimal_pairs'] = ';'.join(f"{p[0]}:{p[1]}" for p in best_pairs_sorted)
-                    row['max_rssi'] = round(max_rssi, 2)
-                    heatmap_rows.append(row)
-                    
-                    self.lut.append((pt[0], pt[1], pt[2], best_pairs_sorted, max_rssi))
+                generator = FeedforwardLutGenerator(
+                    parser=parser,
+                    calculator=calculator,
+                    vehicle_antennas=vehicle_antennas,
+                    rx_nodes=rx_nodes,
+                    ff_max_pairs=self.ff_max_pairs,
+                    ff_hysteresis_margin_db=self.ff_hysteresis_margin_db,
+                    filter_main_lobe=self.filter_main_lobe
+                )
+                self.lut, heatmap_rows = generator.generate(samples)
                 
                 if self.logging_level >= 5:
                     heatmap_dir = os.path.join(self.run_dir, 'heatmap')

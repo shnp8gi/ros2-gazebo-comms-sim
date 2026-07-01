@@ -61,8 +61,8 @@ for d in distances:
     for sign in [-1, 1]:
         x = sign * math.sqrt(d**2 - y_dist**2)
         phi = math.atan2(-y_dist, x) # Angle of vector from BS (0, 1.5) to Train (x, 3.0) -> relative vector is (x, 1.5)
-        # Note: in theoretical_optimum, vector from BS (0, y_dist) to Train (x, 0) is (x, -y_dist).
-        # Here we follow theoretical_optimum's vector:
+        # Note: vector from BS (0, y_dist) to Train (x, 0) is (x, -y_dist).
+        # Here we follow this vector:
         phi_theoretical = math.atan2(-y_dist, x)
         rel_angle_rad = phi_theoretical - world_yaw
         # wrap
