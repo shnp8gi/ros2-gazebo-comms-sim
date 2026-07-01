@@ -433,7 +433,7 @@ tx_controller_node:
 
 | 項目             | 詳細                                                                                                                                                                           |
 | :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **全体終了条件** | シミュレーションに参加する**全車両 (`base_vehicle_names`) が全てのウェイポイントに到達したタイミング**をもって、`sim_logger_node`がCSVデータの強制書き出しとシステムプロセスの安全なシャットダウン(Sys.exit)を呼び出す。複数アンテナを持つ車両の場合でも、個別のアンテナ単位ではなく、1台のベース車両（実体）単位で完了を監視・集約する。 |
+| **全体終了条件** | シミュレーションに参加する**全車両 (`base_vehicle_names`) が全てのウェイポイントに到達したタイミング**をもって、`TxControllerPlugin` および `comms_node` がCSVデータの強制書き出しを行い、シミュレーションプロセスが終了する。複数アンテナを持つ車両の場合でも、個別のアンテナ単位ではなく、1台のベース車両（実体）単位で完了を監視・集約する。 |
 | **通信停止と譲渡** | 個別車両の送信データ累計 (`TotalDataTransmission`) が `comm_data_limit_mb` に達した場合、その車両は状態を `DISCONNECTED` に変更し、基地局調停ノードへの送信要求 (RSSI) を `-inf` に落とすことで、自動的に他車両へ通信権(`link_grant`)を譲る協調動作を行う。 |
 
 ---
@@ -444,8 +444,8 @@ tx_controller_node:
 
 | 項目 | 詳細 |
 | :--- | :--- |
-| **保存エンジン** | コアログ（通信品質時系列、イベント、フィードフォワード制御、ヒートマップ）は、**`TxControllerPlugin` (C++) が直接ディスクへ高速書き込み**を行う。これによりROSトピックの詰まりや損失の影響を回避する。<br>統計サマリー（`sweep_summary.csv`）は、全車両のミッション完了を検知した **`sim_logger_node.py` (Python) がC++出力のCSVを直接ロードし、データ欠損のない正確な数値を再集計・追記**して保存する。 |
-| **出力タイミング** | 各車両プラグイン：設定されたウェイポイントを完走した（ミッション完了）タイミング、またはシミュレーション終了時。<br>`sim_logger_node`：全車両のミッション完了通知（`/mission_complete`）が揃ってから約1秒後（ファイル書き込み猶予時間）。 |
+| **保存エンジン** | コアログ（通信品質時系列、イベント、フィードフォワード制御、ヒートマップ）および統計サマリー（`sweep_summary.csv`）は、**`TxControllerPlugin` (C++) および `comms_node` (C++) が直接ディスクへ高速書き込み**を行う。これによりROSトピックの詰まりや損失の影響を回避する。<br>スイープ実行時は、各シミュレーション完了後に `tools/sweep_sim.py` などの自動化スクリプトが複数回の実行結果（CSV）を自動でマージ・検証する。 |
+| **出力タイミング** | 各車両プラグイン：設定されたウェイポイントを完走した（ミッション完了）タイミング、またはシミュレーション終了時。 |
 | **出力ディレクトリ** | `/workspace/sim_results/`（コンテナ内の所有権はホストマウント権限に自動追従して可読・編集可能化される。スイープ実行時：`sim_results/sweep_<sweep_timestamp>/`、単一実行時：`sim_results/run_<timestamp>/`） |
 | **ファイル出力形式** | 3階層フォルダリング（`comms/`, `control/`, `heatmap/`）により整理して出力。ファイル名から重複するタイムスタンプを排除。<br>- **サマリー**: `sweep_summary.csv` または `sweep_summary_run*.csv`<br>- **通信時系列**: `comms/{vehicle_name}_connected.csv` (`logging_level` 3) または `comms/{vehicle_name}_full.csv` (`logging_level` 4以上)<br>- **イベント**: `control/events.csv` (`logging_level` 2以上)<br>- **制御ログ**: `control/feedforward_log.csv` (`logging_level` 5のみ)<br>- **ヒートマップ**: `heatmap/rssi_heatmap.csv` (`logging_level` 5のみ) |
 | **時間軸の起点**     | プラグインおよびノードが車両の動き出しを監視し、**いずれかの車両が最初に動き出した瞬間**を `time_s = 0.0` とする。また、**各車両ごとの個別開始時間**も `vehicle_time_s = 0.0` として計算される。距離への換算を容易にするための仕様。 |
@@ -556,19 +556,28 @@ time_s,tx_x_m,tx_y_m,tx_z_m,rssi_shinkansen_front,rssi_shinkansen_mid,rssi_shink
 
 **実装**:
 
-```python
-class PropagationModel(ABC):
-    @abstractmethod
-    def calculate_path_loss(self, distance: float) -> float:
-        pass
+```cpp
+class PropagationModel {
+public:
+    virtual ~PropagationModel() = default;
+    virtual double calculate_path_loss(double distance) const = 0;
+};
 
-class LogDistancePathLossModel(PropagationModel):
-    def calculate_path_loss(self, distance: float) -> float:
-        return 10 * self.exponent * np.log10(4 * pi * distance / lambda)
+class LogDistancePathLossModel : public PropagationModel {
+public:
+    double calculate_path_loss(double distance) const override {
+        // ...
+        return path_loss;
+    }
+};
 
-class TwoRayGroundModel(PropagationModel):
-    def calculate_path_loss(self, distance: float) -> float:
-        # 実装...
+class TwoRayGroundModel : public PropagationModel {
+public:
+    double calculate_path_loss(double distance) const override {
+        // 実装...
+        return path_loss;
+    }
+};
 ```
 
 ### 10.2. 状態管理パターン
@@ -577,19 +586,24 @@ class TwoRayGroundModel(PropagationModel):
 
 **実装**:
 
-```python
-class LinkState(Enum):
-    DISCONNECTED = 0
-    ESTABLISHING = 1
+```cpp
+enum class LinkState {
+    DISCONNECTED = 0,
+    ESTABLISHING = 1,
     CONNECTED = 2
+};
 
-def _update_link_state(self, rssi: float, current_time: float) -> bool:
-    if self.link_state == LinkState.DISCONNECTED:
-        if rssi > self.rssi_threshold:
-            self.link_state = LinkState.ESTABLISHING
-            # ...
-    elif self.link_state == LinkState.ESTABLISHING:
-        # ...
+bool update_link_state(double rssi, double current_time) {
+    if (this->link_state == LinkState::DISCONNECTED) {
+        if (rssi > this->rssi_threshold) {
+            this->link_state = LinkState::ESTABLISHING;
+            // ...
+        }
+    } else if (this->link_state == LinkState::ESTABLISHING) {
+        // ...
+    }
+    return true;
+}
 ```
 
 ---
@@ -602,7 +616,7 @@ def _update_link_state(self, rssi: float, current_time: float) -> bool:
 | :--------------------- | :-------------------------------------------------------------------------------------------- |
 | `CommsCalculator`      | - MCSテーブル読み込み <br> - RSSI計算の正確性 <br> - スループットステップ関数 <br> - 飽和処理 |
 | `AntennaPatternParser` | - CSV読み込み <br> - 角度計算 <br> - 線形補間                                                 |
-| `CommsSimulatorNode`   | - リンク状態遷移 <br> - データ量管理 <br> - CSVロギング                                       |
+| `TxControllerPlugin / comms_node`      | - リンク状態遷移 <br> - データ量管理 <br> - CSVロギング                                       |
 
 ### 11.2. 統合テスト
 

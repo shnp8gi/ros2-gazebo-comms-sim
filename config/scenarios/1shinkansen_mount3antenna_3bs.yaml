@@ -13,6 +13,15 @@ scenario:
     logging_level: 3
     physics_max_step_size: 0.0001
 
+  # スケジューリング等のシナリオ専用制御パラメータ上書き
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: ""
+        ff_max_pairs: -1
+        ff_hysteresis_margin_db: 2.0
+        proactive_handover_score_threshold: -130.0
+
   # ====================================================
   # モデルカタログ: 利用可能なモデルの定義
   # models/ ディレクトリのサブフォルダ名と対応

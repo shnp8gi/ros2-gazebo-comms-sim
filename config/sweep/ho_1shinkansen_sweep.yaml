@@ -1,10 +1,10 @@
-# デフォルトのスイープ設定ファイル
+# 新規作成したHO (feedforward_optimal) 用のスイープ設定ファイル
 sweep:
-  name: "angle_sweep_default"
-  description: "基地局アンテナ角度スイープ"
+  name: "ho_angle_sweep_0_to_180"
+  description: "基地局アンテナ角度スイープ (0〜180度, 1度刻み) - feedforward_optimal"
   
-  # ベースとなるシナリオファイル
-  scenario: "config/scenarios/default.yaml"
+  # 新しく設定が追加されたシナリオファイルを指定
+  scenario: "config/scenarios/1shinkansen_mount3antenna_3bs.yaml"
   
   # スイープ変数の定義
   variables:
@@ -31,7 +31,7 @@ sweep:
       target:
         entity_role: "rx"
         field: "pose[1]"
-      values: [3.0]      # 離散値リスト
+      values: [3.0]     
 
   # スイープ実行設定
   execution:

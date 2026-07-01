@@ -13,6 +13,12 @@ scenario:
     logging_level: 3
     physics_max_step_size: 0.0001
 
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: "physical_score_priority"
+        proactive_handover_score_threshold: -130.0
+
   # ====================================================
   # モデルカタログ
   # ====================================================

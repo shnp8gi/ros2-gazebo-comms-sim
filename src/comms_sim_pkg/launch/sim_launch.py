@@ -741,110 +741,22 @@ def launch_setup(context, *args, **kwargs):
         antenna_base_rpy = [0.0, 0.0, 0.0]
 
     # =========================================================================
-    # 各車両ごとの通信ノード＆TXコントローラノードの起動
+    # 各車両のアンテナ設定の処理 (必要に応じて将来利用)
     # =========================================================================
-    comms_params = config.get('comms_simulator_node', {}).get('ros__parameters', {})
-
     for vehicle_cfg in vehicles:
         v_name = vehicle_cfg.get('name', 'suv')
-        v_pose = vehicle_cfg.get('pose', [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-        suv_pose = [float(v_pose[0]), float(v_pose[1]), float(v_pose[2])]
-
-        # アンテナ設定の読み込み（後方互換性対応含む）
-        v_antennas = vehicle_cfg.get('antennas', [])
-        if not v_antennas:
-            # 旧設定の場合、デフォルトで1つのアンテナを作成
-            v_antennas = [{
-                'name': v_name,
-                'offset': vehicle_cfg.get('antenna_offset', [0.0, 0.0, 1.9]),
-                'relative_rpy': vehicle_cfg.get('antenna_relative_rpy', [0.0, 0.0, 0.0])
-            }]
-
-        # -----------------------------------------------------------------
-        # 通信シミュレータノード（アンテナごと）
-        # -----------------------------------------------------------------
-        for ant_cfg in v_antennas:
-            ant_name = ant_cfg.get('name', f"{v_name}_ant")
-            
-            # 車両のアンテナパラメータ
-            v_antenna_offset = [0.0, 0.0, 1.9]
-            v_antenna_relative_rpy = [0.0, 0.0, 0.0]
-
-            v_offset_raw = ant_cfg.get('offset')
-            if isinstance(v_offset_raw, list) and len(v_offset_raw) >= 3:
-                v_antenna_offset = [float(v) for v in v_offset_raw[:3]]
-
-            v_rpy = ant_cfg.get('relative_rpy')
-            if isinstance(v_rpy, list) and len(v_rpy) >= 3:
-                v_antenna_relative_rpy = [float(r) for r in v_rpy[:3]]
-
-            # -----------------------------------------------------------------
-            # TXコントローラノードおよび通信ノード（車両ごと）
-            # -----------------------------------------------------------------
-            # C++ Gazebo Plugin (TxControllerPlugin.cc) に移行したため、
-            # Python版ノードの起動はスキップします。
-            actions.append(LogInfo(
-                msg=f'[tx_controller_{v_name}] Pythonノード起動をスキップし、C++プラグインを使用します。'
-            ))
-
-    # =========================================================================
-    # link_controller_node & sim_logger_node の起動
-    # =========================================================================
-    vehicle_names = []
-    base_vehicle_names = []
-    for v in vehicles:
-        base_name = v.get('name', 'suv')
-        base_vehicle_names.append(base_name)
-        if 'antennas' in v and v['antennas']:
-            for a in v['antennas']:
-                vehicle_names.append(a.get('name'))
-        else:
-            vehicle_names.append(base_name)
-    link_ctrl_params = config.get('link_controller_node', {}).get('ros__parameters', {})
-    
-    # 実行時のタイムスタンプを生成して同期
-    import datetime
-    run_timestamp = datetime.datetime.now().strftime('%Y%m%d_%H%M%S')
-
-    if len(vehicle_names) > 0:
-        # link_controller_node は C++ Gazebo Plugin (TxControllerPlugin.cc) に移行したため起動をスキップします。
-        sim_logger_node_action = Node(
-            package='comms_sim_pkg',
-            executable='sim_logger_node.py',
-            name='sim_logger_node',
-            output='screen',
-            parameters=[
-                {
-                    'vehicle_names': vehicle_names,
-                    'base_vehicle_names': base_vehicle_names,
-                    'output_dir': os.path.join(get_workspace_root(), 'sim_results', ''),
-                    'logging_level': int(sim_config.get('logging_level', 1)),
-                    'run_timestamp': run_timestamp,
-                    'use_sim_time': False,
-                    'config_file_path': config_path,
-                    'output_subdir': output_subdir
-                }
-            ]
-        )
-
-        sim_logger_node = TimerAction(
-            period=comms_node_delay + 1.0,
-            actions=[sim_logger_node_action]
-        )
-        actions.append(sim_logger_node)
         
-        # sim_logger_node がミッション完了を検知して終了したら、全体の launch をシャットダウンする
-        shutdown_event = RegisterEventHandler(
-            event_handler=OnProcessExit(
-                target_action=sim_logger_node_action,
-                on_exit=[EmitEvent(event=Shutdown())]
-            )
-        )
-        actions.append(shutdown_event)
+        # C++ Gazebo Plugin (TxControllerPlugin.cc) への移行が完了したため、
+        # 旧来のPython版通信ノードおよびコントローラノードの起動はスキップされます。
+        actions.append(LogInfo(
+            msg=f'[{v_name}] Vehicle communications handled by TxControllerPlugin (C++).'
+        ))
 
-        # =================================================================
-        # Ready ゲートノード（全ノードの起動同期）
-        # =================================================================
+    # =========================================================================
+    # Ready ゲートノード（全ノードの起動同期）
+    # =========================================================================
+    # C++プラグイン(TxControllerPlugin)からのReadyシグナルを待機する
+    if len(vehicles) > 0:
         # expected_nodes: 全 comms_node + 全 tx_controller
         expected_ready_nodes = []
         for v in vehicles:

@@ -13,6 +13,11 @@ scenario:
     logging_level: 3
     physics_max_step_size: 0.0001
 
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: "simple_no_handover"
+
   # ====================================================
   # モデルカタログ: 利用可能なモデルの定義
   # models/ ディレクトリのサブフォルダ名と対応
@@ -47,27 +52,27 @@ scenario:
       antennas:
         - name: "antenna_0"
           offset: [0.0, 0.0, 1.00]
-          relative_rpy: [0.0, 0.0, -1.5115]
+          relative_rpy: [0.0, 0.0, 0.0]
 
     - name: "antenna_1"
       model: "antenna"
       role: "rx"
       static: true
-      pose: [0.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+      pose: [0.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
       antennas:
         - name: "antenna_1"
           offset: [0.0, 0.0, 1.00]
-          relative_rpy: [0.0, 0.0, -1.5115]
+          relative_rpy: [0.0, 0.0, 0.0]
 
     - name: "antenna_2"
       model: "antenna"
       role: "rx"
       static: true
-      pose: [5.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+      pose: [5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
       antennas:
         - name: "antenna_2"
           offset: [0.0, 0.0, 1.00]
-          relative_rpy: [0.0, 0.0, -1.5115]
+          relative_rpy: [0.0, 0.0, 0.0]
 
     # --- Tx（車両）エンティティ ---
     - name: "shinkansen"
@@ -80,10 +85,10 @@ scenario:
       antennas:
         - name: "shinkansen_front"
           offset: [10.0, 1.5, 1.0]
-          relative_rpy: [0.0, 0.0, 0.0593]
+          relative_rpy: [0.0, 0.0, 0.0]
         - name: "shinkansen_mid"
           offset: [0.0, 1.5, 1.0]
-          relative_rpy: [0.0, 0.0, 0.0593]
+          relative_rpy: [0.0, 0.0, 0.0]
         - name: "shinkansen_rear"
           offset: [-10.0, 1.5, 1.0]
-          relative_rpy: [0.0, 0.0, 0.0593]
+          relative_rpy: [0.0, 0.0, 0.0]

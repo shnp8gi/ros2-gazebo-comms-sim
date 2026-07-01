@@ -40,7 +40,11 @@ def generate_sim_params(scenario, overrides=None):
         
     base_config = load_yaml(full_base_config_path)
     
-    # 1. Apply simulation overrides
+    # 1. Apply config overrides
+    if 'config_overrides' in scenario:
+        deep_merge(base_config, scenario['config_overrides'])
+        
+    # Apply simulation overrides (backward compatibility)
     if 'simulation_overrides' in scenario:
         if 'simulation' not in base_config:
             base_config['simulation'] = {}

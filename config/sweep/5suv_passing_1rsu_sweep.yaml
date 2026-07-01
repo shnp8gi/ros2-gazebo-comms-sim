@@ -9,15 +9,23 @@ sweep:
   # スイープ変数の定義（同じgroup内の変数は同期して動き、別groupや単独変数とは総当たりになります）
   variables:
     - group:
-        - name: "rx_antenna_yaw"
-          description: "基地局アンテナの相対ヨー角"
-          target:
-            entity_role: "rx" # 基地局に適用
-            field: "antennas.*.relative_rpy[2]" # yaw成分
+    - name: "synchronized_antenna_yaw"
+      description: "アンテナ角度の同期スイープ"
+      targets:
+        - entity_role: "rx"
+          field: "antennas.*.relative_rpy[2]"
+          unit: "degree"
           range:
-            start: -90.0 # deg
-            end: 90.0 # deg
-            step: 5.0 # deg
+            start: -180.0
+            end: 0.0
+            step: 5.0
+        - entity_role: "tx"
+          field: "antennas.*.relative_rpy[2]"
+          unit: "degree"
+          range:
+            start: -90.0
+            end: 90.0
+            step: 5.0
 
         - name: "tx_antenna_yaw"
           description: "SUVアンテナの相対ヨー角"
@@ -36,6 +44,6 @@ sweep:
   # スイープ実行設定
   execution:
     num_runs: 1
-    task_timeout_sec: 500
+    task_timeout_sec: 600
     real_time_factor: 5.0
     max_concurrency: 4

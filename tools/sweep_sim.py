@@ -564,22 +564,30 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         run_idx, task_vars, overall_task_no = task_info[:3]
         local_task_no = overall_task_no
         
-    y = task_vars.get('rx_y_position', getattr(sweep_config, 'Y_POSITIONS', [3.0])[0])
-    angle_deg = task_vars.get('rx_antenna_yaw', getattr(sweep_config, 'START_ANGLE', 0.0))
-    
-    world_yaw = math.radians(angle_deg) - math.pi
-    entity_yaw = math.radians(base_station_yaw_deg)
-    antenna_yaw = world_yaw - entity_yaw
- 
-    y_str = f"{round(y, 2):g}"
-    angle_str = f"{angle_deg:g}"
-    summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_y{y_str}_a{angle_str}_w{worker_id}.csv"
+    task_suffix_parts = []
+    y_val = 0.0
+    angle_val = 0.0
+    for k, state_overrides in task_vars.items():
+        if not state_overrides:
+            continue
+        val = state_overrides[0].get('value', 0)
+        
+        if k == 'rx_y_position': y_val = val
+        if 'yaw' in k.lower(): angle_val = val
+        
+        if isinstance(val, float):
+            task_suffix_parts.append(f"{k}_{val:g}")
+        else:
+            task_suffix_parts.append(f"{k}_{val}")
+            
+    task_suffix = "_".join(task_suffix_parts) if task_suffix_parts else "default"
+    summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_{task_suffix}_w{worker_id}.csv"
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
     ros_domain_id = 10 + worker_id
  
     pct = (local_task_no - 1) / total_runs_tasks * 100
     print(f"\n=======================================================")
-    print(f"[Worker {worker_id}] [Run {run_idx}/{NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) " + ", ".join([f"{k}={v}" for k,v in task_vars.items()]))
+    print(f"[Worker {worker_id}] [Run {run_idx}/{NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) {task_suffix}")
     print(f"=======================================================")
  
     t_expected = None
@@ -640,29 +648,10 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 dx = 83.33 * 0.001
                 dither_x = (((run_idx - 1) / num_runs) - 0.5) * dx
                 
-            # Define overrides
-            overrides = [
-                {'role': 'rx', 'field': 'pose[1]', 'value': y},
-                {'role': 'rx', 'field': 'antennas.*.relative_rpy[2]', 'value': antenna_yaw},
-                {'role': 'tx', 'field': 'antennas.*.relative_rpy[2]', 'value': math.radians(angle_deg)},
-                {'role': 'rx', 'field': 'pose[5]', 'value': entity_yaw}
-            ]
-            
-            # Additional overrides based on global generic configuration
-            if hasattr(sweep_config, 'GENERIC_VARIABLES'):
-                for gv in sweep_config.GENERIC_VARIABLES:
-                    name = gv['name']
-                    if name in ['rx_y_position', 'rx_antenna_yaw']:
-                        continue
-                    if name in task_vars:
-                        target = dict(gv['target'])
-                        target['value'] = task_vars[name]
-                        if 'entity_role' in target:
-                            target['role'] = target.pop('entity_role')
-                        if 'entity_name' in target:
-                            # Keep it as entity_name since scenario_loader uses it directly via ovr.get('entity_name')
-                            pass
-                        overrides.append(target)
+            # Collect overrides directly from generic variables (which now provide full target sets)
+            overrides = []
+            for state_overrides in task_vars.values():
+                overrides.extend(state_overrides)
             
             # Additional overrides based on global sweep configuration
             if 'global_sweep_data' in globals() and global_sweep_data:
@@ -677,8 +666,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 target_scenario['simulation_overrides'] = {}
             target_scenario['simulation_overrides']['summary_filename'] = summary_filename
             target_scenario['simulation_overrides']['output_subdir'] = f"sweep_{sweep_start_time}"
-            target_scenario['simulation_overrides']['y_position'] = y
-            target_scenario['simulation_overrides']['angle_deg'] = angle_deg
+            target_scenario['simulation_overrides']['y_position'] = y_val
+            target_scenario['simulation_overrides']['angle_deg'] = angle_val
             target_scenario['simulation_overrides']['headless'] = True
             target_scenario['simulation_overrides']['real_time_factor'] = rtf
             

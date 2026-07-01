@@ -3,6 +3,12 @@ scenario:
   name: "multi_vehicle_5bs"
   description: "SUV 2台 + 新幹線 1台 + 基地局 5台"
   base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: "physical_score_priority"
+        proactive_handover_score_threshold: -130.0
   
   model_catalog:
     SUV:

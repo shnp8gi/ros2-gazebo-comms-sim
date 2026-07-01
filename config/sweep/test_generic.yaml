@@ -3,22 +3,31 @@ sweep:
   description: "Test generic variables"
   scenario: "config/scenarios/example_multi_model.yaml"
   variables:
-    - name: "rx_antenna_yaw"
-      target:
-        entity_role: "rx"
-        field: "antennas.*.relative_rpy[2]"
-      range:
-        start: 0.0
-        end: 90.0
-        step: 45.0
+    - name: "synchronized_antenna_yaw"
+      description: "アンテナ角度の同期スイープ"
+      targets:
+        - entity_role: "rx"
+          field: "antennas.*.relative_rpy[2]"
+          unit: "degree"
+          range:
+            start: -90.0
+            end: 0.0
+            step: 45.0
+        - entity_role: "tx"
+          field: "antennas.*.relative_rpy[2]"
+          unit: "degree"
+          range:
+            start: 0.0
+            end: 90.0
+            step: 45.0
     - name: "suv_speed"
       target:
         entity_name: "suv_1"
         field: "waypoints.*[3]"
       values: [10.0, 20.0]
-  execution:
+  execution:  
     num_runs: 1
-    task_timeout_sec: 120
+    task_timeout_sec: 600
     real_time_factor: 5.0
     max_concurrency: 2
     base_station_yaw_deg: 0.0

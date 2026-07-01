@@ -20,7 +20,7 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（TX/SUV）と固�
 - **複数ペア同時通信**: `feedforward_optimal` ポリシーにおいて、同時通信に使用する最大アンテナペア数（`ff_max_pairs`）を設定可能。デフォルトでは利用可能な全ペアで並行通信をサポート。
 - **プロアクティブハンドオーバーと自律的権限譲渡**: 通信データ上限到達時の自律的な譲渡のほか、リンク切断（DISCONNECTED）時に即座に最適な幾何学スコアを持つ後続車両へ通信権を強制切替する機能。
 - **GPUアクセラレーション対応**: Docker Composeでの NVIDIA GPU リソース割り当てにより、GUIモードでの高速なGazeboレンダリングをサポート。
-- **ミッション完了時の自動終了と集計**: 全車両のミッション完了を検知して安全に自動終了。プラグインがログCSVを直接保存した後、`sim_logger_node.py` がファイルを直接パースして正確なサマリー（`sweep_summary.csv`）を再集計・保存。
+- **ミッション完了時の自動終了と集計**: 全車両のミッション完了を検知して安全に自動終了。C++プラグインおよびROSノードがログおよび統計サマリーCSVを直接ディスクに保存し、スイープ実行時などはPythonツール群によって結果がマージ・検証されます。
 
 ## 🛠️ 技術スタック
 
@@ -37,43 +37,34 @@ ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（TX/SUV）と固�
 ```
 ros2-gazebo-comms-sim/
 ├── config/                          # 設定ファイル
-│   ├── sim_params.yaml             # メインパラメータファイル
+│   ├── scenarios/                  # シナリオ設定用YAMLファイル群
+│   ├── sweep/                      # スイープ実行用YAMLファイル群
 │   ├── e_plane.csv                 # E面（垂直面）アンテナパターン
 │   ├── h_plane.csv                 # H面（水平面）アンテナパターン
 │   └── MCStable.csv                # MCS（変調・符号化方式）テーブル
 │
-├── models/                          # Gazeboモデル
-│   ├── antenna/                    # 基地局アンテナモデル
-│   │   ├── model.config
-│   │   ├── model.sdf
-│   │   └── meshes/
-│   └── SUV/                        # 移動車両モデル
-│       ├── model.config
-│       ├── model.sdf
-│       └── meshes/
-│
 ├── comms_sim_pkg/                   # ROS 2 / Gazebo パッケージ
+│   ├── config/                      # ベース設定
+│   │   └── sim_params.yaml          # デフォルトのベースパラメータ
 │   ├── include/comms_sim_pkg/       # C++ ヘッダー
 │   │   ├── antenna_pattern_parser.hpp
 │   │   ├── comms_calculator.hpp
 │   │   └── comms_node.hpp
+│   ├── models/                      # Gazeboモデル
+│   │   ├── antenna/                 # 基地局アンテナモデル
+│   │   ├── SUV/                     # 移動車両モデル
+│   │   └── Shinkansen/              # 新幹線車両モデル
 │   ├── src/                         # C++ ソースコード
 │   │   ├── TxControllerPlugin.cc    # 制御、通信、調停、ログ書き込みを統合したGazeboプラグイン
 │   │   ├── antenna_pattern_parser.cpp
 │   │   ├── comms_calculator.cpp
 │   │   └── comms_node.cpp           # ROS 2 C++ノード (C++プラグイン非使用時のフォールバック用)
-│   ├── comms_sim_pkg/               # Pythonモジュール（制御およびロギングノード）
-│   │   ├── antenna_parser.py
-│   │   ├── comms_calculator.py
-│   │   ├── comms_node.py
-│   │   ├── link_controller_node.py
-│   │   ├── link_scheduling_strategy.py
-│   │   ├── sim_ready_gate_node.py   # 全プラグイン準備完了を同期してシミュレーションを開始するゲート
-│   │   ├── sim_logger_node.py       # ミッション完了時のログ収集、サマリー集計・CSV保存
-│   │   └── tx_controller_node.py
+│   ├── comms_sim_pkg/               # Pythonモジュール
+│   │   ├── __init__.py
+│   │   └── sim_ready_gate_node.py   # 全プラグイン準備完了を同期してシミュレーションを開始するゲート
 │   ├── launch/
 │   │   └── sim_launch.py          # Gazebo起動/スポーン/ブリッジ/ノード起動
-│   ├── resource/
+│   ├── worlds/
 │   │   └── minimal_world.sdf
 │   ├── CMakeLists.txt
 │   └── package.xml
@@ -90,6 +81,12 @@ ros2-gazebo-comms-sim/
 │               ├── comms/            # 通信品質の時系列CSVファイル ({vehicle_name}_connected.csv / {vehicle_name}_full.csv)
 │               ├── control/          # 制御・イベントのCSVファイル (events.csv, feedforward_log.csv)
 │               └── heatmap/          # アンテナ制御用事前計算ヒートマップ (rssi_heatmap.csv)
+│
+├── tools/                            # スイープ実行・集計ツール群
+│   ├── plot_sweep.py                 # スイープ結果の可視化ツール
+│   ├── sweep_sim.py                  # 自動パラメータスイープ実行スクリプト
+│   ├── sweep_dist.py                 # 分散実行ツール
+│   └── sweep_progress.py             # スイープ進捗監視ツール
 │
 ├── docker-compose.yml
 ├── docker-compose.gpu.yml            # GPU設定オーバーライド
@@ -304,7 +301,45 @@ python3 tools/sweep_sim.py --resume
 python3 tools/sweep_sim.py --resume 20260526_145419
 ```
 
-### 3. スイープ設定ファイル (`tools/lib/sweep_config.py`)
+### 3. スイープ設定ファイル (YAML形式)
+スイープパラメータはYAMLファイルで定義し、`--sweep-config`オプションで指定することが推奨されます。
+古い `tools/lib/sweep_config.py` はデフォルトのフォールバックとしてのみ使用されます。
+
+例: `config/sweep/ho_1shinkansen_sweep.yaml`
+```yaml
+sweep:
+  name: "ho_angle_sweep_0_to_180"
+  description: "基地局アンテナ角度スイープ"
+  scenario: "config/scenarios/1shinkansen_mount3antenna_3bs.yaml"
+  
+  variables:
+    - name: "synchronized_antenna_yaw"
+      description: "アンテナ角度の同期スイープ"
+      targets:
+        - entity_role: "rx"
+          field: "antennas.*.relative_rpy[2]"
+          unit: "degree"
+          range:
+            start: -90.0
+            end: 90.0
+            step: 1.0
+        - entity_role: "tx"
+          field: "antennas.*.relative_rpy[2]"
+          unit: "degree"
+          range:
+            start: 0.0
+            end: 180.0
+            step: 1.0
+
+  execution:
+    num_runs: 1
+    task_timeout_sec: 600
+    real_time_factor: 5.0
+```
+
+YAMLでは、`targets` リストを使用することで複数のパラメータを同期してスイープさせることが可能です。また、`unit` を指定することで内部的なラジアン変換などを自動で行います。
+
+### 3.1 古い設定ファイル (`tools/lib/sweep_config.py`)
 スイープのデフォルトパラメータは `tools/lib/sweep_config.py` に定義されています。引数なしで実行した場合、これらのデフォルト値が適用されます。
 
 ```python
@@ -398,9 +433,10 @@ python3 tools/sweep_dist.py merge --sweep-dir sim_results/sweep_{スイープID}
 
 ## ⚙️ パラメータ設定
 
-### config/sim_params.yaml
+### シナリオベースの設定 (config/scenarios/*.yaml)
 
-主要なパラメータは `config/sim_params.yaml` で設定します。ランチファイル `comms_sim_pkg/launch/sim_launch.py` がこのYAMLを読み込み、Gazebo起動、モデルスポーン、ros_gz_bridge、各ノード起動に反映します。
+本シミュレータでは、各種パラメータをシナリオファイル（`config/scenarios/*.yaml`）で定義します。
+ランチファイル `comms_sim_pkg/launch/sim_launch.py` は、内部で `scenario_loader.py` を呼び出し、ベース設定（`src/comms_sim_pkg/config/sim_params.yaml`）に対してシナリオファイルの設定を動的にマージ（上書き）して、Gazebo起動、モデルスポーン、各ノード起動に反映させます。
 
 #### 全体シミュレーションパラメータ
 
@@ -444,14 +480,16 @@ comms_simulator_node:
 ```yaml
 link_controller_node:
   ros__parameters:
-    scheduling_policy: value # スケジューリングポリシー (例: sequential, round_robin, rssi_priority, geometric_beam_priority, physical_score_priority, geometric_weighted, feedforward_optimal)
+    scheduling_policy: value # スケジューリングポリシー (例: sequential, round_robin, rssi_priority, geometric_beam_priority, physical_score_priority, geometric_weighted, feedforward_optimal) (default: "feedforward_optimal")
     heatmap_resolution_m: value # 軌道上の事前計算サンプリング解像度 [m] (feedforward_optimal または logging_level >= 5 で有効) (default: 0.2)
     ff_max_pairs: value # 同時通信に使用する最大アンテナペア数 (-1で全ペア使用) (default: -1)
+    ff_hysteresis_margin_db: value # feedforward_optimal時のアンテナ切替ヒステリシスマージン [dB] (default: 2.0)
     time_slot_duration_s: value # round_robin時のスロット長 [s] (default: 10.0)
     rssi_threshold: value # rssi_priority時の閾値 [dBm] (default: -75)
     beam_gain_threshold: value # geometric_beam_priority用の最小ゲイン閾値 [dBi] (default: 5.0)
     weight_distance: value # geometric_weighted用の距離重み係数 (default: 0.7)
     weight_angle: value # geometric_weighted用の角度重み係数 (default: 0.3)
+    filter_main_lobe: value # メインローブ外のアンテナを足切りするか (default: true)
 ```
 
 ※ 通信距離はワールド座標で計算されます。`/odom`（相対座標）からワールド座標へ変換するため、通常は `spawn_entities.suv.pose` と同じ値を指定します（launch が自動で渡します）。
@@ -471,23 +509,39 @@ tx_controller_common:
 
 #### エンティティスポーン設定
 
-```yaml
-spawn_entities:
-  antenna:
-    model_uri: value # モデルURI (default: "models://antenna")
-    name: value # エンティティ名 (default: "antenna")
-    pose: [x, y, z, roll, pitch, yaw] # (default: [0.0, 6.0, 0.0, 0.0, 0.0, 0.0])
-    static: value # 静的オブジェクト (default: true)
-    antenna_height_offset: value # アンテナ高さ [m] (default: 3.0)
-    antenna_relative_rpy: [r, p, y] # アンテナ相対角度 [rad] (default: [0.0, 0.0, -1.5708])
+シナリオYAMLにて `model_catalog` および `entities` を定義します。
 
-  suv:
-    model_uri: value # モデルURI (default: "models://SUV")
-    name: value # エンティティ名 (default: "suv")
-    pose: [x, y, z, roll, pitch, yaw] # (default: [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    static: value # 静的オブジェクト (default: false)
-    antenna_height_offset: value # アンテナ高さ [m] (default: 1.9)
-    antenna_relative_rpy: [r, p, y] # アンテナ相対角度 [rad] (default: [0.0, 0.0, 0.0])
+```yaml
+  model_catalog:
+    antenna:
+      sdf_path: "models://antenna"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+    SUV:
+      sdf_path: "models://SUV"
+      default_antenna_offset: [0.0, 0.0, 2.23]
+
+  entities:
+    - name: "antenna_0"
+      model: "antenna"
+      role: "rx"                      # 基地局（受信側）
+      static: true
+      pose: [-5.0, 0.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - name: "antenna_0"
+          offset: [0.0, 0.0, 1.00]
+          relative_rpy: [0.0, 0.0, 0.0]
+
+    - name: "my_vehicle"
+      model: "SUV"
+      role: "tx"                      # 車両（送信側）
+      pose: [-100.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-100.0, 0.0, 0.0, 10.0]    # [X, Y, Z, V]
+        - [100.0, 0.0, 0.0, 10.0]
+      antennas:
+        - name: "my_vehicle_antenna"
+          offset: [0.0, 0.0, 2.23]
+          relative_rpy: [0.0, 0.0, 0.0]
 ```
 
 ## 📊 出力データ
@@ -610,6 +664,10 @@ float64 antenna_gain_e_plane   # E面ゲイン [dBi]
 float64 antenna_gain_h_plane   # H面ゲイン [dBi]
 float64 path_loss              # パスロス [dB]
 bool comm_active               # 通信アクティブフラグ
+string link_state              # リンク確立状態 (DISCONNECTED, ESTABLISHING, CONNECTED)
+bool in_main_lobe              # メインローブ内判定
+float64 off_boresight_e_deg    # E面オフボアサイト角度 [deg]
+float64 off_boresight_h_deg    # H面オフボアサイト角度 [deg]
 ```
 
 ## 🔧 伝搬路モデルの拡張（Strategy Pattern）
