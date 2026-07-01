@@ -28,12 +28,9 @@
 #include "comms_sim_pkg/comms_calculator.hpp"
 #include "comms_sim_pkg/antenna_pattern_parser.hpp"
 
-namespace tx_controller
-{
 #include "comms_sim_pkg/DataTypes.hpp"
 #include "comms_sim_pkg/Utils.hpp"
 
-#include "comms_sim_pkg/VehicleMotionController.hpp"
 #include "comms_sim_pkg/VehicleMotionController.hpp"
 #include "comms_sim_pkg/SimulationLogger.hpp"
 #include "comms_sim_pkg/CommsEnvironment.hpp"
@@ -51,7 +48,7 @@ namespace tx_controller
         TxControllerPlugin() = default;
         ~TxControllerPlugin() override {
             if (this->comms_initialized && !this->logs_saved) {
-                this->SaveLogs();
+                this->logger.SaveLogs(this->model_name, this->vehicle_antennas, this->scheduling_policy);
                 this->logs_saved = true;
             }
         }
@@ -67,6 +64,13 @@ namespace tx_controller
                 gzerr << "[TxControllerPlugin] Plugin should be attached to a model entity." << std::endl;
                 return;
             }
+
+            std::vector<MotionWaypoint> local_waypoints;
+            double local_waypoint_tolerance = 1.0;
+            double local_max_angular_velocity = 1.0;
+            double local_heading_gain = 1.0;
+            double local_max_acceleration = 1.0;
+            bool local_is_shinkansen = false;
 
             // Read params
             if (_sdf->HasElement("waypoints")) {
@@ -84,20 +88,20 @@ namespace tx_controller
                     vals.push_back(val);
                 }
                 for (size_t i = 0; i + 3 < vals.size(); i += 4) {
-                    this->waypoints.push_back({vals[i], vals[i+1], vals[i+2], vals[i+3]});
+                    local_waypoints.push_back({vals[i], vals[i+1], vals[i+2], vals[i+3]});
                 }
             }
 
             if (_sdf->HasElement("waypoint_tolerance"))
-                this->waypoint_tolerance = _sdf->Get<double>("waypoint_tolerance");
+                local_waypoint_tolerance = _sdf->Get<double>("waypoint_tolerance");
             if (_sdf->HasElement("heading_gain"))
-                this->heading_gain = _sdf->Get<double>("heading_gain");
+                local_heading_gain = _sdf->Get<double>("heading_gain");
             if (_sdf->HasElement("max_acceleration"))
-                this->max_acceleration = _sdf->Get<double>("max_acceleration");
+                local_max_acceleration = _sdf->Get<double>("max_acceleration");
             if (_sdf->HasElement("max_angular_velocity"))
-                this->max_angular_velocity = _sdf->Get<double>("max_angular_velocity");
+                local_max_angular_velocity = _sdf->Get<double>("max_angular_velocity");
             if (_sdf->HasElement("is_shinkansen"))
-                this->is_shinkansen = _sdf->Get<bool>("is_shinkansen");
+                local_is_shinkansen = _sdf->Get<bool>("is_shinkansen");
 
             // Topic names
             std::string mission_topic = "/mission_complete";
@@ -123,12 +127,12 @@ namespace tx_controller
             this->mission_progress_pub = this->node.Advertise<gz::msgs::Double>("/" + this->model.Name(_ecm) + "/mission_progress");
 
             this->motion_controller.Configure(
-                this->waypoints,
-                this->waypoint_tolerance,
-                this->max_angular_velocity,
-                this->heading_gain,
-                this->max_acceleration,
-                this->is_shinkansen
+                local_waypoints,
+                local_waypoint_tolerance,
+                local_max_angular_velocity,
+                local_heading_gain,
+                local_max_acceleration,
+                local_is_shinkansen
             );
 
             // Setup subscriber
@@ -144,7 +148,7 @@ namespace tx_controller
             }
 
             gzmsg << "[TxControllerPlugin] Initialized on model [" << this->model.Name(_ecm) 
-                  << "] with " << this->waypoints.size() << " waypoints." << std::endl;
+                  << "] with " << local_waypoints.size() << " waypoints." << std::endl;
         }
 
         void OnAllReady(const gz::msgs::Boolean &_msg) {
@@ -263,18 +267,6 @@ namespace tx_controller
             double comm_data_limit = comms_params["comm_data_limit_mb"].as<double>(-1.0);
             this->comm_data_limit_mb = comm_data_limit;
             this->link_establishment_time_ms = comms_params["link_establishment_time_ms"].as<double>(2.0);
-            double tx_power = comms_params["tx_power"].as<double>(-7.0);
-            double noise_variance = comms_params["noise_variance"].as<double>(0.0);
-            std::string mcs_table_path = resolve_path(comms_params["mcs_table_path"].as<std::string>(""));
-            
-            double max_antenna_attenuation = comms_params["max_antenna_attenuation"].as<double>(30.0);
-            double mainlobe_angle_margin_deg = comms_params["mainlobe_angle_margin_deg"].as<double>(5.0);
-            double mainlobe_e_half_angle_deg = comms_params["mainlobe_e_half_angle_deg"].as<double>(-1.0);
-            double mainlobe_h_half_angle_deg = comms_params["mainlobe_h_half_angle_deg"].as<double>(-1.0);
-
-            // 3. Setup propagation model
-            auto pl = comms_params["path_loss"];
-            double c = pl["c"].as<double>(299792458.0);
 
             this->comms_env.Configure(this->config_file_path);
             this->scheduler.Configure(this->scheduling_policy, this->filter_main_lobe, this->min_hold_time_s,
@@ -359,7 +351,7 @@ namespace tx_controller
                 polyline_points.push_back(Eigen::Vector3d(wp.x, wp.y, wp.z));
             }
 
-            auto samples = sample_trajectory(polyline_points, this->heatmap_resolution_m);
+            auto samples = utils::sample_trajectory(polyline_points, this->heatmap_resolution_m);
             if (samples.empty()) return;
 
             this->lut.clear();
@@ -585,14 +577,14 @@ namespace tx_controller
                     }
                 } else {
                     int required_steps = static_cast<int>(std::ceil(this->link_establishment_time_ms / 1000.0 * 1000.0));
-                    if (ant.link_state == "DISCONNECTED" && ant.last_rssi > this->comms_calculator->rssi_min) {
+                    if (ant.link_state == "DISCONNECTED" && ant.last_rssi > this->comms_env.GetRssiMin()) {
                         ant.link_state = "ESTABLISHING";
                         ant.establishment_step_count = 1;
                     } else if (ant.link_state == "ESTABLISHING") {
-                        if (ant.last_rssi <= this->comms_calculator->rssi_min) ant.link_state = "DISCONNECTED";
+                        if (ant.last_rssi <= this->comms_env.GetRssiMin()) ant.link_state = "DISCONNECTED";
                         else if (++ant.establishment_step_count >= required_steps) { ant.link_state = "CONNECTED"; link_ready = true; }
                     } else if (ant.link_state == "CONNECTED") {
-                        if (ant.last_rssi <= this->comms_calculator->rssi_min) ant.link_state = "DISCONNECTED";
+                        if (ant.last_rssi <= this->comms_env.GetRssiMin()) ant.link_state = "DISCONNECTED";
                         else link_ready = true;
                     }
                 }
@@ -698,8 +690,7 @@ namespace tx_controller
         std::string config_summary_filename = "sweep_summary.csv";
         std::string config_output_subdir = "";
         std::string config_output_dir = "/workspace/sim_results/";
-    };
-}
+} // namespace tx_controller
 
 GZ_ADD_PLUGIN(
     tx_controller::TxControllerPlugin,

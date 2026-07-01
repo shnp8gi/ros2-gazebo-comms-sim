@@ -35,18 +35,12 @@ if _tools_dir != _script_dir and _tools_dir not in sys.path and os.path.isdir(os
 # パラメータスイープ設定のインポート (Single Responsibility Principle)
 # =========================================================================
 from lib.sweep_config import (
-    Y_POSITIONS,
-    RX_YAW_DEG as BASE_STATION_YAW_DEG,
-    START_ANGLE,
-    END_ANGLE,
-    STEP_ANGLE,
     NUM_RUNS,
     TASK_TIMEOUT_SEC,
     SWEEP_REAL_TIME_FACTOR,
     PROGRESS_LOG,
     CONFIG_PATH,
     BACKUP_PATH,
-    ANGLES_DEG,
     load_sweep_config
 )
 import lib.sweep_config as sweep_config

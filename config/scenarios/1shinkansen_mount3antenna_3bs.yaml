@@ -2,22 +2,24 @@
 scenario:
   name: "default_shinkansen_3bs"
   description: "新幹線 + 3基地局のデフォルトシナリオ"
-  
+
   # ベースコンフィグ（既存の sim_params.yaml）
   base_config: "src/comms_sim_pkg/config/sim_params.yaml"
-  
+
   # シミュレーション設定の上書き（base_configの値をマージ）
   simulation_overrides:
     headless: true
     real_time_factor: 5.0
     logging_level: 3
-    physics_max_step_size: 0.0001
+    physics_max_step_size: 0.001
 
   # スケジューリング等のシナリオ専用制御パラメータ上書き
   config_overrides:
     link_controller_node:
       ros__parameters:
-        scheduling_policy: ""
+        scheduling_policy: "feedforward_optimal"
+        switch_mergin_db: 2.0
+        min_hold_distance: 0.0
         ff_max_pairs: -1
         ff_hysteresis_margin_db: 2.0
         proactive_handover_score_threshold: -130.0
@@ -31,13 +33,13 @@ scenario:
       sdf_path: "models://SUV"
       description: "標準SUVモデル"
       default_antenna_offset: [0.0, 0.0, 2.23]
-      
+
     Shinkansen:
       sdf_path: "models://Shinkansen"
       description: "新幹線モデル（75m長）"
       default_antenna_offset: [0.0, 0.0, 1.0]
       is_rail_vehicle: true
-      
+
     antenna:
       sdf_path: "models://antenna"
       description: "基地局アンテナモデル"
@@ -49,10 +51,10 @@ scenario:
   entities:
     # --- Rx（基地局）エンティティ ---
     - name: "antenna_0"
-      model: "antenna"                # model_catalog のキー
-      role: "rx"                      # rx = 基地局（受信側）
+      model: "antenna" # model_catalog のキー
+      role: "rx" # rx = 基地局（受信側）
       static: true
-      pose: [-5.0, 0.0, 0.0, 0.0, 0.0, -1.5708]
+      pose: [-5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
       antennas:
         - name: "antenna_0"
           offset: [0.0, 0.0, 1.00]
@@ -62,7 +64,7 @@ scenario:
       model: "antenna"
       role: "rx"
       static: true
-      pose: [0.0, 0.0, 0.0, 0.0, 0.0, -1.5708]
+      pose: [0.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
       antennas:
         - name: "antenna_1"
           offset: [0.0, 0.0, 1.00]
@@ -72,7 +74,7 @@ scenario:
       model: "antenna"
       role: "rx"
       static: true
-      pose: [5.0, 0.0, 0.0, 0.0, 0.0, -1.5708]
+      pose: [5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
       antennas:
         - name: "antenna_2"
           offset: [0.0, 0.0, 1.00]
@@ -80,8 +82,8 @@ scenario:
 
     # --- Tx（車両）エンティティ ---
     - name: "shinkansen"
-      model: "Shinkansen"             # model_catalog のキー
-      role: "tx"                      # tx = 車両（送信側）
+      model: "Shinkansen" # model_catalog のキー
+      role: "tx" # tx = 車両（送信側）
       pose: [-1000, 0.0, 0.0, 0.0, 0.0, 0.0]
       waypoints:
         - [-1000, 0.0, 0.0, 83.33]
