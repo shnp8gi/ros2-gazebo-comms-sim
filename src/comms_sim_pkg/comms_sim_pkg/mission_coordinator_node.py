@@ -42,17 +42,19 @@ class MissionCoordinatorNode(Node):
             self.completion_status[vehicle_name] = True
             self.get_logger().info(f"Vehicle '{vehicle_name}' has completed its mission.")
             
-            # Check if all vehicles have completed their missions
             if all(self.completion_status.values()):
                 self.get_logger().info("All vehicles have completed their missions! Waiting for logs to flush before shutting down...")
                 
                 # Sleep briefly to ensure Gazebo CSVs and ROS standard outputs are flushed
+                # Note: Do not call rclpy.shutdown() inside a callback as it causes a deadlock.
+                import os
                 import time
-                time.sleep(3.0)
+                import threading
+                def delayed_exit():
+                    time.sleep(3.0)
+                    os._exit(0)
                 
-                # Exit cleanly so launch's OnProcessExit can catch it
-                rclpy.shutdown()
-                sys.exit(0)
+                threading.Thread(target=delayed_exit, daemon=True).start()
 
 def main(args=None):
     rclpy.init(args=args)
