@@ -1,7 +1,7 @@
 # デフォルトのスイープ設定ファイル
 sweep:
-  name: "angle_sweep_default"
-  description: "基地局アンテナ角度スイープ"
+  name: "angle_sweep_default_small"
+  description: "基地局アンテナ角度スイープ (小規模テスト用)"
   
   # ベースとなるシナリオファイル
   scenario: "config/scenarios/1shinkansen_mount3antenna_3bs.yaml"
@@ -17,14 +17,14 @@ sweep:
           range:
             start: -90.0
             end: 90.0
-            step: 10.0
+            step: 45.0
         - entity_role: "tx"
           field: "antennas.*.relative_rpy[2]"
           unit: "degree"
           range:
             start: 0.0
             end: 180.0
-            step: 10.0
+            step: 45.0
 
     - name: "rx_y_position"
       description: "基地局のY位置"

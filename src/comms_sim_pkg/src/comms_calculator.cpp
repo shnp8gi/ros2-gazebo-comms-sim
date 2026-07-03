@@ -20,24 +20,22 @@ double LogDistancePathLossModel::calculate_path_loss(double distance) const {
   return pl_d0 + 10.0 * exponent * std::log10(distance / d0);
 }
 
-TwoRayGroundModel::TwoRayGroundModel(double tx_height, double rx_height, double tx_gain_db, double rx_gain_db)
-    : tx_height(tx_height), rx_height(rx_height) {
-  tx_gain_linear = std::pow(10.0, tx_gain_db / 10.0);
-  rx_gain_linear = std::pow(10.0, rx_gain_db / 10.0);
+TwoRayGroundModel::TwoRayGroundModel(double tx_height, double rx_height, double frequency, double c)
+    : tx_height(tx_height), rx_height(rx_height), frequency(frequency), c(c) {
 }
 
 double TwoRayGroundModel::calculate_path_loss(double distance) const {
   if (distance <= 0) return 0.0;
-  double frequency = 6.0e10;
-  double c = 299792458.0;
-  double wavelength = c / frequency;
+  double wavelength = this->c / this->frequency;
   double crossover = (4.0 * M_PI * tx_height * rx_height) / wavelength;
 
   if (distance < crossover) {
     return 20.0 * std::log10(4.0 * M_PI * distance / wavelength);
   }
 
-  double gain_term = 10.0 * std::log10(tx_gain_linear * rx_gain_linear * tx_height * tx_height * rx_height * rx_height);
+  // NOTE: Antenna gains are handled in calculate_rssi, so we don't apply them here
+  // to avoid double counting.
+  double gain_term = 10.0 * std::log10(tx_height * tx_height * rx_height * rx_height);
   double path_loss = 40.0 * std::log10(distance) - gain_term;
   return std::max(path_loss, 0.0);
 }

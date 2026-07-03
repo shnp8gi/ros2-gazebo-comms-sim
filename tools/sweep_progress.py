@@ -47,17 +47,16 @@ except Exception:
 PROGRESS_LOG_DEFAULT = os.path.join(project_root, "tools", "log", "sweep_progress.log")
 SIM_RESULTS_DIR = os.path.join(project_root, "sim_results")
 
-# システムリソース検出ライブラリのロード試行
+# システムリソース監視ライブラリ
 try:
-    import psutil
-    HAS_PSUTIL = True
+    import lib.system_monitor as sysmon
 except ImportError:
-    HAS_PSUTIL = False
+    pass
 
 # 進捗ログ解析用のコンパイル済み正規表現
 RE_START = re.compile(r"START (\S+) TOTAL=(\d+)(?:\s+CONCURRENCY=(\d+))?")
-RE_RUNNING = re.compile(r"RUNNING task=(\d+) y=([-\d\.]+) angle=([-\d\.]+) ts=(\S+)(?:\s+worker=(\d+))?")
-RE_DONE = re.compile(r"DONE task=(\d+) y=([-\d\.-]+) angle=([-\d\.-]+) status=(\w+) ts=(\S+)(?:\s+worker=(\d+))?")
+RE_RUNNING = re.compile(r"RUNNING task=(\d+) params=\[(.*?)\] ts=(\S+)(?:\s+worker=(\d+))?")
+RE_DONE = re.compile(r"DONE task=(\d+) params=\[(.*?)\] status=(\w+) ts=(\S+)(?:\s+worker=(\d+))?")
 RE_ABORT = re.compile(r"ABORT ts=(\S+)")
 
 def find_latest_progress_log():
@@ -118,20 +117,18 @@ def parse_progress_log(log_path: str):
                 running_tasks.clear()
                 continue
 
-            # 実行中行: RUNNING task=6 y=1 angle=5 ts=2026-05-18T17:01:25
+            # 実行中行: RUNNING task=6 params=[rx_y_position=1.0m,antenna_yaw=5.0deg] ts=...
             m = RE_RUNNING.match(line)
             if m:
                 try:
                     t_id = int(m.group(1))
-                    y_val = float(m.group(2))
-                    ang_val = float(m.group(3))
-                    start_ts = datetime.datetime.fromisoformat(m.group(4))
-                    worker_id = int(m.group(5)) if m.group(5) else None
+                    params_str = m.group(2)
+                    start_ts = datetime.datetime.fromisoformat(m.group(3))
+                    worker_id = int(m.group(4)) if m.group(4) else None
                     task_start_times[t_id] = start_ts
                     running_tasks[t_id] = {
                         "task_no": t_id,
-                        "y": y_val,
-                        "angle": ang_val,
+                        "params_str": params_str,
                         "started_at": start_ts,
                         "worker_id": worker_id
                     }
@@ -139,18 +136,18 @@ def parse_progress_log(log_path: str):
                     pass
                 continue
 
-            # 完了行: DONE task=5 y=1 angle=4 status=OK ts=2026-05-18T17:01:23
+            # 完了行: DONE task=5 params=[...] status=OK ts=2026-05-18T17:01:23
             m = RE_DONE.match(line)
             if m:
                 try:
                     t_id = int(m.group(1))
-                    status = m.group(4)
+                    status = m.group(3)
                     
                     if status == "SWEEP_COMPLETE":
                         running_tasks.clear()
                         continue
                         
-                    done_ts = datetime.datetime.fromisoformat(m.group(5))
+                    done_ts = datetime.datetime.fromisoformat(m.group(4))
                     completed_task_ids.add(t_id)
                     running_tasks.pop(t_id, None)
                     last_success_time = done_ts
@@ -206,79 +203,7 @@ def make_progress_bar(percent, width=40):
     filled = max(0, min(width, filled))
     return "█" * filled + "░" * (width - filled)
 
-def _read_cpu_ticks():
-    """/proc/stat から CPU チックを読み取る補助関数"""
-    try:
-        with open("/proc/stat", "r") as f:
-            line = f.readline()
-        parts = line.split()
-        if len(parts) >= 5:
-            ticks = [float(x) for x in parts[1:]]
-            total = sum(ticks)
-            idle = ticks[3] + (ticks[4] if len(ticks) > 4 else 0)
-            return total, idle
-    except Exception:
-        pass
-    return 0, 0
 
-def get_cpu_usage(interval=None):
-    """CPU使用率の取得"""
-    if HAS_PSUTIL:
-        try:
-            return psutil.cpu_percent(interval=interval)
-        except Exception:
-            pass
-    
-    # Linux /proc/stat のフォールバック
-    if os.path.exists("/proc/stat"):
-        try:
-            t1, i1 = _read_cpu_ticks()
-            time.sleep(interval or 0.1)
-            t2, i2 = _read_cpu_ticks()
-            
-            dt = t2 - t1
-            di = i2 - i1
-            if dt > 0:
-                return (1.0 - di / dt) * 100.0
-        except Exception:
-            pass
-            
-    return 0.0
-
-def get_memory_usage():
-    """メモリ使用状況の取得 (total_bytes, used_bytes, available_bytes, percent)"""
-    if HAS_PSUTIL:
-        try:
-            mem = psutil.virtual_memory()
-            return mem.total, mem.used, mem.available, mem.percent
-        except Exception:
-            pass
-            
-    # Linux /proc/meminfo のフォールバック
-    if os.path.exists("/proc/meminfo"):
-        try:
-            mem_info = {}
-            with open("/proc/meminfo", "r") as f:
-                for line in f:
-                    parts = line.split()
-                    if len(parts) >= 2:
-                        key = parts[0].rstrip(":")
-                        val = int(parts[1])
-                        mem_info[key] = val
-            total = mem_info.get("MemTotal", 0) * 1024
-            available = mem_info.get("MemAvailable", 0) * 1024
-            if not available:
-                free = mem_info.get("MemFree", 0) * 1024
-                buffers = mem_info.get("Buffers", 0) * 1024
-                cached = mem_info.get("Cached", 0) * 1024
-                available = free + buffers + cached
-            used = total - available
-            pct = (used / total) * 100 if total > 0 else 0
-            return total, used, available, pct
-        except Exception:
-            pass
-            
-    return 0, 0, 0, 0.0
 
 def get_gpu_usage():
     """GPUの状況取得 (nvidia-smi を使用)"""
@@ -347,16 +272,14 @@ def render(log_path: str):
     print("\n  💻 システムリソース状況:")
     
     # CPU
-    cpu_pct = get_cpu_usage(interval=0.1)
+    cpu_pct = sysmon.get_cpu_usage()
     cpu_bar = make_progress_bar(cpu_pct, width=20)
     print(f"    CPU 使用率:  [{cpu_bar}] {cpu_pct:5.1f}%")
     
     # Memory
-    mem_total, mem_used, mem_avail, mem_pct = get_memory_usage()
-    if mem_total > 0:
+    used_gb, total_gb, mem_pct = sysmon.get_memory_usage()
+    if total_gb > 0:
         mem_bar = make_progress_bar(mem_pct, width=20)
-        total_gb = mem_total / (1024**3)
-        used_gb = mem_used / (1024**3)
         print(f"    メモリ使用量: [{mem_bar}] {used_gb:5.1f} / {total_gb:.1f} GiB ({mem_pct:.1f}%)")
     else:
         print("    メモリ使用量: 取得できませんでした")
@@ -376,7 +299,10 @@ def render(log_path: str):
     # 3. 経過時間 & 推定残り時間
     print("\n  ⏱️ 時間計測 & 進捗速度:")
     if info["start_time"]:
-        elapsed = now - info["start_time"]
+        if completed == total and info["last_success_time"]:
+            elapsed = info["last_success_time"] - info["start_time"]
+        else:
+            elapsed = now - info["start_time"]
         elapsed_s = elapsed.total_seconds()
         print(f"    開始時刻 : {info['start_time'].strftime('%Y-%m-%d %H:%M:%S')}")
         print(f"    経過時間 : {str(elapsed).split('.')[0]}")
@@ -396,8 +322,12 @@ def render(log_path: str):
                 avg_dur = sum(info["task_durations"]) / len(info["task_durations"])
                 print(f"    シミュレーション平均実行時間: {avg_dur:.1f} 秒 (1インスタンス単体)")
             
-            print(f"    推定残り時間: {str(datetime.timedelta(seconds=int(eta_s)))}")
-            print(f"    推定完了時刻: {eta_dt.strftime('%Y-%m-%d %H:%M:%S')}")
+            if completed == total and info["last_success_time"]:
+                print(f"    推定残り時間: 0:00:00")
+                print(f"    完了時刻: {info['last_success_time'].strftime('%Y-%m-%d %H:%M:%S')}")
+            else:
+                print(f"    推定残り時間: {str(datetime.timedelta(seconds=int(eta_s)))}")
+                print(f"    推定完了時刻: {eta_dt.strftime('%Y-%m-%d %H:%M:%S')}")
         else:
             print("    処理速度 : 算出中 (最初のタスク完了待ち)...")
     else:
@@ -438,7 +368,7 @@ def render(log_path: str):
                         pass
                         
             prog_bar = make_progress_bar(progress_val, width=20)
-            print(f"    ▶ タスク #{ct['task_no']:3d} | Y={ct['y']:4.1f}m, 角度={ct['angle']:5.1f}° | 実行時間: {run_sec:3d}秒 | 進捗: [{prog_bar}] {progress_val:5.1f}%")
+            print(f"    ▶ タスク #{ct['task_no']:3d} | {ct['params_str']} | 実行時間: {run_sec:3d}秒 | 進捗: [{prog_bar}] {progress_val:5.1f}%")
     elif completed == total:
         print("    ✅ 全タスク完了しました!")
     else:

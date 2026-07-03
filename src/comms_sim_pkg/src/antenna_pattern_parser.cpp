@@ -122,6 +122,7 @@ double AntennaPatternParser::linear_interp(const std::vector<double>& xs,
   double y1 = ys[idx - 1];
   double x2 = xs[idx];
   double y2 = ys[idx];
+  if (std::abs(x2 - x1) < 1e-12) return y1;
   return y1 + (x - x1) * (y2 - y1) / (x2 - x1);
 }
 

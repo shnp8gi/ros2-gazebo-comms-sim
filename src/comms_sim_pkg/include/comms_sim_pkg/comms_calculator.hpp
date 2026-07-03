@@ -4,6 +4,7 @@
 #include <random>
 #include <memory>
 #include <Eigen/Dense>
+#include <yaml-cpp/yaml.h>
 
 namespace comms_sim {
 
@@ -31,12 +32,33 @@ class TwoRayGroundModel : public PropagationModel {
 public:
   TwoRayGroundModel(double tx_height = 10.5,
                     double rx_height = 1.3,
-                    double tx_gain_db = 0.0,
-                    double rx_gain_db = 0.0);
+                    double frequency = 6.0e10,
+                    double c = 299792458.0);
   double calculate_path_loss(double distance) const override;
   std::string model_name() const override { return "Two-Ray Ground Reflection Model"; }
 
-  double tx_height, rx_height, tx_gain_linear, rx_gain_linear;
+  double tx_height, rx_height, frequency, c;
+};
+
+class PropagationModelFactory {
+public:
+    static std::unique_ptr<PropagationModel> Create(const YAML::Node& path_loss_config) {
+        std::string model_type = path_loss_config["model"].as<std::string>("log_distance");
+        double c = path_loss_config["c"].as<double>(299792458.0);
+        double freq = path_loss_config["frequency"].as<double>(6.0e10);
+
+        if (model_type == "log_distance") {
+            double exp = path_loss_config["exponent"].as<double>(2.0);
+            double d0 = path_loss_config["d0"].as<double>(1.0);
+            double pl_d0 = path_loss_config["pl_d0"].as<double>(-1.0);
+            return std::make_unique<LogDistancePathLossModel>(freq, c, exp, d0, pl_d0);
+        } else if (model_type == "two_ray") {
+            double tx_h = path_loss_config["tx_height"].as<double>(10.5);
+            double rx_h = path_loss_config["rx_height"].as<double>(1.3);
+            return std::make_unique<TwoRayGroundModel>(tx_h, rx_h, freq, c);
+        }
+        return std::make_unique<LogDistancePathLossModel>(freq, c);
+    }
 };
 
 struct CommsMetrics {

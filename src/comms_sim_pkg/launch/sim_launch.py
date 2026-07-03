@@ -752,6 +752,16 @@ def launch_setup(context, *args, **kwargs):
             msg=f'[{v_name}] Vehicle communications handled by TxControllerPlugin (C++).'
         ))
 
+        # 進捗を標準出力へフラッシュするためのアダプターノード
+        progress_logger = Node(
+            package='comms_sim_pkg',
+            executable='progress_logger_node.py',
+            name=f'progress_logger_{v_name}',
+            output='screen',
+            parameters=[{'vehicle_name': v_name}]
+        )
+        actions.append(progress_logger)
+
     # =========================================================================
     # Ready ゲートノード（全ノードの起動同期）
     # =========================================================================

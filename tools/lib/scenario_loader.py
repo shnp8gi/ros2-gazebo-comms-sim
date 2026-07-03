@@ -66,17 +66,22 @@ def generate_sim_params(scenario, overrides=None):
         entity_config = {
             'name': entity.get('name'),
             'model_uri': model_info.get('sdf_path', f"models://{model_name}"),
-            'pose': entity.get('pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0]),
+            'pose': [float(v) for v in entity.get('pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
         }
         
         if 'waypoints' in entity:
-            entity_config['waypoints'] = entity['waypoints']
+            entity_config['waypoints'] = [[float(v) for v in wp] for wp in entity['waypoints']]
             
         if 'static' in entity:
             entity_config['static'] = entity['static']
             
         # Build antennas
         if 'antennas' in entity:
+            for ant in entity['antennas']:
+                if 'offset' in ant:
+                    ant['offset'] = [float(v) for v in ant['offset']]
+                if 'relative_rpy' in ant:
+                    ant['relative_rpy'] = [float(v) for v in ant['relative_rpy']]
             entity_config['antennas'] = entity['antennas']
         else:
             # Add default antenna if none specified

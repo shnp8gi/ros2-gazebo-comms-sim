@@ -25,6 +25,7 @@
 #include <fstream>
 #include <regex>
 #include <iomanip>
+#include <atomic>
 #include "comms_sim_pkg/comms_calculator.hpp"
 #include "comms_sim_pkg/antenna_pattern_parser.hpp"
 
@@ -65,7 +66,7 @@ namespace tx_controller
                 return;
             }
 
-            std::vector<MotionWaypoint> local_waypoints;
+            std::vector<Waypoint> local_waypoints;
             double local_waypoint_tolerance = 1.0;
             double local_max_angular_velocity = 1.0;
             double local_heading_gain = 1.0;
@@ -118,13 +119,24 @@ namespace tx_controller
 
             if (_sdf->HasElement("config_file_path")) {
                 this->config_file_path = _sdf->Get<std::string>("config_file_path");
-                this->logger.Configure(this->config_file_path);
             }
 
             // Setup publishers
             this->mission_complete_pub = this->node.Advertise<gz::msgs::Boolean>(mission_topic);
             this->ready_pub = this->node.Advertise<gz::msgs::Boolean>(ready_pub_topic);
             this->mission_progress_pub = this->node.Advertise<gz::msgs::Double>("/" + this->model.Name(_ecm) + "/mission_progress");
+
+            // Setup subscriber
+            this->node.Subscribe(all_ready_topic, &TxControllerPlugin::OnAllReady, this);
+
+            // Initialize Comms Sim
+            if (!this->config_file_path.empty()) {
+                try {
+                    this->InitializeComms(this->config_file_path, _ecm, local_waypoints);
+                } catch (const std::exception& e) {
+                    gzerr << "[TxControllerPlugin] Error initializing comms: " << e.what() << std::endl;
+                }
+            }
 
             this->motion_controller.Configure(
                 local_waypoints,
@@ -134,18 +146,6 @@ namespace tx_controller
                 local_max_acceleration,
                 local_is_shinkansen
             );
-
-            // Setup subscriber
-            this->node.Subscribe(all_ready_topic, &TxControllerPlugin::OnAllReady, this);
-
-            // Initialize Comms Sim
-            if (!this->config_file_path.empty()) {
-                try {
-                    this->InitializeComms(this->config_file_path, _ecm);
-                } catch (const std::exception& e) {
-                    gzerr << "[TxControllerPlugin] Exception during comms init: " << e.what() << std::endl;
-                }
-            }
 
             gzmsg << "[TxControllerPlugin] Initialized on model [" << this->model.Name(_ecm) 
                   << "] with " << local_waypoints.size() << " waypoints." << std::endl;
@@ -254,25 +254,30 @@ namespace tx_controller
         }
 
     private:
-        void InitializeComms(const std::string &config_path, gz::sim::EntityComponentManager &_ecm) {
+        void InitializeComms(const std::string &config_path, gz::sim::EntityComponentManager &_ecm, std::vector<Waypoint>& local_waypoints) {
             YAML::Node config = YAML::LoadFile(config_path);
             
             // 1. Read simulation configurations
+            std::string output_subdir = "";
+            std::string summary_filename = "";
             if (config["simulation"]) {
-                this->logging_level = config["simulation"]["logging_level"].as<int>(1);
+                if (config["simulation"]["logging_level"]) {
+                    this->logging_level = config["simulation"]["logging_level"].as<int>(1);
+                }
+                if (config["simulation"]["output_subdir"]) {
+                    output_subdir = config["simulation"]["output_subdir"].as<std::string>();
+                }
+                if (config["simulation"]["summary_filename"]) {
+                    summary_filename = config["simulation"]["summary_filename"].as<std::string>();
+                }
             }
+            this->logger.Configure(this->config_file_path, output_subdir, summary_filename);
             
             // 2. Read comms parameters
             auto comms_params = config["comms_simulator_node"]["ros__parameters"];
             double comm_data_limit = comms_params["comm_data_limit_mb"].as<double>(-1.0);
             this->comm_data_limit_mb = comm_data_limit;
             this->link_establishment_time_ms = comms_params["link_establishment_time_ms"].as<double>(2.0);
-
-            this->comms_env.Configure(this->config_file_path);
-            this->scheduler.Configure(this->scheduling_policy, this->filter_main_lobe, this->min_hold_time_s,
-                                      this->switch_margin_db, this->proactive_grace_period_s,
-                                      this->proactive_handover_score_threshold, this->comm_data_limit_mb,
-                                      this->link_establishment_time_ms);
 
             // 4. Link controller parameters
             auto link_ctrl_params = config["link_controller_node"]["ros__parameters"];
@@ -286,6 +291,12 @@ namespace tx_controller
             this->min_hold_distance_m = link_ctrl_params["min_hold_distance_m"].as<double>(0.0);
             this->ff_max_pairs = link_ctrl_params["ff_max_pairs"].as<int>(-1);
 
+            this->comms_env.Configure(this->config_file_path);
+            this->scheduler.Configure(this->scheduling_policy, this->filter_main_lobe, this->min_hold_time_s,
+                                      this->switch_margin_db, this->proactive_grace_period_s,
+                                      this->proactive_handover_score_threshold, this->comm_data_limit_mb,
+                                      this->link_establishment_time_ms);
+
             // 5. Load antennas configuration for this vehicle model
             std::string current_model_name = this->model.Name(_ecm);
             
@@ -293,6 +304,17 @@ namespace tx_controller
                 for (auto const &v : config["vehicles"]) {
                     std::string v_name = v["name"].as<std::string>();
                     if (v_name == current_model_name) {
+                        if (v["waypoints"]) {
+                            local_waypoints.clear();
+                            for (auto const &wp : v["waypoints"]) {
+                                Waypoint w;
+                                w.x = wp[0].as<double>();
+                                w.y = wp[1].as<double>();
+                                w.z = wp[2].as<double>();
+                                w.v = wp[3].as<double>();
+                                local_waypoints.push_back(w);
+                            }
+                        }
                         if (v["antennas"]) {
                             for (auto const &ant_cfg : v["antennas"]) {
                                 AntennaInfo ant;
@@ -330,6 +352,8 @@ namespace tx_controller
                     
                     auto rel_rpy_vec = bs_cfg["antenna_relative_rpy"].as<std::vector<double>>();
                     bs.antenna_relative_rpy = Eigen::Vector3d(rel_rpy_vec[0], rel_rpy_vec[1], rel_rpy_vec[2]);
+                    Eigen::Vector3d ant_rpy_updated = bs.rpy + bs.antenna_relative_rpy;
+                    bs.rotmat = utils::rpy_to_rotmat(ant_rpy_updated.x(), ant_rpy_updated.y(), ant_rpy_updated.z());
                     this->base_stations_cfg.push_back(bs);
                 }
             }
@@ -474,7 +498,10 @@ namespace tx_controller
                     {
                         std::string name = _name->Data();
                         for (auto &bs : this->base_stations_cfg) {
-                            if (bs.name == name) {
+                            if (bs.name == name &&
+                                std::none_of(this->base_stations.begin(), this->base_stations.end(),
+                                    [&name](const BaseStationInfo& existing) { return existing.name == name; }))
+                            {
                                 BaseStationInfo bs_info = bs;
                                 auto poseComp = _ecm.Component<gz::sim::components::Pose>(_ent);
                                 if (poseComp) {
@@ -576,7 +603,7 @@ namespace tx_controller
                         ant.link_establishment_start_time = -1.0;
                     }
                 } else {
-                    int required_steps = static_cast<int>(std::ceil(this->link_establishment_time_ms / 1000.0 * 1000.0));
+                    int required_steps = static_cast<int>(std::ceil((this->link_establishment_time_ms / 1000.0) / dt));
                     if (ant.link_state == "DISCONNECTED" && ant.last_rssi > this->comms_env.GetRssiMin()) {
                         ant.link_state = "ESTABLISHING";
                         ant.establishment_step_count = 1;
@@ -610,6 +637,35 @@ namespace tx_controller
                     rec.comm_active = ant.comm_active;
                     rec.link_state = ant.link_state;
                     rec.in_main_lobe = ant_metrics_list[i].in_main_lobe;
+                    rec.off_boresight_e_deg = ant_metrics_list[i].off_boresight_e;
+                    rec.off_boresight_h_deg = ant_metrics_list[i].off_boresight_h;
+                    
+                    rec.tx_x_m = pos.x();
+                    rec.tx_y_m = pos.y();
+                    rec.tx_z_m = pos.z();
+                    
+                    int bs_idx = ant.assigned_bs_idx;
+                    if (bs_idx >= 0 && bs_idx < static_cast<int>(this->base_stations.size())) {
+                        rec.bs_x_m = this->base_stations[bs_idx].position.x();
+                        rec.bs_y_m = this->base_stations[bs_idx].position.y();
+                        rec.bs_z_m = this->base_stations[bs_idx].position.z();
+                    } else {
+                        // find best BS for logging disconnected state
+                        double max_rssi = -999.0;
+                        int best_bs = 0;
+                        for (size_t j = 0; j < this->base_stations.size(); ++j) {
+                            if (all_ant_bs_metrics[i][j].best_rssi > max_rssi) {
+                                max_rssi = all_ant_bs_metrics[i][j].best_rssi;
+                                best_bs = j;
+                            }
+                        }
+                        if (best_bs < static_cast<int>(this->base_stations.size())) {
+                            rec.bs_x_m = this->base_stations[best_bs].position.x();
+                            rec.bs_y_m = this->base_stations[best_bs].position.y();
+                            rec.bs_z_m = this->base_stations[best_bs].position.z();
+                        }
+                    }
+
                     ant.log_records.push_back(rec);
                 }
             }
@@ -637,7 +693,7 @@ namespace tx_controller
         VehicleMotionController motion_controller;
         SimulationLogger logger;
 
-        bool all_ready = false;
+        std::atomic<bool> all_ready{false};
         bool mission_complete = false;
         int64_t last_ready_pub_time = 0;
         int64_t last_complete_pub_time = 0;
@@ -690,6 +746,7 @@ namespace tx_controller
         std::string config_summary_filename = "sweep_summary.csv";
         std::string config_output_subdir = "";
         std::string config_output_dir = "/workspace/sim_results/";
+    };
 } // namespace tx_controller
 
 GZ_ADD_PLUGIN(

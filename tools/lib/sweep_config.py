@@ -63,7 +63,9 @@ def parse_target(target_node, val, fallback_unit=None):
         
     out = {
         'field': target_node.get('field'),
-        'value': converted_val
+        'value': converted_val,
+        'raw_value': val,
+        'unit': unit if unit else ""
     }
     if 'entity_role' in target_node:
         out['role'] = target_node['entity_role']

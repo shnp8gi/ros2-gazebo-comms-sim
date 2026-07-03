@@ -14,8 +14,10 @@ namespace tx_controller
     public:
         SimulationLogger() = default;
 
-        void Configure(const std::string& config_file_path_in) {
+        void Configure(const std::string& config_file_path_in, const std::string& output_subdir_in = "", const std::string& summary_filename_in = "") {
             this->config_file_path = config_file_path_in;
+            this->output_subdir = output_subdir_in;
+            this->summary_filename = summary_filename_in;
         }
 
         void AddEventRecord(const EventRecord& record) {
@@ -27,19 +29,23 @@ namespace tx_controller
         }
 
         void SaveLogs(const std::string& model_name, const std::vector<AntennaInfo>& vehicle_antennas, const std::string& scheduling_policy) {
-            // Retrieve timestamp
-            std::string run_timestamp = "unknown_time";
-            if (!this->config_file_path.empty()) {
-                std::filesystem::path config_path(this->config_file_path);
-                std::string filename = config_path.stem().string();
-                size_t pos = filename.find("sim_params_");
-                if (pos != std::string::npos) {
-                    run_timestamp = filename.substr(pos + 11);
+            std::string workspace_dir = "/workspace";
+            std::string results_dir = workspace_dir + "/sim_results/" + this->output_subdir;
+            
+            if (this->output_subdir.empty()) {
+                // Retrieve timestamp
+                std::string run_timestamp = "unknown_time";
+                if (!this->config_file_path.empty()) {
+                    std::filesystem::path config_path(this->config_file_path);
+                    std::string filename = config_path.stem().string();
+                    size_t pos = filename.find("sim_params_");
+                    if (pos != std::string::npos) {
+                        run_timestamp = filename.substr(pos + 11);
+                    }
                 }
+                results_dir = workspace_dir + "/sim_results/" + run_timestamp;
             }
 
-            std::string workspace_dir = "/workspace";
-            std::string results_dir = workspace_dir + "/sim_results/" + run_timestamp;
             
             try {
                 std::filesystem::create_directories(results_dir);
@@ -54,7 +60,7 @@ namespace tx_controller
                 std::ofstream ofs(filename);
                 if (ofs.is_open()) {
                     ofs << "time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,"
-                        << "throughput_Gbps,total_data_MB,path_loss_dB,e_gain_dB,h_gain_dB,"
+                        << "throughput_Gbps,total_data_MB,path_loss_dB,tx_antenna_gain_dB,rx_antenna_gain_dB,"
                         << "comm_active,tx_x,tx_y,tx_z,bs_x,bs_y,bs_z,link_state,"
                         << "in_main_lobe,off_boresight_e_deg,off_boresight_h_deg\n";
                     
@@ -119,22 +125,57 @@ namespace tx_controller
             }
 
             // 4. Save summary
-            std::string summary_filename = results_dir + "/" + model_name + "_summary.csv";
-            std::ofstream ofs_sum(summary_filename);
+            std::string sum_filename = results_dir + "/" + (this->summary_filename.empty() ? (model_name + "_summary.csv") : this->summary_filename);
+            std::ofstream ofs_sum(sum_filename);
             if (ofs_sum.is_open()) {
-                ofs_sum << "model_name,scheduling_policy,total_data_MB\n";
+                ofs_sum << "model_name,scheduling_policy,total_data_MB,average_rssi_dBm,average_throughput_Gbps,connected_time_s,handover_count\n";
+                
                 double total_data = 0.0;
+                double sum_rssi = 0.0;
+                double sum_throughput = 0.0;
+                int connected_steps = 0;
+                double connected_time_s = 0.0;
+
                 for (const auto& ant : vehicle_antennas) {
                     total_data += ant.total_data_transmitted;
+                    if (ant.log_records.size() >= 2) {
+                        double dt = ant.log_records[1].time_s - ant.log_records[0].time_s;
+                        for (const auto& log : ant.log_records) {
+                            if (log.link_state == "CONNECTED" || log.has_link_grant) {
+                                sum_rssi += log.rssi_dBm;
+                                sum_throughput += log.throughput_Gbps;
+                                connected_steps++;
+                                connected_time_s += dt;
+                            }
+                        }
+                    }
                 }
-                ofs_sum << model_name << "," << scheduling_policy << "," << std::fixed << std::setprecision(6) << total_data << "\n";
+
+                double avg_rssi = (connected_steps > 0) ? (sum_rssi / connected_steps) : -999.0;
+                double avg_throughput = (connected_steps > 0) ? (sum_throughput / connected_steps) : 0.0;
+                
+                int handover_count = 0;
+                for (const auto& ev : this->event_records) {
+                    if (ev.event_type.find("HANDOVER") != std::string::npos) {
+                        handover_count++;
+                    }
+                }
+
+                ofs_sum << model_name << "," << scheduling_policy << "," 
+                        << std::fixed << std::setprecision(6) << total_data << ","
+                        << std::fixed << std::setprecision(6) << avg_rssi << ","
+                        << std::fixed << std::setprecision(6) << avg_throughput << ","
+                        << std::fixed << std::setprecision(6) << connected_time_s << ","
+                        << handover_count << "\n";
                 ofs_sum.close();
-                std::cout << "[SimulationLogger] Saved summary to " << summary_filename << std::endl;
+                std::cout << "[SimulationLogger] Saved summary to " << sum_filename << std::endl;
             }
         }
 
     private:
         std::string config_file_path;
+        std::string output_subdir;
+        std::string summary_filename;
         std::vector<EventRecord> event_records;
         std::vector<ControlRecord> control_records;
     };

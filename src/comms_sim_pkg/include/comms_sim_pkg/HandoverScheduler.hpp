@@ -4,6 +4,7 @@
 #include <vector>
 #include <sstream>
 #include <iomanip>
+#include <limits>
 #include "comms_sim_pkg/DataTypes.hpp"
 
 namespace tx_controller
@@ -61,7 +62,7 @@ namespace tx_controller
             // Pick best metrics for each antenna
             std::vector<AntennaMetrics> best_metrics(vehicle_antennas.size());
             for (size_t i = 0; i < vehicle_antennas.size(); ++i) {
-                double max_rssi = -999.0;
+                double max_rssi = -std::numeric_limits<double>::infinity();
                 int best_bs = -1;
                 for (size_t j = 0; j < base_stations.size(); ++j) {
                     if (all_ant_bs_metrics[i][j].best_rssi > max_rssi) {

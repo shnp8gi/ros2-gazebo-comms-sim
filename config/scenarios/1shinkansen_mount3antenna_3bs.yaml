@@ -18,7 +18,7 @@ scenario:
     link_controller_node:
       ros__parameters:
         scheduling_policy: "feedforward_optimal"
-        switch_mergin_db: 2.0
+        switch_margin_db: 2.0
         min_hold_distance: 0.0
         ff_max_pairs: -1
         ff_hysteresis_margin_db: 2.0

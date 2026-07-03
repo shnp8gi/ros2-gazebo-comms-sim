@@ -101,7 +101,7 @@ CommsSimulatorNode::CommsSimulatorNode()
   double d0 = this->get_parameter("path_loss.d0").as_double();
   double pl_d0 = this->get_parameter("path_loss.pl_d0").as_double();
 
-  auto propagation_model = std::make_unique<LogDistancePathLossModel>(c, freq, exp, d0, pl_d0);
+  auto propagation_model = std::make_unique<LogDistancePathLossModel>(freq, c, exp, d0, pl_d0);
 
   comms_calculator_ = std::make_unique<CommsCalculator>(
     std::move(propagation_model), tx_power_, noise_variance_, mcs_table_path_);
@@ -345,7 +345,10 @@ void CommsSimulatorNode::on_rx_pose(const geometry_msgs::msg::PoseStamped::Share
 }
 
 void CommsSimulatorNode::on_mission_complete(const std_msgs::msg::Bool::SharedPtr msg) {
-  (void)msg;
+  if (msg->data) {
+    RCLCPP_INFO(this->get_logger(), "Mission complete signal received. Shutting down ROS node...");
+    rclcpp::shutdown();
+  }
 }
 
 bool CommsSimulatorNode::get_current_segment_pose(double& best_px, double& best_py, double& best_yaw) {

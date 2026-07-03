@@ -33,9 +33,8 @@ namespace tx_controller
             std::string h_plane_path = tx_controller::utils::resolve_path(comms_params["h_plane_path"].as<std::string>(""));
 
             auto pl = comms_params["path_loss"];
-            double c = pl["c"].as<double>(299792458.0);
-
-            auto prop_model = std::make_unique<comms_sim::LogDistancePathLossModel>(6.0e10, c);
+            
+            auto prop_model = comms_sim::PropagationModelFactory::Create(pl);
             
             this->comms_calculator = std::make_unique<comms_sim::CommsCalculator>(
                 std::move(prop_model), tx_power, noise_variance, mcs_table_path);

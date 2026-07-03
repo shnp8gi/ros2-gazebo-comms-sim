@@ -31,7 +31,7 @@ namespace tx_controller
         Eigen::Vector3d offset;
         Eigen::Vector3d relative_rpy;
         
-        double total_data_transmitted = 0.0;
+        double total_data_transmitted = 0.0; // 累積転送データ量 [MB] = Σ (throughput_Gbps × 1000 / 8 × dt_s)
         bool comm_active = true;
         std::string link_state = "DISCONNECTED";
         double link_establishment_start_time = -1.0;
@@ -40,24 +40,24 @@ namespace tx_controller
         int assigned_bs_idx = -1;  // マルチペア: 割り当てられた基地局インデックス (-1 = 未割当)
 
         struct LogRecord {
-            double time_s;
-            double vehicle_time_s;
+            double time_s = 0.0;
+            double vehicle_time_s = 0.0;
             std::string vehicle_name;
-            bool has_link_grant;
-            double distance_m;
-            double rssi_dBm;
-            double throughput_Gbps;
-            double total_data_MB;
-            double path_loss_dB;
-            double e_gain_dB;
-            double h_gain_dB;
-            bool comm_active;
-            double tx_x_m, tx_y_m, tx_z_m;
-            double bs_x_m, bs_y_m, bs_z_m;
+            bool has_link_grant = false;
+            double distance_m = 0.0;
+            double rssi_dBm = -999.0;
+            double throughput_Gbps = 0.0;
+            double total_data_MB = 0.0;
+            double path_loss_dB = 0.0;
+            double e_gain_dB = 0.0;
+            double h_gain_dB = 0.0;
+            bool comm_active = false;
+            double tx_x_m = 0.0, tx_y_m = 0.0, tx_z_m = 0.0;
+            double bs_x_m = 0.0, bs_y_m = 0.0, bs_z_m = 0.0;
             std::string link_state;
-            bool in_main_lobe;
-            double off_boresight_e_deg;
-            double off_boresight_h_deg;
+            bool in_main_lobe = false;
+            double off_boresight_e_deg = 0.0;
+            double off_boresight_h_deg = 0.0;
         };
         std::vector<LogRecord> log_records;
     };

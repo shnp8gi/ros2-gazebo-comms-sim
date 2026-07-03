@@ -150,11 +150,27 @@ link_controller_node:
     # スケジューリング処理を実行する周期 (Hz)
     scheduling_rate_hz: 4000.0
 
+    # スケジューリングポリシー
+    #   sequential: 車両順に通信、ミッション完了で次へ切替
+    #   round_robin: タイムスロットで順番に切替
+    #   rssi_priority: RSSI最大の車両を優先（すれ違い・V2I通信向け）
+    #   geometric_beam_priority: 角度ベースで最もアライメント（min(e_gain, h_gain)）が良い車両を優先
+    #   physical_score_priority: 基地局で推定した受信電力（e_gain + h_gain - path_loss）が最高の車両を優先
+    #   geometric_weighted: 距離とアンテナゲインの正規化スコアを重み付け加算して評価
+    #   feedforward_optimal: 事前計算された nominal RSSI LUT に基づくフィードフォワード制御
+    scheduling_policy: "feedforward_optimal"
     # 軌道上の事前計算サンプリング解像度 [m]
     heatmap_resolution_m: 0.2
 
-    # ※ スケジューリングポリシー (scheduling_policy) や各種閾値は
-    # 各実験シナリオ (config/scenarios/*.yaml) の config_overrides にて指定します。
+    # 同時通信に使用する最大ペア数 (-1で全ペア使用)
+    ff_max_pairs: -1
+
+
+    # タイムスロット長 [s] (round_robin ポリシー時のみ有効)
+    time_slot_duration_s: 10.0
+
+    # 最低RSSI閾値 [dBm] (rssi_priority ポリシー時のみ有効)
+    rssi_threshold: -95
 
     # -------------------------------------------------------------------------
     # 幾何学ベース制御用パラメータ (geometric_* ポリシー時に有効)
@@ -171,8 +187,24 @@ link_controller_node:
     weight_angle: 0.3
 
     # -------------------------------------------------------------------------
-    # メインローブフィルタリング (物理/環境設定)
+    # プロアクティブ・ハンドオーバー用パラメータ
     # -------------------------------------------------------------------------
+    # 切替後に最低限リンクを保持する時間 [s] (0.05s = 50ms)
+    min_hold_time_s: 0.05
+
+    # 切替マージン [dB] (1.0dB 以上を推奨)
+    switch_margin_db: 0.1
+
+    # リンク付与直後のフェーズ2猶予時間 [s] (50msを推奨)
+    proactive_grace_period_s: 0.05
+
+    # 強制リンク切替（フェーズ2）を実行するための最低物理スコア閾値
+    # 物理スコア = E面ゲイン + H面ゲイン - パスロス [dB]
+    # best_score がこの値を下回る場合は強制切替を行わない
+    # （geometry_info 未到達時など、信頼できないデータによる誤切替を防ぐ）
+    # 目安: -80.0 ≒ 通信限界付近のRSSI相当
+    proactive_handover_score_threshold: -130
+
     # メインローブフィルタリングの有効化
     filter_main_lobe: true
     # メインローブ境界検出のパラメータ [度] (事前ヒートマップ計算等で使用)

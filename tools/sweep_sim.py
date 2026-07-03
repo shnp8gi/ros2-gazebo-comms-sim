@@ -13,14 +13,14 @@ import queue
 import argparse
 import sys
 import glob
-import psutil
 import atexit
-
-# Initialize psutil CPU measurement reference point
+import csv
 try:
+    import psutil
+    # Initialize psutil CPU measurement reference point
     psutil.cpu_percent(interval=None)
-except Exception:
-    pass
+except ImportError:
+    psutil = None
 
 # スクリプトがあるディレクトリをパスに追加し、サブディレクトリ lib からのインポートを保証する
 _script_dir = os.path.dirname(os.path.realpath(__file__))
@@ -35,15 +35,13 @@ if _tools_dir != _script_dir and _tools_dir not in sys.path and os.path.isdir(os
 # パラメータスイープ設定のインポート (Single Responsibility Principle)
 # =========================================================================
 from lib.sweep_config import (
-    NUM_RUNS,
-    TASK_TIMEOUT_SEC,
-    SWEEP_REAL_TIME_FACTOR,
-    PROGRESS_LOG,
-    CONFIG_PATH,
-    BACKUP_PATH,
-    load_sweep_config
+    load_sweep_config,
+    UNIT_CONVERTERS,
+    parse_target,
+    resolve_values
 )
 import lib.sweep_config as sweep_config
+import lib.system_monitor as sysmon
 
 from lib.sweep_kinematics import estimate_expected_duration
 from lib.sweep_data import average_summaries, get_completed_tasks, validate_sweep_summary
@@ -52,7 +50,7 @@ from lib.scenario_loader import load_scenario, generate_sim_params, write_sim_pa
 # 動的プロファイリングがまだ十分に機能していない場合の初期想定負荷パラメータ
 DEFAULT_CPU_PER_SIM = 1.5
 DEFAULT_MEM_PER_SIM_GIB = 1.2
-LAUNCH_COOLDOWN_SEC = 3.0  # 起動時の負荷スパイクとロードアベレージ遅延を防ぐため、新規起動の間隔を最低3秒空ける
+LAUNCH_COOLDOWN_SEC = 3.0  # 起動時の負荷スパイクとロードアベレージ遅延を防ぐため、新規起動の間隔を最低3秒空める
 
 # =========================================================================
 # 終了シグナルのハンドリングとアクティブプロセスの追跡
@@ -209,10 +207,10 @@ def handle_shutdown(signum, frame):
             pass
 
     # オリジナル設定ファイルの復元
-    if os.path.exists(BACKUP_PATH):
-        print(f"[Sweep Sim] Restoring original configuration to {CONFIG_PATH}...")
+    if os.path.exists(sweep_config.BACKUP_PATH):
+        print(f"[Sweep Sim] Restoring original configuration to {sweep_config.CONFIG_PATH}...")
         try:
-            shutil.copy2(BACKUP_PATH, CONFIG_PATH)
+            shutil.copy2(sweep_config.BACKUP_PATH, sweep_config.CONFIG_PATH)
         except Exception as e:
             print(f"[Sweep Sim] Error restoring config: {e}")
 
@@ -240,7 +238,7 @@ def get_worker_processes(proc, worker_id, all_system_procs=None) -> list:
     part_keyword = f"comms_sim_partition_{worker_id}"
     gz_port_keyword = str(11345 + worker_id)
     
-    proc_list = all_system_procs if all_system_procs is not None else psutil.process_iter(['pid', 'cmdline', 'environ'])
+    proc_list = all_system_procs if all_system_procs is not None else (psutil.process_iter(['pid', 'cmdline', 'environ']) if psutil is not None else [])
     
     for p in proc_list:
         try:
@@ -334,7 +332,7 @@ def measure_resources():
     measured_count = 0
     
     try:
-        all_system_procs = list(psutil.process_iter(['pid', 'cmdline', 'environ']))
+        all_system_procs = list(psutil.process_iter(['pid', 'cmdline', 'environ'])) if psutil is not None else []
     except Exception:
         all_system_procs = []
         
@@ -510,7 +508,7 @@ progress_lock = threading.Lock()
 def log_progress(line: str):
     """進捗ログにタイムスタンプ付きで1行書き込む (スレッドセーフ)"""
     with progress_lock:
-        with open(PROGRESS_LOG, 'a', encoding='utf-8') as lf:
+        with open(sweep_config.PROGRESS_LOG, 'a', encoding='utf-8') as lf:
             lf.write(line + "\n")
             lf.flush()
 
@@ -551,7 +549,7 @@ def apply_dither(content, dither_x):
     start, end = match.span(1)
     return content[:start] + new_vehicles_block + content[end:]
 
-def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, base_station_yaw_deg=-90.0, max_concurrency=4, num_runs=1):
+def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=5.0, timeout=120, max_concurrency=4, num_runs=1):
     if len(task_info) == 5:
         run_idx, task_vars, overall_task_no, local_task_no = task_info[:4]
     else:
@@ -559,29 +557,38 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         local_task_no = overall_task_no
         
     task_suffix_parts = []
+    params_list = []
     y_val = 0.0
     angle_val = 0.0
     for k, state_overrides in task_vars.items():
         if not state_overrides:
             continue
         val = state_overrides[0].get('value', 0)
+        raw_val = state_overrides[0].get('raw_value', val)
+        unit_str = state_overrides[0].get('unit', '')
         
-        if k == 'rx_y_position': y_val = val
-        if 'yaw' in k.lower(): angle_val = val
+        if k == 'rx_y_position': y_val = float(val)
+        if 'yaw' in k.lower(): angle_val = float(val)
         
         if isinstance(val, float):
             task_suffix_parts.append(f"{k}_{val:g}")
         else:
             task_suffix_parts.append(f"{k}_{val}")
             
+        if isinstance(raw_val, float):
+            params_list.append(f"{k}={raw_val:g}{unit_str}")
+        else:
+            params_list.append(f"{k}={raw_val}{unit_str}")
+            
     task_suffix = "_".join(task_suffix_parts) if task_suffix_parts else "default"
+    params_str = ",".join(params_list)
     summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_{task_suffix}_w{worker_id}.csv"
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
     ros_domain_id = 10 + worker_id
  
     pct = (local_task_no - 1) / total_runs_tasks * 100
     print(f"\n=======================================================")
-    print(f"[Worker {worker_id}] [Run {run_idx}/{NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) {task_suffix}")
+    print(f"[Worker {worker_id}] [Run {run_idx}/{sweep_config.NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) {task_suffix}")
     print(f"=======================================================")
  
     t_expected = None
@@ -611,6 +618,21 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                     time.sleep(1.0)
                     continue
                 
+                # Use system monitor for load feedback
+                cpu_val = sysmon.get_cpu_usage()
+                mem_gb, tot_gb, mem_pct = sysmon.get_memory_usage()
+
+                wait_time = 0.5
+                if cpu_val > 90.0:
+                    print(f"[Monitor] CPU usage very high ({cpu_val:.1f}%), pausing simulation launches...")
+                    wait_time = 2.0
+                elif mem_pct > 90.0:
+                    print(f"[Monitor] Memory usage very high ({mem_pct:.1f}%), pausing simulation launches...")
+                    wait_time = 5.0
+                elif mem_pct > 95.0:
+                    print(f"[Monitor] CRITICAL MEMORY ({mem_pct:.1f}%), forcing sleep...")
+                    wait_time = 10.0
+                
                 with active_tasks_lock:
                     current_active = len(active_tasks)
                 
@@ -633,7 +655,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 if now_time - last_wait_log_time > 15.0:
                     print(f"[Worker {worker_id}] System is busy (Active tasks: {current_active}/{current_optimal}). Waiting for system load/memory to decrease...")
                     last_wait_log_time = now_time
-                time.sleep(2.0)
+                time.sleep(wait_time)
 
             # Apply spatial dithering to UGV starting pose/waypoints if running multiple loops
             dither_x = 0.0
@@ -688,7 +710,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             with active_tasks_lock:
                 active_tasks.pop(worker_id, None)
             print(f"[Worker {worker_id}] Error creating config {tmp_config_path}: {e}")
-            log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()} worker={worker_id}")
+            log_progress(f"DONE task={overall_task_no} params=[{params_str}] status=FAIL ts={datetime.datetime.now().isoformat()} worker={worker_id}")
             import traceback
             traceback.print_exc()
             return False
@@ -719,7 +741,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 active_tasks.pop(worker_id, None)
             return False
 
-        log_progress(f"RUNNING task={overall_task_no} y={y} angle={angle_deg} ts={datetime.datetime.now().isoformat()} worker={worker_id}")
+        log_progress(f"RUNNING task={overall_task_no} params=[{params_str}] ts={datetime.datetime.now().isoformat()} worker={worker_id}")
 
         start_time = time.time()
         log_dir = f"tools/log/{sweep_start_time}"
@@ -755,7 +777,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             proc.wait(timeout=task_timeout)
         except subprocess.TimeoutExpired:
             timed_out = True
-            print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation TIMEOUT ({task_timeout}s): Y={y}, Angle={angle_deg}")
+            print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation TIMEOUT ({task_timeout}s): Y={y_val}, Angle={angle_val}")
         finally:
             out_f.close()
             err_f.close()
@@ -796,9 +818,24 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 reason = "Summary CSV not found (Simulation crashed or exited silently)"
                 
         if is_valid:
+            try:
+                with open(summary_path, 'r', encoding='utf-8') as f:
+                    lines = f.readlines()
+                if len(lines) >= 2:
+                    header = lines[0].strip()
+                    if "y_position" not in header:
+                        new_header = "run_id,y_position,antenna_angle," + header
+                        new_lines = [new_header + "\n"]
+                        for line in lines[1:]:
+                            new_lines.append(f"{run_idx},{y_val},{angle_val}," + line)
+                        with open(summary_path, 'w', encoding='utf-8') as f:
+                            f.writelines(new_lines)
+            except Exception as e:
+                print(f"[Worker {worker_id}] Warning: failed to inject columns into {summary_path}: {e}")
+
             expected_str = f"{t_expected:.1f}s" if t_expected is not None else "Unknown"
-            print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation finished successfully in {actual_duration:.1f}s (Expected: {expected_str}): Y={y}, Angle={angle_deg}")
-            log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=OK ts={datetime.datetime.now().isoformat()} worker={worker_id}")
+            print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} Simulation finished successfully in {actual_duration:.1f}s (Expected: {expected_str}): Y={y_val}, Angle={angle_val}")
+            log_progress(f"DONE task={overall_task_no} params=[{params_str}] status=OK ts={datetime.datetime.now().isoformat()} worker={worker_id}")
 
             increment_completed_tasks()
             return True
@@ -812,8 +849,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             print(f"[Worker {worker_id}] {attempt_info} FAILED: {reason}. Re-running task with same parameters...")
             time.sleep(2.0)
 
-    print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} All {max_retries} attempts failed: Y={y}, Angle={angle_deg}")
-    log_progress(f"DONE task={overall_task_no} y={y} angle={angle_deg} status=FAIL ts={datetime.datetime.now().isoformat()} worker={worker_id}")
+    print(f"[Worker {worker_id}] Overall Task {overall_task_no}/{total_runs_tasks} All {max_retries} attempts failed: Y={y_val}, Angle={angle_val}")
+    log_progress(f"DONE task={overall_task_no} params=[{params_str}] status=FAIL ts={datetime.datetime.now().isoformat()} worker={worker_id}")
     increment_completed_tasks()
     return False
 
@@ -895,51 +932,33 @@ def main():
 
     if manifest_data:
         cfg = manifest_data['config']
-        num_runs = cfg.get('NUM_RUNS', NUM_RUNS)
-        rtf = cfg.get('SWEEP_REAL_TIME_FACTOR', SWEEP_REAL_TIME_FACTOR)
-        timeout = cfg.get('TASK_TIMEOUT_SEC', TASK_TIMEOUT_SEC)
-        base_station_yaw_deg = cfg.get('RX_YAW_DEG', BASE_STATION_YAW_DEG)
-        y_positions = cfg.get('Y_POSITIONS', Y_POSITIONS)
-        if 'ANGLES_DEG' in cfg:
-            angles_deg = cfg['ANGLES_DEG']
-        else:
-            start_ang = cfg.get('START_ANGLE', START_ANGLE)
-            end_ang = cfg.get('END_ANGLE', END_ANGLE)
-            step_ang = cfg.get('STEP_ANGLE', STEP_ANGLE)
-            angles_deg = []
-            curr_ang = start_ang
-            while curr_ang <= end_ang + 1e-5:
-                angles_deg.append(round(curr_ang, 1))
-                curr_ang += step_ang
+        num_runs = cfg.get('NUM_RUNS', sweep_config.NUM_RUNS)
+        rtf = cfg.get('SWEEP_REAL_TIME_FACTOR', sweep_config.SWEEP_REAL_TIME_FACTOR)
+        timeout = cfg.get('TASK_TIMEOUT_SEC', sweep_config.TASK_TIMEOUT_SEC)
+        y_positions = []
+        angles_deg = []
+        if 'GENERIC_VARIABLES' in cfg:
+            for gv in cfg['GENERIC_VARIABLES']:
+                if gv['name'] == 'rx_y_position': y_positions = [s[0].get('value', 0) for s in gv.get('states', []) if s]
+                elif 'yaw' in gv['name']: angles_deg = [s[0].get('value', 0) for s in gv.get('states', []) if s]
     else:
-        num_runs = args.num_runs if args.num_runs is not None else NUM_RUNS
-        rtf = args.rtf if args.rtf is not None else SWEEP_REAL_TIME_FACTOR
-        timeout = args.timeout if args.timeout is not None else TASK_TIMEOUT_SEC
-        base_station_yaw_deg = args.base_station_yaw if args.base_station_yaw is not None else BASE_STATION_YAW_DEG
-
-        if args.y_positions is not None:
-            y_positions = [float(y.strip()) for y in args.y_positions.split(',') if y.strip()]
-        else:
-            y_positions = Y_POSITIONS
-            
-        if args.start_angle is not None or args.end_angle is not None or args.step_angle is not None:
-            start_angle = args.start_angle if args.start_angle is not None else min(ANGLES_DEG)
-            end_angle = args.end_angle if args.end_angle is not None else max(ANGLES_DEG)
-            step_angle = args.step_angle if args.step_angle is not None else 0.2
-            
-            angles_deg = []
-            curr_angle = start_angle
-            while curr_angle <= end_angle + 1e-5:
-                angles_deg.append(round(curr_angle, 1))
-                curr_angle += step_angle
-        else:
-            angles_deg = ANGLES_DEG
+        num_runs = args.num_runs if args.num_runs is not None else sweep_config.NUM_RUNS
+        rtf = args.rtf if args.rtf is not None else sweep_config.SWEEP_REAL_TIME_FACTOR
+        timeout = args.timeout if args.timeout is not None else sweep_config.TASK_TIMEOUT_SEC
+        y_positions = []
+        angles_deg = []
+        if hasattr(sweep_config, 'GENERIC_VARIABLES'):
+            for gv in sweep_config.GENERIC_VARIABLES:
+                if gv['name'] == 'rx_y_position': y_positions = [s[0].get('value', 0) for s in gv.get('states', []) if s]
+                elif 'yaw' in gv['name']: angles_deg = [s[0].get('value', 0) for s in gv.get('states', []) if s]
 
     os.makedirs("tools/sweep_build", exist_ok=True)
-
-    if os.path.exists(BACKUP_PATH):
-        os.remove(BACKUP_PATH)
-    shutil.copy2(CONFIG_PATH, BACKUP_PATH)
+    try:
+        if os.path.exists(sweep_config.BACKUP_PATH):
+            os.remove(sweep_config.BACKUP_PATH)
+        shutil.copy2(sweep_config.CONFIG_PATH, sweep_config.BACKUP_PATH)
+    except Exception as e:
+        print(f"Warning: Failed to manage backup config: {e}")
 
     for f in glob.glob("tools/sweep_build/sim_params_tmp_*.yaml"):
         try:
@@ -1028,7 +1047,7 @@ def main():
             is_completed = False
             if args.resume:
                 if r_idx not in completed_cache:
-                    completed_cache[r_idx] = get_completed_tasks(sweep_dir, r_idx, config_path=CONFIG_PATH)
+                    completed_cache[r_idx] = get_completed_tasks(sweep_dir, r_idx, config_path=sweep_config.CONFIG_PATH)
                 for cy, cang in completed_cache[r_idx]:
                     if abs(cy - y_val) < 0.01 and abs(cang - ang_val) < 0.05:
                         is_completed = True
@@ -1047,18 +1066,23 @@ def main():
         import itertools
         generic_vars = getattr(sweep_config, 'GENERIC_VARIABLES', [])
         var_names = [v['name'] for v in generic_vars]
-        var_values_lists = [v['values'] for v in generic_vars]
+        var_values_lists = [v.get('states', []) for v in generic_vars]
         combinations = list(itertools.product(*var_values_lists))
         
         for run_idx in range(1, num_runs + 1):
             completed_set = set()
             if args.resume:
-                completed_set = get_completed_tasks(sweep_dir, run_idx, config_path=CONFIG_PATH)
+                completed_set = get_completed_tasks(sweep_dir, run_idx, config_path=sweep_config.CONFIG_PATH)
                 
             for combo in combinations:
                 task_vars = dict(zip(var_names, combo))
-                y = task_vars.get('rx_y_position', getattr(sweep_config, 'Y_POSITIONS', [3.0])[0])
-                angle_deg = task_vars.get('rx_antenna_yaw', getattr(sweep_config, 'START_ANGLE', 0.0))
+                y = 3.0
+                angle_deg = 0.0
+                for k, state_overrides in task_vars.items():
+                    if state_overrides:
+                        val = state_overrides[0].get('value', 0)
+                        if k == 'rx_y_position': y = val
+                        if 'yaw' in k.lower(): angle_deg = val
                 
                 is_completed = False
                 for cy, cang in completed_set:
@@ -1077,7 +1101,6 @@ def main():
     log_progress(f"START {datetime.datetime.now().isoformat()} TOTAL={total_runs_tasks} CONCURRENCY={concurrency}")
 
     print(f"Starting parameter sweep: Y_POSITIONS={y_positions}, ANGLES_DEG={angles_deg}")
-    print(f"Base Station Yaw: {base_station_yaw_deg} deg")
     print(f"Number of runs per task: {num_runs}")
     print(f"Total tasks across all runs: {total_runs_tasks}")
     if skipped_count > 0:
@@ -1099,7 +1122,7 @@ def main():
     def worker_thread_fn(task_info):
         worker_id = worker_queue.get()
         try:
-            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=rtf, timeout=timeout, base_station_yaw_deg=base_station_yaw_deg, max_concurrency=concurrency, num_runs=num_runs)
+            success = run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is_docker, rtf=rtf, timeout=timeout, max_concurrency=concurrency, num_runs=num_runs)
             return success
         finally:
             worker_queue.put(worker_id)
@@ -1189,7 +1212,7 @@ def main():
 
             # データ完全性検証の実行
             print("\nChecking data integrity of sweep results...")
-            is_valid, failed_list = validate_sweep_summary(sweep_dir, CONFIG_PATH, y_positions, angles_deg, num_runs)
+            is_valid, failed_list = validate_sweep_summary(sweep_dir, sweep_config.CONFIG_PATH, y_positions, angles_deg, num_runs)
 
             # バリデーションレポートの出力
             report_path = os.path.join(sweep_dir, "validation_report.txt")
@@ -1268,7 +1291,19 @@ def main():
             # 次に実行すべき失敗タスクのリストを作成
             next_tasks_list = []
             for task in tasks_list:
-                t_run, t_y, t_angle = task[0], task[1], task[2]
+                if len(task) >= 4:
+                    t_run, task_vars = task[0], task[1]
+                else:
+                    t_run, task_vars = task[0], task[1]
+
+                t_y = 0.0
+                t_angle = 0.0
+                for k, state_overrides in task_vars.items():
+                    if not state_overrides: continue
+                    val = state_overrides[0].get('value', 0)
+                    if k == 'rx_y_position': t_y = float(val)
+                    if 'yaw' in k.lower(): t_angle = float(val)
+                    
                 for err in failed_list:
                     if err['run_idx'] == t_run and abs(err['y'] - t_y) < 0.01 and abs(err['angle'] - t_angle) < 0.05:
                         next_tasks_list.append(task)
@@ -1290,9 +1325,16 @@ def main():
         print(f"  python3 tools/sweep_dist.py merge --sweep-dir sim_results/sweep_{sweep_start_time}")
 
     fix_ownership(sweep_start_time)
-    log_progress(f"DONE task={total_runs_tasks} y=- angle=- status=SWEEP_COMPLETE ts={datetime.datetime.now().isoformat()}")
-    print("\nSweep completed! Restoring original config...")
-    shutil.copy2(BACKUP_PATH, CONFIG_PATH)
+    log_progress(f"DONE task={total_runs_tasks} params=[-] status=SWEEP_COMPLETE ts={datetime.datetime.now().isoformat()}")
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except Exception as e:
+        print(f"Sweep completed! Restoring original config...")
+        try:
+            import lib.sweep_config as sweep_config
+            shutil.copy2(sweep_config.BACKUP_PATH, sweep_config.CONFIG_PATH)
+        except Exception:
+            pass
+        raise e
