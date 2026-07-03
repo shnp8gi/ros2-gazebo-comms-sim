@@ -724,6 +724,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             cmd = ["bash", "-c", 
                    f"export ROS_DOMAIN_ID={ros_domain_id} && "
                    f"export GZ_PARTITION={gz_partition} && "
+                   f"export IGN_PARTITION={gz_partition} && "
                    f"export GZ_PORT={gz_port} && "
                    f"export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/src/comms_sim_pkg/config/fastdds_no_shm.xml && "
                    f"source /opt/ros/humble/setup.bash && source install/setup.bash && "
@@ -732,6 +733,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             cmd = ["docker", "compose", "exec", "-T", "sim", "bash", "-c", 
                    f"export ROS_DOMAIN_ID={ros_domain_id} && "
                    f"export GZ_PARTITION={gz_partition} && "
+                   f"export IGN_PARTITION={gz_partition} && "
                    f"export GZ_PORT={gz_port} && "
                    f"export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/src/comms_sim_pkg/config/fastdds_no_shm.xml && "
                    f"source /opt/ros/humble/setup.bash && source install/setup.bash && "
