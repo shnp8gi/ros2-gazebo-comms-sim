@@ -182,6 +182,16 @@ namespace tx_controller
                 return;
             }
 
+            // 3. Get current pose
+            auto poseComp = _ecm.Component<gz::sim::components::Pose>(this->model.Entity());
+            if (!poseComp) return;
+            gz::math::Pose3d pose = poseComp->Data();
+
+            MotionState current_state;
+            current_state.x = pose.Pos().X();
+            current_state.y = pose.Pos().Y();
+            current_state.yaw = pose.Rot().Yaw();
+
             if (this->motion_controller.IsMissionComplete()) {
                 if (!this->mission_complete) {
                     this->mission_complete = true;
@@ -199,19 +209,7 @@ namespace tx_controller
                     this->mission_complete_pub.Publish(msg);
                     this->last_complete_pub_time = _info.simTime.count();
                 }
-                this->SetVelocity(_ecm, 0.0, 0.0);
-                return;
             }
-
-            // 3. Get current pose
-            auto poseComp = _ecm.Component<gz::sim::components::Pose>(this->model.Entity());
-            if (!poseComp) return;
-            gz::math::Pose3d pose = poseComp->Data();
-
-            MotionState current_state;
-            current_state.x = pose.Pos().X();
-            current_state.y = pose.Pos().Y();
-            current_state.yaw = pose.Rot().Yaw();
 
             double dt = std::chrono::duration<double>(_info.dt).count();
 
@@ -221,35 +219,17 @@ namespace tx_controller
             // 5. Apply velocity
             this->SetVelocity(_ecm, cmd.linear_velocity, cmd.angular_velocity);
 
-            this->PublishProgress(_info);
+            this->PublishProgress(_info, current_state);
         }
 
-        void PublishProgress(const gz::sim::UpdateInfo &_info) {
-            if (this->motion_controller.GetTotalPathDistance() > 0) {
-                // Approximate distance traveled using current waypoint (simplified for demonstration, 
-                // in reality you'd track cumulative distance or use a precise projection)
-                size_t current_wp_idx = this->motion_controller.GetCurrentWaypointIndex();
-                double progress = 0.0;
-                
-                if (current_wp_idx >= this->motion_controller.GetWaypoints().size()) {
-                    progress = 1.0;
-                } else if (current_wp_idx > 0) {
-                    const auto& waypoints = this->motion_controller.GetWaypoints();
-                    double traveled = 0.0;
-                    for (size_t i = 1; i <= current_wp_idx; ++i) {
-                        double dx = waypoints[i].x - waypoints[i-1].x;
-                        double dy = waypoints[i].y - waypoints[i-1].y;
-                        traveled += std::sqrt(dx*dx + dy*dy);
-                    }
-                    progress = std::min(1.0, traveled / this->motion_controller.GetTotalPathDistance());
-                }
-                
-                if (_info.simTime.count() - this->last_progress_pub_time > 500000000) { // 0.5s
-                    gz::msgs::Double msg;
-                    msg.set_data(progress);
-                    this->mission_progress_pub.Publish(msg);
-                    this->last_progress_pub_time = _info.simTime.count();
-                }
+        void PublishProgress(const gz::sim::UpdateInfo &_info, const MotionState &current_state) {
+            double progress = this->motion_controller.GetMissionProgress(current_state);
+            
+            if (_info.simTime.count() - this->last_progress_pub_time > 500000000) { // 0.5s
+                gz::msgs::Double msg;
+                msg.set_data(progress);
+                this->mission_progress_pub.Publish(msg);
+                this->last_progress_pub_time = _info.simTime.count();
             }
         }
 

@@ -66,6 +66,7 @@ ament_python_install_package(${PROJECT_NAME})
 install(PROGRAMS
   comms_sim_pkg/sim_ready_gate_node.py
   comms_sim_pkg/progress_logger_node.py
+  comms_sim_pkg/mission_coordinator_node.py
   DESTINATION lib/${PROJECT_NAME}
 )
 

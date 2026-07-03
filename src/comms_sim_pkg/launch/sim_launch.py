@@ -747,10 +747,7 @@ def launch_setup(context, *args, **kwargs):
         v_name = vehicle_cfg.get('name', 'suv')
         
         # C++ Gazebo Plugin (TxControllerPlugin.cc) への移行が完了したため、
-        # 旧来のPython版通信ノードおよびコントローラノードの起動はスキップされます。
-        actions.append(LogInfo(
-            msg=f'[{v_name}] Vehicle communications handled by TxControllerPlugin (C++).'
-        ))
+        # 旧来のPython版通信ノードおよびコントローラノードは廃止・スキップされています。
 
         # 進捗を標準出力へフラッシュするためのアダプターノード
         progress_logger = Node(
@@ -767,7 +764,6 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     # C++プラグイン(TxControllerPlugin)からのReadyシグナルを待機する
     if len(vehicles) > 0:
-        # expected_nodes: 全 comms_node + 全 tx_controller
         expected_ready_nodes = []
         for v in vehicles:
             v_name = v.get('name', 'suv')
@@ -789,6 +785,30 @@ def launch_setup(context, *args, **kwargs):
             ]
         )
         actions.append(ready_gate_node)
+
+    # =========================================================================
+    # Mission Coordinator（シミュレーション全体の完了・自動終了制御）
+    # =========================================================================
+    if len(vehicles) > 0:
+        vehicle_names_list = [v.get('name', 'suv') for v in vehicles]
+        mission_coordinator_node = Node(
+            package='comms_sim_pkg',
+            executable='mission_coordinator_node.py',
+            name='mission_coordinator_node',
+            output='screen',
+            parameters=[{'vehicle_names': vehicle_names_list}]
+        )
+        actions.append(mission_coordinator_node)
+
+        # 全車両がミッション完了を報告しコーディネーターが終了したら、
+        # シミュレーションシステム全体（Launch）をシャットダウンして終了する
+        shutdown_event = RegisterEventHandler(
+            event_handler=OnProcessExit(
+                target_action=mission_coordinator_node,
+                on_exit=[EmitEvent(event=Shutdown())]
+            )
+        )
+        actions.append(shutdown_event)
 
     return actions
 

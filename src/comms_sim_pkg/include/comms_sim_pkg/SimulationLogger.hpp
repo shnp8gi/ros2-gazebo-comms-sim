@@ -7,9 +7,104 @@
 #include <filesystem>
 #include <iostream>
 #include "comms_sim_pkg/DataTypes.hpp"
+#include <algorithm>
 
 namespace tx_controller
 {
+    // --- Domain Model ---
+    struct SummaryMetrics {
+        std::string entity_name;
+        std::string scheduling_policy;
+        double total_data_MB = 0.0;
+        double average_rssi_dBm = -999.0;
+        double average_throughput_Gbps = 0.0;
+        double connected_time_s = 0.0;
+        int handover_count = 0;
+    };
+
+    // --- Interface ---
+    class ISummaryFormatter {
+    public:
+        virtual ~ISummaryFormatter() = default;
+        virtual std::string GetHeader() const = 0;
+        virtual std::string Format(const SummaryMetrics& metrics) const = 0;
+    };
+
+    // --- Presentation Layer ---
+    class CsvSummaryFormatter : public ISummaryFormatter {
+    public:
+        std::string GetHeader() const override {
+            return "vehicle_name,scheduling_policy,total_data_MB,average_rssi_dBm,average_throughput_Gbps,connected_time_s,handover_count\n";
+        }
+        std::string Format(const SummaryMetrics& m) const override {
+            std::ostringstream oss;
+            oss << m.entity_name << "," << m.scheduling_policy << "," 
+                << std::fixed << std::setprecision(6) << m.total_data_MB << ","
+                << std::fixed << std::setprecision(6) << m.average_rssi_dBm << ","
+                << std::fixed << std::setprecision(6) << m.average_throughput_Gbps << ","
+                << std::fixed << std::setprecision(6) << m.connected_time_s << ","
+                << m.handover_count << "\n";
+            return oss.str();
+        }
+    };
+
+    // --- Domain Logic ---
+    class MetricsCalculator {
+    public:
+        static SummaryMetrics CalculateForAntenna(const std::string& antenna_name, const AntennaInfo& ant, const std::string& policy, int handover_count) {
+            SummaryMetrics metrics;
+            metrics.entity_name = antenna_name;
+            metrics.scheduling_policy = policy;
+            metrics.total_data_MB = ant.total_data_transmitted;
+            metrics.handover_count = handover_count;
+
+            double sum_rssi = 0.0;
+            double sum_throughput = 0.0;
+            int connected_steps = 0;
+
+            if (ant.log_records.size() >= 2) {
+                double dt = ant.log_records[1].time_s - ant.log_records[0].time_s;
+                for (const auto& log : ant.log_records) {
+                    if (log.link_state == "CONNECTED" || log.has_link_grant) {
+                        sum_rssi += log.rssi_dBm;
+                        sum_throughput += log.throughput_Gbps;
+                        connected_steps++;
+                        metrics.connected_time_s += dt;
+                    }
+                }
+            }
+
+            metrics.average_rssi_dBm = (connected_steps > 0) ? (sum_rssi / connected_steps) : -999.0;
+            metrics.average_throughput_Gbps = (connected_steps > 0) ? (sum_throughput / connected_steps) : 0.0;
+            return metrics;
+        }
+
+        static SummaryMetrics CalculateTotal(const std::string& model_name, const std::vector<SummaryMetrics>& antenna_metrics, const std::string& policy, int total_handovers) {
+            SummaryMetrics total;
+            total.entity_name = model_name + "_total";
+            total.scheduling_policy = policy;
+            total.handover_count = total_handovers;
+
+            int valid_antenna_count = 0;
+            double sum_avg_rssi = 0.0;
+            double sum_avg_throughput = 0.0;
+
+            for (const auto& m : antenna_metrics) {
+                total.total_data_MB += m.total_data_MB;
+                total.connected_time_s = std::max(total.connected_time_s, m.connected_time_s); // Approximate
+                if (m.average_rssi_dBm > -999.0) {
+                    sum_avg_rssi += m.average_rssi_dBm;
+                    sum_avg_throughput += m.average_throughput_Gbps;
+                    valid_antenna_count++;
+                }
+            }
+            
+            total.average_rssi_dBm = (valid_antenna_count > 0) ? (sum_avg_rssi / valid_antenna_count) : -999.0;
+            total.average_throughput_Gbps = (valid_antenna_count > 0) ? (sum_avg_throughput / valid_antenna_count) : 0.0;
+            return total;
+        }
+    };
+
     class SimulationLogger {
     public:
         SimulationLogger() = default;
@@ -128,31 +223,8 @@ namespace tx_controller
             std::string sum_filename = results_dir + "/" + (this->summary_filename.empty() ? (model_name + "_summary.csv") : this->summary_filename);
             std::ofstream ofs_sum(sum_filename);
             if (ofs_sum.is_open()) {
-                ofs_sum << "model_name,scheduling_policy,total_data_MB,average_rssi_dBm,average_throughput_Gbps,connected_time_s,handover_count\n";
-                
-                double total_data = 0.0;
-                double sum_rssi = 0.0;
-                double sum_throughput = 0.0;
-                int connected_steps = 0;
-                double connected_time_s = 0.0;
-
-                for (const auto& ant : vehicle_antennas) {
-                    total_data += ant.total_data_transmitted;
-                    if (ant.log_records.size() >= 2) {
-                        double dt = ant.log_records[1].time_s - ant.log_records[0].time_s;
-                        for (const auto& log : ant.log_records) {
-                            if (log.link_state == "CONNECTED" || log.has_link_grant) {
-                                sum_rssi += log.rssi_dBm;
-                                sum_throughput += log.throughput_Gbps;
-                                connected_steps++;
-                                connected_time_s += dt;
-                            }
-                        }
-                    }
-                }
-
-                double avg_rssi = (connected_steps > 0) ? (sum_rssi / connected_steps) : -999.0;
-                double avg_throughput = (connected_steps > 0) ? (sum_throughput / connected_steps) : 0.0;
+                CsvSummaryFormatter formatter;
+                ofs_sum << formatter.GetHeader();
                 
                 int handover_count = 0;
                 for (const auto& ev : this->event_records) {
@@ -161,12 +233,24 @@ namespace tx_controller
                     }
                 }
 
-                ofs_sum << model_name << "," << scheduling_policy << "," 
-                        << std::fixed << std::setprecision(6) << total_data << ","
-                        << std::fixed << std::setprecision(6) << avg_rssi << ","
-                        << std::fixed << std::setprecision(6) << avg_throughput << ","
-                        << std::fixed << std::setprecision(6) << connected_time_s << ","
-                        << handover_count << "\n";
+                std::vector<SummaryMetrics> antenna_metrics;
+                for (const auto& ant : vehicle_antennas) {
+                    auto metrics = MetricsCalculator::CalculateForAntenna(ant.name, ant, scheduling_policy, handover_count);
+                    antenna_metrics.push_back(metrics);
+                    ofs_sum << formatter.Format(metrics);
+                }
+
+                if (vehicle_antennas.size() >= 3) {
+                    auto total_metrics = MetricsCalculator::CalculateTotal(model_name, antenna_metrics, scheduling_policy, handover_count);
+                    ofs_sum << formatter.Format(total_metrics);
+                } else if (vehicle_antennas.empty()) {
+                    // Fallback if no antennas defined
+                    SummaryMetrics m;
+                    m.entity_name = model_name;
+                    m.scheduling_policy = scheduling_policy;
+                    ofs_sum << formatter.Format(m);
+                }
+
                 ofs_sum.close();
                 std::cout << "[SimulationLogger] Saved summary to " << sum_filename << std::endl;
             }

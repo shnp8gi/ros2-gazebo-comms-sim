@@ -47,6 +47,9 @@ from lib.sweep_kinematics import estimate_expected_duration
 from lib.sweep_data import average_summaries, get_completed_tasks, validate_sweep_summary
 from lib.scenario_loader import load_scenario, generate_sim_params, write_sim_params
 
+from lib.concurrency_guard import ConcurrencyGuard
+from lib.process_manager import ProcessManager
+
 # 動的プロファイリングがまだ十分に機能していない場合の初期想定負荷パラメータ
 DEFAULT_CPU_PER_SIM = 1.5
 DEFAULT_MEM_PER_SIM_GIB = 1.2
@@ -62,52 +65,6 @@ sweep_start_time = None
 
 launch_lock = threading.Lock()
 last_launch_time = 0.0
-
-def send_sigint_to_worker(proc, worker_id):
-    """Sends SIGINT to the process group and all child processes."""
-    if proc:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGINT)
-        except Exception:
-            pass
-            
-    procs = get_worker_processes(proc, worker_id)
-    for p in procs:
-        try:
-            p.send_signal(signal.SIGINT)
-        except Exception:
-            pass
-
-def send_sigkill_to_worker(proc, worker_id):
-    """Sends SIGKILL to the process group and all child processes."""
-    if proc:
-        try:
-            os.killpg(os.getpgid(proc.pid), signal.SIGKILL)
-        except Exception:
-            pass
-            
-    procs = get_worker_processes(proc, worker_id)
-    for p in procs:
-        try:
-            p.kill()
-        except Exception:
-            pass
-
-def terminate_process_cleanly(proc, worker_id, timeout=2.0):
-    if not proc and worker_id is None:
-        return
-
-    send_sigint_to_worker(proc, worker_id)
-
-    t_start = time.time()
-    while time.time() - t_start < timeout:
-        if proc and proc.poll() is not None:
-            # Check if children are also dead
-            if not get_worker_processes(None, worker_id):
-                return
-        time.sleep(0.1)
-
-    send_sigkill_to_worker(proc, worker_id)
 
 def fix_ownership(start_time_str=None):
     """結果ディレクトリの所有権をホストのユーザーに変更する"""
@@ -178,7 +135,7 @@ def handle_shutdown(signum, frame):
         proc = task_data.get('proc')
         if proc:
             print(f"[Sweep Sim] Requesting clean shutdown (SIGINT) for Worker {worker_id} (PID {proc.pid})...")
-            send_sigint_to_worker(proc, worker_id)
+            ProcessManager.send_sigint_to_worker(proc, worker_id)
 
     # デストラクタでのCSV書き込みを待つ
     time.sleep(2.0)
@@ -190,7 +147,7 @@ def handle_shutdown(signum, frame):
         
         if proc and proc.poll() is None:
             print(f"[Sweep Sim] Killing remaining process group for Worker {worker_id} (PID {proc.pid})...")
-            send_sigkill_to_worker(proc, worker_id)
+            ProcessManager.send_sigkill_to_worker(proc, worker_id)
                     
         # 一時設定ファイルの削除
         if tmp_config_path and os.path.exists(tmp_config_path):
@@ -218,53 +175,12 @@ def handle_shutdown(signum, frame):
     if sweep_start_time:
         fix_ownership(sweep_start_time)
 
+    ProcessManager.kill_all_simulation_zombies()
+
     print("[Sweep Sim] Shutdown completed. Exiting.")
     os._exit(1)
 
-def get_worker_processes(proc, worker_id, all_system_procs=None) -> list:
-    """Finds all processes associated with a worker, using child-tree and command line matching."""
-    procs = []
-    # 1. Add subprocess and its local children (handles is_docker=True)
-    if proc:
-        try:
-            parent = psutil.Process(proc.pid)
-            procs.append(parent)
-            procs.extend(parent.children(recursive=True))
-        except Exception:
-            pass
-            
-    # 2. Search system processes for command line keywords (handles is_docker=False)
-    cfg_keyword = f"sim_params_tmp_{worker_id}.yaml"
-    part_keyword = f"comms_sim_partition_{worker_id}"
-    gz_port_keyword = str(11345 + worker_id)
-    
-    proc_list = all_system_procs if all_system_procs is not None else (psutil.process_iter(['pid', 'cmdline', 'environ']) if psutil is not None else [])
-    
-    for p in proc_list:
-        try:
-            # Skip if already in the list
-            if any(x.pid == p.pid for x in procs):
-                continue
-            
-            cmdline = p.info['cmdline']
-            if cmdline:
-                cmdline_str = " ".join(cmdline)
-                if (cfg_keyword in cmdline_str or 
-                    part_keyword in cmdline_str or 
-                    gz_port_keyword in cmdline_str):
-                    procs.append(p)
-                    continue
-                    
-            # Check environment if available
-            env = p.info['environ']
-            if env:
-                if env.get('ROS_DOMAIN_ID') == str(10 + worker_id) or env.get('GZ_PARTITION') == part_keyword:
-                    procs.append(p)
-                    continue
-        except Exception:
-            pass
-            
-    return procs
+
 
 # =========================================================================
 # Completed Tasks Counter and Resource Profiling state
@@ -442,9 +358,17 @@ def resource_monitor_loop():
     except Exception:
         pass
 
+    heartbeat_counter = 0
     while not shutdown_requested and monitor_running:
         try:
             measure_resources()
+            
+            # 5秒に1回ハートビートを更新
+            heartbeat_counter += 1
+            if heartbeat_counter >= 5:
+                update_heartbeat()
+                heartbeat_counter = 0
+                
         except Exception:
             pass
         time.sleep(1.0)
@@ -504,13 +428,87 @@ def get_optimal_concurrency(max_limit: int = 4, active_count: int = 0, silent: b
 
 
 progress_lock = threading.Lock()
+sweep_state = {
+    "start_time": None,
+    "last_updated": None,
+    "total_tasks": 0,
+    "concurrency": 0,
+    "completed": 0,
+    "running_tasks": {},
+    "task_durations": []
+}
+
+def _dump_sweep_state():
+    """現在の sweep_state を JSON ファイルに書き出す (progress_lock 内部で呼ばれる想定)"""
+    import json
+    import datetime
+    sweep_state["last_updated"] = datetime.datetime.now().isoformat()
+    sweep_state["sweep_dir_name"] = globals().get("sweep_start_time", "")
+    try:
+        state_file = os.path.join(os.path.dirname(os.path.abspath(__file__)), "log", ".latest_sweep_state.json")
+        os.makedirs(os.path.dirname(state_file), exist_ok=True)
+        with open(state_file, 'w', encoding='utf-8') as sf:
+            json.dump(sweep_state, sf, indent=2)
+    except Exception as e:
+        print(f"[Sweep Sim] Error saving state json: {e}")
+
+def update_heartbeat():
+    """死活監視のために定期的にJSONを更新するハートビート"""
+    with progress_lock:
+        if sweep_state.get("start_time") is not None:
+            _dump_sweep_state()
 
 def log_progress(line: str):
-    """進捗ログにタイムスタンプ付きで1行書き込む (スレッドセーフ)"""
+    """進捗ログにタイムスタンプ付きで1行書き込む (スレッドセーフ)
+       さらに、堅牢な死活監視のためのJSONステートファイルも更新する"""
+    import datetime
     with progress_lock:
-        with open(sweep_config.PROGRESS_LOG, 'a', encoding='utf-8') as lf:
-            lf.write(line + "\n")
-            lf.flush()
+        if line:
+            with open(sweep_config.PROGRESS_LOG, 'a', encoding='utf-8') as lf:
+                lf.write(line + "\n")
+                lf.flush()
+                
+            m_start = re.match(r"START (\S+) TOTAL=(\d+)(?:\s+CONCURRENCY=(\d+))?", line)
+        m_run = re.match(r"RUNNING task=(\d+) params=\[(.*?)\] ts=(\S+)(?:\s+worker=(\d+))?", line)
+        m_done = re.match(r"DONE task=(\d+) params=\[(.*?)\] status=(\w+) ts=(\S+)(?:\s+worker=(\d+))?", line)
+        m_abort = re.match(r"ABORT ts=(\S+)", line)
+        m_complete = re.match(r"SWEEP_COMPLETE.*", line)
+
+        if m_start:
+            sweep_state["start_time"] = m_start.group(1)
+            sweep_state["total_tasks"] = int(m_start.group(2))
+            if m_start.group(3):
+                sweep_state["concurrency"] = int(m_start.group(3))
+            sweep_state["running_tasks"].clear()
+            sweep_state["completed"] = 0
+            sweep_state["task_durations"].clear()
+        elif m_run:
+            t_id = m_run.group(1)
+            sweep_state["running_tasks"][t_id] = {
+                "task_no": int(t_id),
+                "params_str": m_run.group(2),
+                "started_at": m_run.group(3),
+                "worker_id": int(m_run.group(4)) if m_run.group(4) else None
+            }
+        elif m_done:
+            t_id = m_done.group(1)
+            if t_id in sweep_state["running_tasks"]:
+                started_at_str = sweep_state["running_tasks"][t_id]["started_at"]
+                try:
+                    start_dt = datetime.datetime.fromisoformat(started_at_str)
+                    done_dt = datetime.datetime.fromisoformat(m_done.group(4))
+                    sweep_state["task_durations"].append((done_dt - start_dt).total_seconds())
+                except Exception:
+                    pass
+                del sweep_state["running_tasks"][t_id]
+            # status == "SWEEP_COMPLETE" の場合は別でハンドリングするが、
+            # task_id が振られている通常の完了イベントでのみcompletedを増やす
+            if m_done.group(3) != "SWEEP_COMPLETE":
+                sweep_state["completed"] += 1
+        elif m_abort or m_complete:
+            sweep_state["running_tasks"].clear()
+
+        _dump_sweep_state()
 
 def apply_dither(content, dither_x):
     """
@@ -586,11 +584,6 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
     ros_domain_id = 10 + worker_id
  
-    pct = (local_task_no - 1) / total_runs_tasks * 100
-    print(f"\n=======================================================")
-    print(f"[Worker {worker_id}] [Run {run_idx}/{sweep_config.NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) {task_suffix}")
-    print(f"=======================================================")
- 
     t_expected = None
     
     # Use the user-defined timeout. Under high parallelization, actual simulation RTF drops
@@ -624,13 +617,16 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
 
                 wait_time = 0.5
                 if cpu_val > 90.0:
-                    print(f"[Monitor] CPU usage very high ({cpu_val:.1f}%), pausing simulation launches...")
+                    if now_time - last_wait_log_time > 15.0:
+                        print(f"[Monitor] CPU usage very high ({cpu_val:.1f}%), pausing simulation launches...")
                     wait_time = 2.0
                 elif mem_pct > 90.0:
-                    print(f"[Monitor] Memory usage very high ({mem_pct:.1f}%), pausing simulation launches...")
+                    if now_time - last_wait_log_time > 15.0:
+                        print(f"[Monitor] Memory usage very high ({mem_pct:.1f}%), pausing simulation launches...")
                     wait_time = 5.0
                 elif mem_pct > 95.0:
-                    print(f"[Monitor] CRITICAL MEMORY ({mem_pct:.1f}%), forcing sleep...")
+                    if now_time - last_wait_log_time > 15.0:
+                        print(f"[Monitor] CRITICAL MEMORY ({mem_pct:.1f}%), forcing sleep...")
                     wait_time = 10.0
                 
                 with active_tasks_lock:
@@ -663,6 +659,11 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 # Approximate dithering based on constant speed 83.33 m/s for Shinkansen (as fallback)
                 dx = 83.33 * 0.001
                 dither_x = (((run_idx - 1) / num_runs) - 0.5) * dx
+                
+            pct = (local_task_no - 1) / total_runs_tasks * 100
+            print(f"\n=======================================================")
+            print(f"[Worker {worker_id}] [Run {run_idx}/{sweep_config.NUM_RUNS}] Task {overall_task_no}/{total_runs_tasks} ({pct:.1f}%) {task_suffix}")
+            print(f"=======================================================")
                 
             # Collect overrides directly from generic variables (which now provide full target sets)
             overrides = []
@@ -785,7 +786,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 if worker_id in active_tasks:
                     del active_tasks[worker_id]
 
-            terminate_process_cleanly(proc, worker_id)
+            ProcessManager.terminate_process_cleanly(proc, worker_id)
      
             pass
 
@@ -854,10 +855,14 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     increment_completed_tasks()
     return False
 
-def main():
+def main_logic():
     global sweep_start_time
     signal.signal(signal.SIGINT, handle_shutdown)
     signal.signal(signal.SIGTERM, handle_shutdown)
+    
+    # Pre-execution cleanup: kill any zombies from previous crashed runs
+    # (Safe to do here because ConcurrencyGuard ensures no other valid sweep is running)
+    ProcessManager.kill_all_simulation_zombies()
     parser = argparse.ArgumentParser(description="Parallel Parameter Sweep Simulation")
     parser.add_argument("-j", "--concurrency", type=int, default=0, help="Number of parallel workers (0 for auto)")
     parser.add_argument("--start-angle", type=float, default=None, help="Start angle of sweep in degrees (default from config)")
@@ -1327,7 +1332,13 @@ def main():
     fix_ownership(sweep_start_time)
     log_progress(f"DONE task={total_runs_tasks} params=[-] status=SWEEP_COMPLETE ts={datetime.datetime.now().isoformat()}")
 
-if __name__ == "__main__":
+if __name__ == '__main__':
+    def main():
+        with ConcurrencyGuard():
+            # atexit ensures cleanup happens even on normal exit
+            atexit.register(ProcessManager.kill_all_simulation_zombies)
+            main_logic()
+            
     try:
         main()
     except Exception as e:

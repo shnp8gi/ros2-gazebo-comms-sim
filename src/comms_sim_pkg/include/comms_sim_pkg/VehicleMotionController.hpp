@@ -125,6 +125,27 @@ namespace tx_controller
             return this->waypoints;
         }
 
+        double GetMissionProgress(const MotionState& current_state) const {
+            if (this->total_path_distance <= 0) return 0.0;
+            if (this->mission_complete || this->current_waypoint_idx >= this->waypoints.size()) {
+                return 1.0;
+            }
+
+            double traveled = 0.0;
+            for (size_t i = 1; i < this->current_waypoint_idx; ++i) {
+                double dx = this->waypoints[i].x - this->waypoints[i-1].x;
+                double dy = this->waypoints[i].y - this->waypoints[i-1].y;
+                traveled += std::sqrt(dx*dx + dy*dy);
+            }
+            if (this->current_waypoint_idx > 0) {
+                double dx = current_state.x - this->waypoints[this->current_waypoint_idx-1].x;
+                double dy = current_state.y - this->waypoints[this->current_waypoint_idx-1].y;
+                traveled += std::sqrt(dx*dx + dy*dy);
+            }
+
+            return std::min(1.0, traveled / this->total_path_distance);
+        }
+
     private:
         std::vector<Waypoint> waypoints;
         double waypoint_tolerance = 1.0;

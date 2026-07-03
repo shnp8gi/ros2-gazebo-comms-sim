@@ -53,121 +53,77 @@ try:
 except ImportError:
     pass
 
-# 進捗ログ解析用のコンパイル済み正規表現
-RE_START = re.compile(r"START (\S+) TOTAL=(\d+)(?:\s+CONCURRENCY=(\d+))?")
-RE_RUNNING = re.compile(r"RUNNING task=(\d+) params=\[(.*?)\] ts=(\S+)(?:\s+worker=(\d+))?")
-RE_DONE = re.compile(r"DONE task=(\d+) params=\[(.*?)\] status=(\w+) ts=(\S+)(?:\s+worker=(\d+))?")
-RE_ABORT = re.compile(r"ABORT ts=(\S+)")
+import json
 
-def find_latest_progress_log():
-    """sweep/log/ 配下から最も新しいタイムスタンプフォルダ内の sweep_progress.log を探す"""
-    pattern = os.path.join(project_root, "tools", "log", "*", "sweep_progress.log")
-    logs = glob.glob(pattern)
-    if not logs:
-        # フォールバックとして tools/log/sweep_progress.log や sweep_progress.log も探す
-        fallback_patterns = [
-            os.path.join(project_root, "tools", "log", "sweep_progress.log"),
-            os.path.join(project_root, "sweep_progress.log")
-        ]
-        for p in fallback_patterns:
-            if os.path.exists(p):
-                return p
-        return PROGRESS_LOG_DEFAULT
-    
-    # タイムスタンプ付きディレクトリをソートして最新のものを取得
-    logs.sort(key=os.path.getmtime)
-    return logs[-1]
+STATE_FILE_DEFAULT = os.path.join(project_root, "tools", "log", ".latest_sweep_state.json")
 
-PROGRESS_LOG = find_latest_progress_log()
+def get_state_file_path():
+    """デフォルトのJSON状態ファイルのパスを返す"""
+    return STATE_FILE_DEFAULT
+
+PROGRESS_LOG = get_state_file_path()
 
 def parse_progress_log(log_path: str):
-    """sweep_sim.py が書き出す progress log を読んで進捗情報を返す"""
+    """sweep_sim.py が書き出す JSON state file を読んで進捗情報を返す"""
     if not os.path.exists(log_path):
         return None
 
-    completed_task_ids = set()
-    running_tasks = {}
-    task_start_times = {}
-    task_durations = []
+    try:
+        with open(log_path, 'r', encoding='utf-8') as f:
+            state = json.load(f)
+    except Exception:
+        return None
+
+    # Date string parsing helper
+    def parse_dt(dt_str):
+        if not dt_str:
+            return None
+        try:
+            return datetime.datetime.fromisoformat(dt_str)
+        except ValueError:
+            return None
+
+    start_time = parse_dt(state.get("start_time"))
+    last_updated = parse_dt(state.get("last_updated"))
+    sweep_dir_name = state.get("sweep_dir_name", "")
     
-    start_time = None
-    last_success_time = None
-    total_tasks = None
-    concurrency = None
+    running_tasks = state.get("running_tasks", {})
+    # Convert string keys back to int, and datetime strings to datetime objects
+    typed_running_tasks = {}
+    for k, v in running_tasks.items():
+        try:
+            typed_running_tasks[int(k)] = {
+                "task_no": v.get("task_no"),
+                "params_str": v.get("params_str"),
+                "started_at": parse_dt(v.get("started_at")),
+                "worker_id": v.get("worker_id")
+            }
+        except ValueError:
+            pass
 
-    with open(log_path, encoding="utf-8") as f:
-        for line in f:
-            line = line.rstrip()
-            # 開始行: START 2026-05-18T17:00:00 TOTAL=910 CONCURRENCY=8
-            m = RE_START.match(line)
-            if m:
-                try:
-                    start_time = datetime.datetime.fromisoformat(m.group(1))
-                    total_tasks = int(m.group(2))
-                    if m.group(3):
-                        concurrency = int(m.group(3))
-                    running_tasks.clear()
-                except ValueError:
-                    pass
-                continue
-                
-            # 中断行: ABORT ts=2026-05-18T17:02:00
-            m = RE_ABORT.match(line)
-            if m:
-                running_tasks.clear()
-                continue
-
-            # 実行中行: RUNNING task=6 params=[rx_y_position=1.0m,antenna_yaw=5.0deg] ts=...
-            m = RE_RUNNING.match(line)
-            if m:
-                try:
-                    t_id = int(m.group(1))
-                    params_str = m.group(2)
-                    start_ts = datetime.datetime.fromisoformat(m.group(3))
-                    worker_id = int(m.group(4)) if m.group(4) else None
-                    task_start_times[t_id] = start_ts
-                    running_tasks[t_id] = {
-                        "task_no": t_id,
-                        "params_str": params_str,
-                        "started_at": start_ts,
-                        "worker_id": worker_id
-                    }
-                except ValueError:
-                    pass
-                continue
-
-            # 完了行: DONE task=5 params=[...] status=OK ts=2026-05-18T17:01:23
-            m = RE_DONE.match(line)
-            if m:
-                try:
-                    t_id = int(m.group(1))
-                    status = m.group(3)
-                    
-                    if status == "SWEEP_COMPLETE":
-                        running_tasks.clear()
-                        continue
-                        
-                    done_ts = datetime.datetime.fromisoformat(m.group(4))
-                    completed_task_ids.add(t_id)
-                    running_tasks.pop(t_id, None)
-                    last_success_time = done_ts
-                    
-                    if t_id in task_start_times:
-                        duration = (done_ts - task_start_times[t_id]).total_seconds()
-                        task_durations.append(duration)
-                except ValueError:
-                    pass
-                continue
+    # 死活監視: last_updated が30秒以上前で、かつ running_tasks がある場合はタイムアウト(異常終了)とみなす
+    # また、単に30秒以上前であれば「前回の残骸(Stale)」とみなす
+    now = datetime.datetime.now()
+    is_zombie = False
+    is_stale = False
+    if last_updated:
+        if (now - last_updated).total_seconds() > 30.0:
+            is_stale = True
+            if typed_running_tasks:
+                is_zombie = True
+                typed_running_tasks.clear()
 
     return {
-        "completed": len(completed_task_ids),
-        "completed_ids": completed_task_ids,
-        "running_tasks": running_tasks,
+        "completed": state.get("completed", 0),
+        "running_tasks": typed_running_tasks,
         "start_time": start_time,
-        "last_success_time": last_success_time,
-        "total_tasks": total_tasks,
-        "concurrency": concurrency,
-        "task_durations": task_durations
+        "last_updated": last_updated,
+        "total_tasks": state.get("total_tasks", None),
+        "concurrency": state.get("concurrency", None),
+        "task_durations": state.get("task_durations", []),
+        "is_zombie": is_zombie,
+        "is_stale": is_stale,
+        "sweep_dir_name": sweep_dir_name
     }
 
 def count_csv_rows():
@@ -243,32 +199,10 @@ def render(log_path: str):
     print("=" * 75)
     print(f"       🚀 Sweep Sim Progress Monitor  [{now.strftime('%Y-%m-%d %H:%M:%S')}]")
     print("=" * 75)
-
+    
     info = parse_progress_log(log_path)
 
-    if info is None:
-        # progress log がない場合は CSV から推定
-        completed_runs, latest_csv = count_csv_rows()
-        print(f"\n  [!] {log_path} が見つかりません。")
-        print(f"      CSV から推定: {completed_runs} run_id 完了 / 総タスク {TOTAL_TASKS}")
-        if latest_csv:
-            print(f"      最新CSV: {os.path.basename(latest_csv)}")
-        print("\n  sweep_sim.py を最新版に更新すると詳細な進捗が表示されます。")
-        print("=" * 75)
-        return
-
-    completed = info["completed"]
-    total = info.get("total_tasks") or TOTAL_TASKS
-    remaining = total - completed
-    pct = completed / total * 100 if total > 0 else 0
-
-    # 1. 進捗バー (40文字幅)
-    bar = make_progress_bar(pct, width=40)
-    print(f"\n  📊 進捗: {completed:4d} / {total} タスク  ({pct:.1f}%)")
-    print(f"  [{bar}]")
-    print(f"  残り: {remaining} タスク")
-
-    # 2. システムリソース状況
+    # 1. システムリソース状況 (常に表示)
     print("\n  💻 システムリソース状況:")
     
     # CPU
@@ -296,11 +230,42 @@ def render(log_path: str):
             print(f"        負荷: [{gpu_bar}] {gpu['gpu_util']:5.1f}%")
             print(f"        メモリ: [{gpu_mem_bar}] {gpu['mem_used']:.0f} / {gpu['mem_total']:.0f} MiB ({gpu_mem_pct:.1f}%)")
 
+    if info is None:
+        # progress log がない場合は CSV から推定
+        completed_runs, latest_csv = count_csv_rows()
+        print(f"\n  [!] {log_path} が見つかりません。")
+        print(f"      CSV から推定: {completed_runs} run_id 完了 / 総タスク {TOTAL_TASKS}")
+        if latest_csv:
+            print(f"      最新CSV: {os.path.basename(latest_csv)}")
+        print("\n  sweep_sim.py を最新版に更新すると詳細な進捗が表示されます。")
+        print("=" * 75)
+        return
+
+    is_stale = info.get("is_stale", False)
+
+    if is_stale:
+        print(f"\n  💤 現在実行中のシミュレーションはありません。")
+        if info.get("last_updated"):
+            print(f"      (前回のスイープ終了/中断時刻: {info['last_updated'].strftime('%Y-%m-%d %H:%M:%S')})")
+        print("\n" + "=" * 75)
+        return
+
+    completed = info["completed"]
+    total = info.get("total_tasks") or TOTAL_TASKS
+    remaining = total - completed
+    pct = completed / total * 100 if total > 0 else 0
+
+    # 2. 進捗バー (40文字幅)
+    bar = make_progress_bar(pct, width=40)
+    print(f"\n  📊 進捗: {completed:4d} / {total} タスク  ({pct:.1f}%)")
+    print(f"  [{bar}]")
+    print(f"  残り: {remaining} タスク")
+
     # 3. 経過時間 & 推定残り時間
     print("\n  ⏱️ 時間計測 & 進捗速度:")
     if info["start_time"]:
-        if completed == total and info["last_success_time"]:
-            elapsed = info["last_success_time"] - info["start_time"]
+        if completed == total and info["last_updated"]:
+            elapsed = info["last_updated"] - info["start_time"]
         else:
             elapsed = now - info["start_time"]
         elapsed_s = elapsed.total_seconds()
@@ -322,9 +287,9 @@ def render(log_path: str):
                 avg_dur = sum(info["task_durations"]) / len(info["task_durations"])
                 print(f"    シミュレーション平均実行時間: {avg_dur:.1f} 秒 (1インスタンス単体)")
             
-            if completed == total and info["last_success_time"]:
+            if completed == total and info["last_updated"]:
                 print(f"    推定残り時間: 0:00:00")
-                print(f"    完了時刻: {info['last_success_time'].strftime('%Y-%m-%d %H:%M:%S')}")
+                print(f"    完了時刻: {info['last_updated'].strftime('%Y-%m-%d %H:%M:%S')}")
             else:
                 print(f"    推定残り時間: {str(datetime.timedelta(seconds=int(eta_s)))}")
                 print(f"    推定完了時刻: {eta_dt.strftime('%Y-%m-%d %H:%M:%S')}")
@@ -338,7 +303,14 @@ def render(log_path: str):
     concurrency_limit = info.get("concurrency")
     limit_str = f" / 最大並列数: {concurrency_limit}" if concurrency_limit else ""
     
-    print(f"\n  🔄 実行中の並列タスク ({len(running_tasks)} 個のアクティブワーカー{limit_str}):")
+    is_zombie = info.get("is_zombie", False)
+    sweep_dir_name = info.get("sweep_dir_name", "")
+    
+    if is_zombie:
+        print(f"\n  ⚠️ 異常終了 (ABORTED) を検知しました。シミュレーションは既に停止しています。")
+    else:
+        print(f"\n  🔄 実行中の並列タスク ({len(running_tasks)} 個のアクティブワーカー{limit_str}):")
+        
     if running_tasks:
         for t_id in sorted(running_tasks.keys()):
             ct = running_tasks[t_id]
@@ -346,8 +318,8 @@ def render(log_path: str):
             run_sec = int(running_for.total_seconds())
             
             progress_val = 0.0
-            if ct.get("worker_id") is not None:
-                log_dir = os.path.dirname(log_path)
+            if ct.get("worker_id") is not None and sweep_dir_name:
+                log_dir = os.path.join(project_root, "tools", "log", sweep_dir_name)
                 stdout_file = os.path.join(log_dir, f"stdout_worker_{ct['worker_id']}.log")
                 if os.path.exists(stdout_file):
                     try:
@@ -392,14 +364,14 @@ def main():
         try:
             while True:
                 # 明示的なログファイル指定がない場合、ループ毎に最新のログファイルを再スキャンする
-                current_log = log_file or find_latest_progress_log()
+                current_log = log_file or get_state_file_path()
                 render(current_log)
                 print(f"  (Ctrl+C で終了。{args.interval}秒ごとに更新)")
                 time.sleep(args.interval)
         except KeyboardInterrupt:
             print("\n進捗監視を終了します。")
     else:
-        current_log = log_file or find_latest_progress_log()
+        current_log = log_file or get_state_file_path()
         render(current_log)
 
 if __name__ == "__main__":

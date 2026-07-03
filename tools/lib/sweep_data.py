@@ -150,152 +150,111 @@ def average_summaries(summary_files, output_file):
     averaged.to_csv(output_file, index=False)
 
 
-def get_expected_vehicles(config_path):
+class ScenarioConfigProvider:
     """
-    YAML設定ファイルから期待される車両/アンテナ名リストを取得する
+    シミュレーションシナリオ設定を抽象化し、期待されるエンティティ名を提供する
     """
-    import yaml
-    expected = []
-    if not config_path or not os.path.exists(config_path):
-        return expected
-    try:
-        with open(config_path, 'r', encoding='utf-8') as f:
-            config = yaml.safe_load(f)
-        vehicles = config.get('vehicles', [])
-        if not vehicles:
-            return expected
-        for v in vehicles:
-            v_name = v.get('name', 'suv')
-            antennas = v.get('antennas', [])
-            if antennas:
-                for a in antennas:
-                    expected.append(a.get('name'))
-            else:
-                expected.append(v_name)
-        # 3つ以上の新幹線アンテナがある場合は、shinkansen_total も期待される
-        shinkansen_vns = [vn for vn in expected if 'shinkansen' in vn]
-        if len(shinkansen_vns) >= 3:
-            expected.append('shinkansen_total')
-    except Exception as e:
-        print(f"Warning: Failed to parse vehicles from config: {e}")
-    return sorted(list(set(expected)))
+    def __init__(self, config_path):
+        self.config_path = config_path
 
+    def get_expected_entities(self):
+        import yaml
+        expected = []
+        if not self.config_path or not os.path.exists(self.config_path):
+            return expected
+        try:
+            with open(self.config_path, 'r', encoding='utf-8') as f:
+                config = yaml.safe_load(f)
+            vehicles = config.get('vehicles', [])
+            if not vehicles:
+                return expected
+            for v in vehicles:
+                v_name = v.get('name', 'suv')
+                antennas = v.get('antennas', [])
+                if antennas:
+                    for a in antennas:
+                        expected.append(a.get('name'))
+                else:
+                    expected.append(v_name)
+            
+            # Shinkansen has special _total aggregation if >= 3 antennas
+            shinkansen_vns = [vn for vn in expected if 'shinkansen' in vn]
+            if len(shinkansen_vns) >= 3:
+                expected.append('shinkansen_total')
+        except Exception as e:
+            print(f"Warning: Failed to parse entities from config: {e}")
+        return sorted(list(set(expected)))
+
+class SweepResultRepository:
+    """
+    CSV結果から実績結果を取得する
+    """
+    def __init__(self, summary_path):
+        self.summary_path = summary_path
+    
+    def get_actual_entities(self):
+        actual = set()
+        if not os.path.exists(self.summary_path):
+            return actual
+        try:
+            with open(self.summary_path, 'r', encoding='utf-8') as f:
+                reader = csv.DictReader(f)
+                for row in reader:
+                    v_name = row.get('vehicle_name')
+                    if v_name:
+                        actual.add(v_name)
+        except Exception:
+            pass
+        return actual
+
+class SweepValidator:
+    """
+    シナリオの期待値と実際の結果を比較するドメインロジック
+    """
+    def __init__(self, expected_entities):
+        self.expected_entities = expected_entities
+        
+    def validate(self, actual_entities):
+        missing = [ent for ent in self.expected_entities if ent not in actual_entities]
+        return len(missing) == 0, missing
+
+def get_expected_vehicles(config_path):
+    """(Backward compatibility wrapper)"""
+    return ScenarioConfigProvider(config_path).get_expected_entities()
 
 def validate_sweep_summary(sweep_dir, config_path, y_positions, angles_deg, num_runs):
     """
     スイープ結果のデータ完全性と健全性を検証する
-    Returns:
-        (is_valid, failed_tasks)
-        - is_valid: bool (すべての検証を通過したか)
-        - failed_tasks: list (エラーが発生したタスク情報。{'run_idx': int, 'y': float, 'angle': float, 'reason': str})
     """
-    expected_vehicles = get_expected_vehicles(config_path)
-    if not expected_vehicles:
+    provider = ScenarioConfigProvider(config_path)
+    expected_entities = provider.get_expected_entities()
+    
+    if not expected_entities:
         return True, []
 
     failed_tasks = []
+    validator = SweepValidator(expected_entities)
 
     for run_idx in range(1, num_runs + 1):
         summary_path = os.path.join(sweep_dir, f"sweep_summary_run{run_idx}.csv")
         if not os.path.exists(summary_path):
-            for y in y_positions:
-                for angle in angles_deg:
+            # Missing completely
+            for ry in y_positions:
+                for ra in angles_deg:
                     failed_tasks.append({
-                        'run_idx': run_idx,
-                        'y': y,
-                        'angle': angle,
-                        'reason': 'Run summary file missing'
+                        'run_idx': run_idx, 'y': ry, 'angle': ra,
+                        'reason': 'Summary file not found'
                     })
             continue
 
-        rows = []
-        try:
-            with open(summary_path, 'r', encoding='utf-8') as f:
-                reader = csv.DictReader(f)
-                for r in reader:
-                    rows.append(r)
-        except Exception as e:
-            for y in y_positions:
-                for angle in angles_deg:
-                    failed_tasks.append({
-                        'run_idx': run_idx,
-                        'y': y,
-                        'angle': angle,
-                        'reason': f'Failed to read CSV: {e}'
-                    })
-            continue
-
-        grouped = {}
-        for r in rows:
-            try:
-                ry = float(r['y_position'])
-                ra = float(r['antenna_angle'])
-                key = (round(ry, 2), round(ra, 2))
-                if key not in grouped:
-                    grouped[key] = []
-                grouped[key].append(r)
-            except (ValueError, KeyError):
-                continue
-
-        for y in y_positions:
-            for angle in angles_deg:
-                match_key = None
-                for g_key in grouped.keys():
-                    if abs(g_key[0] - y) < 0.01 and abs(g_key[1] - angle) < 0.05:
-                        match_key = g_key
-                        break
-
-                if not match_key:
-                    failed_tasks.append({
-                        'run_idx': run_idx,
-                        'y': y,
-                        'angle': angle,
-                        'reason': 'No records found'
-                    })
-                    continue
-
-                matching_rows = grouped[match_key]
-                vehicles_in_rows = [r.get('vehicle_name') for r in matching_rows]
-
-                missing_v = [v for v in expected_vehicles if v not in vehicles_in_rows]
-                if missing_v:
-                    failed_tasks.append({
-                        'run_idx': run_idx,
-                        'y': y,
-                        'angle': angle,
-                        'reason': f'Missing vehicles: {missing_v}'
-                    })
-                    continue
-
-                numeric_cols = [
-                    'total_data_MB', 'connected_time_s', 
-                    'average_throughput_Gbps', 'average_rssi_dBm', 'handover_count'
-                ]
-                has_invalid = False
-                invalid_details = []
-
-                for r in matching_rows:
-                    v_name = r.get('vehicle_name')
-                    for col in numeric_cols:
-                        val = r.get(col)
-                        if val is None or val == '' or val.lower() in ['nan', 'null', 'none']:
-                            has_invalid = True
-                            invalid_details.append(f"{v_name}.{col}=NaN/Null")
-                        else:
-                            try:
-                                float(val)
-                            except ValueError:
-                                has_invalid = True
-                                invalid_details.append(f"{v_name}.{col}='{val}'(not float)")
-
-                if has_invalid:
-                    failed_tasks.append({
-                        'run_idx': run_idx,
-                        'y': y,
-                        'angle': angle,
-                        'reason': f'Invalid data: {", ".join(invalid_details)}'
-                    })
-
+        repo = SweepResultRepository(summary_path)
+        actual_entities = repo.get_actual_entities()
+        
+        is_valid, missing = validator.validate(actual_entities)
+        if not is_valid:
+            print(f"Validation failed for {summary_path}. Missing: {missing}")
+            failed_tasks.append({'run_idx': run_idx, 'y': -1, 'angle': -1, 'reason': f"Missing entities: {missing}"})
+            
     is_valid = len(failed_tasks) == 0
     return is_valid, failed_tasks
 
