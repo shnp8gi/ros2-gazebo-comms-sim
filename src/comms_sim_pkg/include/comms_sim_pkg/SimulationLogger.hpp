@@ -7,10 +7,20 @@
 #include <filesystem>
 #include <iostream>
 #include "comms_sim_pkg/DataTypes.hpp"
+#include "comms_sim_pkg/Utils.hpp"
 #include <algorithm>
 
 namespace tx_controller
 {
+    // --- Configuration ---
+    // ロガーの出力先・書式に関する設定を一括で受け渡すための値オブジェクト。
+    struct LoggerConfig {
+        std::string config_file_path;
+        std::string output_subdir;
+        std::string summary_filename;
+        std::string angle_unit = "rad";  // "rad" | "deg"（"degree" も許容）
+    };
+
     // --- Domain Model ---
     struct SummaryMetrics {
         std::string entity_name;
@@ -65,7 +75,7 @@ namespace tx_controller
             if (ant.log_records.size() >= 2) {
                 double dt = ant.log_records[1].time_s - ant.log_records[0].time_s;
                 for (const auto& log : ant.log_records) {
-                    if (log.link_state == "CONNECTED" || log.has_link_grant) {
+                    if (log.link_state == "CONNECTED") {
                         sum_rssi += log.rssi_dBm;
                         sum_throughput += log.throughput_Gbps;
                         connected_steps++;
@@ -91,7 +101,7 @@ namespace tx_controller
 
             for (const auto& m : antenna_metrics) {
                 total.total_data_MB += m.total_data_MB;
-                total.connected_time_s = std::max(total.connected_time_s, m.connected_time_s); // Approximate
+                total.connected_time_s += m.connected_time_s;
                 if (m.average_rssi_dBm > -999.0) {
                     sum_avg_rssi += m.average_rssi_dBm;
                     sum_avg_throughput += m.average_throughput_Gbps;
@@ -109,10 +119,8 @@ namespace tx_controller
     public:
         SimulationLogger() = default;
 
-        void Configure(const std::string& config_file_path_in, const std::string& output_subdir_in = "", const std::string& summary_filename_in = "") {
-            this->config_file_path = config_file_path_in;
-            this->output_subdir = output_subdir_in;
-            this->summary_filename = summary_filename_in;
+        void Configure(const LoggerConfig& config_in) {
+            this->config = config_in;
         }
 
         void AddEventRecord(const EventRecord& record) {
@@ -125,13 +133,13 @@ namespace tx_controller
 
         void SaveLogs(const std::string& model_name, const std::vector<AntennaInfo>& vehicle_antennas, const std::string& scheduling_policy) {
             std::string workspace_dir = "/workspace";
-            std::string results_dir = workspace_dir + "/sim_results/" + this->output_subdir;
-            
-            if (this->output_subdir.empty()) {
+            std::string results_dir = workspace_dir + "/sim_results/" + this->config.output_subdir;
+
+            if (this->config.output_subdir.empty()) {
                 // Retrieve timestamp
                 std::string run_timestamp = "unknown_time";
-                if (!this->config_file_path.empty()) {
-                    std::filesystem::path config_path(this->config_file_path);
+                if (!this->config.config_file_path.empty()) {
+                    std::filesystem::path config_path(this->config.config_file_path);
                     std::string filename = config_path.stem().string();
                     size_t pos = filename.find("sim_params_");
                     if (pos != std::string::npos) {
@@ -141,23 +149,39 @@ namespace tx_controller
                 results_dir = workspace_dir + "/sim_results/" + run_timestamp;
             }
 
+            std::string logs_dir = results_dir + "/detailed_logs";
+            std::string events_dir = results_dir + "/events";
+            std::string controls_dir = results_dir + "/controls";
+            std::string summaries_dir = results_dir + "/summaries";
             
             try {
-                std::filesystem::create_directories(results_dir);
+                std::filesystem::create_directories(logs_dir);
+                std::filesystem::create_directories(events_dir);
+                std::filesystem::create_directories(controls_dir);
+                std::filesystem::create_directories(summaries_dir);
             } catch (const std::exception& e) {
                 std::cerr << "[SimulationLogger] Error creating directories: " << e.what() << std::endl;
                 return;
             }
 
+            std::string file_prefix = model_name;
+            if (!this->config.summary_filename.empty()) {
+                file_prefix = this->config.summary_filename;
+                if (file_prefix.size() >= 4 && file_prefix.substr(file_prefix.size() - 4) == ".csv") {
+                    file_prefix = file_prefix.substr(0, file_prefix.size() - 4);
+                }
+            }
+
             // 1. Save detailed logs per antenna
             for (const auto& ant : vehicle_antennas) {
-                std::string filename = results_dir + "/" + model_name + "_" + ant.name + "_log.csv";
+                std::string filename = logs_dir + "/" + file_prefix + "_" + ant.name + "_log.csv";
                 std::ofstream ofs(filename);
                 if (ofs.is_open()) {
                     ofs << "time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,"
                         << "throughput_Gbps,total_data_MB,path_loss_dB,tx_antenna_gain_dB,rx_antenna_gain_dB,"
                         << "comm_active,tx_x,tx_y,tx_z,bs_x,bs_y,bs_z,link_state,"
-                        << "in_main_lobe,off_boresight_e_deg,off_boresight_h_deg\n";
+                        << "in_main_lobe,off_boresight_e_deg,off_boresight_h_deg,"
+                        << "link_los,blockage_loss_dB,shadow_dB,fading_dB\n";
                     
                     for (const auto& log : ant.log_records) {
                         ofs << std::fixed << std::setprecision(6) << log.time_s << ","
@@ -177,7 +201,11 @@ namespace tx_controller
                             << log.link_state << ","
                             << (log.in_main_lobe ? 1 : 0) << ","
                             << log.off_boresight_e_deg << ","
-                            << log.off_boresight_h_deg << "\n";
+                            << log.off_boresight_h_deg << ","
+                            << (log.link_los ? 1 : 0) << ","
+                            << log.blockage_loss_dB << ","
+                            << log.shadow_dB << ","
+                            << log.fading_dB << "\n";
                     }
                     ofs.close();
                     std::cout << "[SimulationLogger] Saved detailed log for [" << ant.name << "] to " << filename << std::endl;
@@ -186,7 +214,7 @@ namespace tx_controller
 
             // 2. Save event log
             if (!this->event_records.empty()) {
-                std::string event_filename = results_dir + "/" + model_name + "_handover_events.csv";
+                std::string event_filename = events_dir + "/" + file_prefix + "_handover_events.csv";
                 std::ofstream ofs_event(event_filename);
                 if (ofs_event.is_open()) {
                     ofs_event << "time_s,event_type,active_antenna,prev_antenna,details\n";
@@ -204,13 +232,15 @@ namespace tx_controller
 
             // 3. Save control log
             if (!this->control_records.empty()) {
-                std::string control_filename = results_dir + "/" + model_name + "_control_log.csv";
+                std::string control_filename = controls_dir + "/" + file_prefix + "_control_log.csv";
                 std::ofstream ofs_ctrl(control_filename);
                 if (ofs_ctrl.is_open()) {
-                    ofs_ctrl << "time_s,vehicle_x,vehicle_y,vehicle_yaw,nominal_antenna,active_antenna,switching_active,last_switch_time_s\n";
+                    ofs_ctrl << "time_s,vehicle_x,vehicle_y,vehicle_yaw_" << utils::angle_unit_label(this->config.angle_unit)
+                             << ",nominal_antenna,active_antenna,switching_active,last_switch_time_s\n";
                     for (const auto& cr : this->control_records) {
                         ofs_ctrl << std::fixed << std::setprecision(6) << cr.time_s << ","
-                                 << cr.vehicle_x << "," << cr.vehicle_y << "," << cr.vehicle_yaw << ","
+                                 << cr.vehicle_x << "," << cr.vehicle_y << ","
+                                 << utils::convert_angle(cr.vehicle_yaw, this->config.angle_unit) << ","
                                  << cr.nominal_antenna << "," << cr.active_antenna << ","
                                  << (cr.switching_active ? 1 : 0) << "," << cr.last_switch_time_s << "\n";
                     }
@@ -220,7 +250,7 @@ namespace tx_controller
             }
 
             // 4. Save summary
-            std::string sum_filename = results_dir + "/" + (this->summary_filename.empty() ? (model_name + "_summary.csv") : this->summary_filename);
+            std::string sum_filename = summaries_dir + "/" + (this->config.summary_filename.empty() ? (model_name + "_summary.csv") : this->config.summary_filename);
             std::ofstream ofs_sum(sum_filename);
             if (ofs_sum.is_open()) {
                 CsvSummaryFormatter formatter;
@@ -257,9 +287,7 @@ namespace tx_controller
         }
 
     private:
-        std::string config_file_path;
-        std::string output_subdir;
-        std::string summary_filename;
+        LoggerConfig config;
         std::vector<EventRecord> event_records;
         std::vector<ControlRecord> control_records;
     };

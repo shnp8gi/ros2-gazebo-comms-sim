@@ -1,0 +1,113 @@
+# フェーズD評価シナリオ: 動的遮蔽環境での3方式比較
+# 基地局を60m間隔に分散させ、遮蔽帯(静止+移動トラック)が特定BSのリンクのみを
+# 塞ぐ幾何とする (遮蔽時に代替BSへの迂回が可能 = スケジューラの腕の見せ所)。
+# oracle (feedforward_optimal) のLUTは決定論モードで事前計算されるため
+# トラックの存在を知らない (静的LUTが動的環境で崩れる状況の再現)。
+scenario:
+  name: "kkf_blockage_eval"
+  description: "新幹線 + 3基地局(60m間隔) + 静止/移動遮蔽体、KKF評価用"
+
+  base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+
+  simulation_overrides:
+    headless: true
+    real_time_factor: 5.0
+    logging_level: 3
+    physics_max_step_size: 0.001
+
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: "external_schedule"
+        control_plane: "kkf_mpc"
+        schedule_topic: "/comms/ho_schedule"
+        kkf_replan_period_s: 0.2
+        kkf_horizon_s: 4.0
+        kkf_plan_dt_s: 0.2
+        kkf_kappa: 1.64
+        kkf_switch_cost: 3.0
+        kkf_sigma_nu_db: 4.0
+        kkf_corr_length_s_m: 20.0
+        kkf_corr_length_t_s: 5.0
+        kkf_tracker_enabled: true
+        kkf_tracker_threshold_db: -10.0
+        kkf_blockage_penalty_db: 15.0
+    comms_simulator_node:
+      ros__parameters:
+        tx_power: 30.0
+        measurement_report:
+          enabled: true
+          period_s: 0.05
+          noise_std_db: 2.0
+          observe_all_pairs: true
+
+  model_catalog:
+    Shinkansen:
+      sdf_path: "models://Shinkansen"
+      description: "新幹線モデル（75m長）"
+      default_antenna_offset: [0.0, 0.0, 1.0]
+      is_rail_vehicle: true
+    antenna:
+      sdf_path: "models://antenna"
+      description: "基地局アンテナモデル"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+    TruckBlocker:
+      sdf_path: "models://SUV"
+      description: "遮蔽用トラック相当ボックス"
+      blockage:
+        size: [12.0, 2.5, 3.8]
+        loss_db: 30.0
+
+  entities:
+    # --- Rx（基地局: 60m間隔, y=10）---
+    - name: "antenna_0"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-60.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_0", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_1"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [0.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_1", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_2"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [60.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_2", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+
+    # --- 遮蔽体 ---
+    # 静止トラック: antenna_1 の目前 (s≈0 付近の bs1 リンクのみを遮蔽)
+    - name: "truck_static"
+      model: "TruckBlocker"
+      role: "blocker"
+      static: true
+      pose: [0.0, 5.0, 0.0, 0.0, 0.0, 0.0]
+
+    # 移動トラック: 別車線を +x へ走行 (影が s 空間を約20m/sで掃引 → トラッカーの検出対象)
+    - name: "truck_moving"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [-100.0, 7.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-100.0, 7.0, 0.0, 12.0]
+        - [150.0, 7.0, 0.0, 12.0]
+
+    # --- Tx（車両: 50 m/s）---
+    - name: "shinkansen"
+      model: "Shinkansen"
+      role: "tx"
+      pose: [-250, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-250, 0.0, 0.0, 50.0]
+        - [120.0, 0.0, 0.0, 50.0]
+      antennas:
+        - { name: "shinkansen_front", offset: [10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "shinkansen_mid",   offset: [0.0, 1.5, 1.0],  relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "shinkansen_rear",  offset: [-10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 1.5708] }

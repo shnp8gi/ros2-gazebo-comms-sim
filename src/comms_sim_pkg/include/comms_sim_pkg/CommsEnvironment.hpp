@@ -6,6 +6,7 @@
 #include "comms_sim_pkg/DataTypes.hpp"
 #include "comms_sim_pkg/antenna_pattern_parser.hpp"
 #include "comms_sim_pkg/comms_calculator.hpp"
+#include "comms_sim_pkg/channel/ChannelModel.hpp"
 #include "comms_sim_pkg/Utils.hpp"
 #include <yaml-cpp/yaml.h>
 #include <cmath>
@@ -38,7 +39,11 @@ namespace tx_controller
             
             this->comms_calculator = std::make_unique<comms_sim::CommsCalculator>(
                 std::move(prop_model), tx_power, noise_variance, mcs_table_path);
-            
+
+            // 合成チャネル(遮蔽・シャドウイング・フェージング)。channel: 未指定なら
+            // 距離減衰のみと等価に振る舞う(後方互換)。
+            this->channel_model = comms_sim::ChannelModelFactory::Create(comms_params);
+
             this->antenna_parser = std::make_unique<comms_sim::AntennaPatternParser>(
                 max_antenna_attenuation, mainlobe_angle_margin_deg,
                 mainlobe_e_half_angle_deg, mainlobe_h_half_angle_deg);
@@ -47,11 +52,21 @@ namespace tx_controller
             if (!h_plane_path.empty()) this->antenna_parser->load_h_plane(h_plane_path);
         }
 
+        /**
+         * 全 (車載アンテナ × 基地局) ペアの通信メトリクスを計算する。
+         *
+         * @param sim_time  シミュレーション時刻 [s]。負値なら動的チャネル
+         *                  (遮蔽・シャドウイング・フェージング) を評価しない
+         *                  「決定論モード」(LUT事前計算=神託が使用)。
+         * @param obstacles 遮蔽体リスト (nullptr 可)。
+         */
         std::vector<std::vector<AntennaMetrics>> CalculateMetrics(
             const std::vector<AntennaInfo>& vehicle_antennas,
             const std::vector<BaseStationInfo>& base_stations,
             const Eigen::Vector3d& vehicle_pos,
-            const Eigen::Matrix3d& vehicle_rotmat) 
+            const Eigen::Matrix3d& vehicle_rotmat,
+            double sim_time = -1.0,
+            const std::vector<comms_sim::ObstacleBox>* obstacles = nullptr)
         {
             std::vector<std::vector<AntennaMetrics>> all_metrics(vehicle_antennas.size());
 
@@ -67,13 +82,34 @@ namespace tx_controller
                     Eigen::Vector3d bs_antenna_pos = bs.position + bs.rotmat * bs.antenna_offset;
                     Eigen::Vector3d bs_ant_rpy = bs.antenna_relative_rpy;
                     
-                    Eigen::Matrix3d ant_rotmat;
+                    Eigen::Matrix3d ant_rotmat = vehicle_rotmat * tx_controller::utils::rpy_to_rotmat(ant_rpy.x(), ant_rpy.y(), ant_rpy.z());
+                    // bs.rotmat は生成時点で pose_rpy + antenna_relative_rpy を合成済み（TxControllerPlugin参照）。
+                    // ここで relative_rpy を再度掛けると二重適用になるため、そのまま使う。
+                    Eigen::Matrix3d bs_full_rotmat = bs.rotmat;
+
                     auto gain_res = this->antenna_parser->get_tx_rx_gains(
                         ant_pos_world, ant_rpy, bs_antenna_pos, bs_ant_rpy,
-                        &ant_rotmat, nullptr);
+                        &ant_rotmat, &bs_full_rotmat);
 
-                    auto metrics_calc = this->comms_calculator->calculate_all(ant_pos_world, bs_antenna_pos, gain_res.tx_total + gain_res.rx_total, false);
-                    
+                    double total_gain = gain_res.tx_total + gain_res.rx_total;
+                    comms_sim::CommsMetrics metrics_calc;
+                    comms_sim::ChannelSample channel_sample;
+                    bool dynamic_channel = (sim_time >= 0.0);
+                    if (dynamic_channel) {
+                        int link_id = static_cast<int>(i * base_stations.size() + bs_idx);
+                        static const std::vector<comms_sim::ObstacleBox> kNoObstacles;
+                        channel_sample = this->channel_model->Evaluate(
+                            link_id, sim_time, ant_pos_world, bs_antenna_pos,
+                            obstacles ? *obstacles : kNoObstacles);
+                        metrics_calc = this->comms_calculator->calculate_from_loss(
+                            (ant_pos_world - bs_antenna_pos).norm(),
+                            channel_sample.TotalLossDb(), total_gain, false);
+                    } else {
+                        // 決定論モード: 距離減衰+アンテナ利得のみ (LUT事前計算用)
+                        metrics_calc = this->comms_calculator->calculate_all(
+                            ant_pos_world, bs_antenna_pos, total_gain, false);
+                    }
+
                     auto [el, az] = this->antenna_parser->calculate_antenna_frame_angles(
                         ant_pos_world, bs_antenna_pos, ant_rpy, &ant_rotmat);
                     
@@ -86,6 +122,12 @@ namespace tx_controller
                     m.best_rssi = metrics_calc.rssi;
                     m.throughput = metrics_calc.throughput;
                     m.path_loss = metrics_calc.path_loss;
+                    if (dynamic_channel) {
+                        m.is_los = channel_sample.is_los;
+                        m.blockage_loss_db = channel_sample.blockage_loss_db;
+                        m.shadow_db = channel_sample.shadow_db;
+                        m.fading_loss_db = channel_sample.fading_loss_db;
+                    }
                     m.e_gain = gain_res.tx_total;
                     m.h_gain = gain_res.rx_total;
                     m.in_main_lobe = in_main_lobe;
@@ -107,5 +149,6 @@ namespace tx_controller
     private:
         std::unique_ptr<comms_sim::AntennaPatternParser> antenna_parser;
         std::unique_ptr<comms_sim::CommsCalculator> comms_calculator;
+        std::unique_ptr<comms_sim::ChannelModel> channel_model;
     };
 } // namespace tx_controller

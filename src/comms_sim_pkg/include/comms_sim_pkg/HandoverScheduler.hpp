@@ -2,16 +2,28 @@
 
 #include <string>
 #include <vector>
+#include <memory>
 #include <sstream>
 #include <iomanip>
 #include <limits>
 #include "comms_sim_pkg/DataTypes.hpp"
+#include "comms_sim_pkg/ISchedulingStrategy.hpp"
 
 namespace tx_controller
 {
     class HandoverScheduler {
     public:
         HandoverScheduler() = default;
+
+        /**
+         * スケジューリング戦略の登録。
+         * scheduling_policy が戦略の Name() と一致する場合、UpdateLinks は
+         * 登録された戦略へ全面委譲される(新方式は if-else 分岐への追記ではなく
+         * ISchedulingStrategy 実装の登録で追加する)。
+         */
+        void RegisterStrategy(std::shared_ptr<ISchedulingStrategy> strategy_in) {
+            this->strategy = std::move(strategy_in);
+        }
 
         void Configure(const std::string& policy,
                        bool filter_main,
@@ -36,17 +48,13 @@ namespace tx_controller
             this->lut = external_lut;
         }
 
-        struct SchedulingResult {
-            int new_active_idx;
-            std::string active_antenna_name;
-            bool switching_active;
-            double last_switch_time_s;
-            std::vector<EventRecord> events;
-        };
+        // 決定結果の型は全戦略共通 (ISchedulingStrategy.hpp で定義)
+        using SchedulingResult = tx_controller::SchedulingResult;
 
         SchedulingResult UpdateLinks(
             double current_time_s,
             const Eigen::Vector3d& pos,
+            const Eigen::Matrix3d& vehicle_rotmat,
             std::vector<AntennaInfo>& vehicle_antennas,
             const std::vector<BaseStationInfo>& base_stations,
             const std::vector<std::vector<AntennaMetrics>>& all_ant_bs_metrics,
@@ -54,6 +62,13 @@ namespace tx_controller
             double current_last_switch_time,
             double rssi_min)
         {
+            // 登録済み戦略が担当するポリシーなら全面委譲
+            if (this->strategy && this->scheduling_policy == this->strategy->Name()) {
+                return this->strategy->UpdateLinks(
+                    current_time_s, pos, vehicle_rotmat, vehicle_antennas, base_stations,
+                    all_ant_bs_metrics, current_active_idx, current_last_switch_time, rssi_min);
+            }
+
             SchedulingResult result;
             result.new_active_idx = current_active_idx;
             result.switching_active = false;
@@ -244,5 +259,6 @@ namespace tx_controller
 
         std::vector<LutEntry> lut;
         int last_lut_idx = 0;
+        std::shared_ptr<ISchedulingStrategy> strategy;
     };
 } // namespace tx_controller

@@ -53,28 +53,45 @@ def generate_sim_params(scenario, overrides=None):
     # 2. Process Entities
     spawn_entities = {}
     vehicles = []
-    
+    blocker_entities = {}   # スポーン情報 (launch が WaypointMoverPlugin 付きで生成)
+    blockers = {}           # 遮蔽ジオメトリ (プラグインの BlockageEnvironment が使用)
+
     entities = scenario.get('entities', [])
     model_catalog = scenario.get('model_catalog', {})
-    
+
     for entity in entities:
         # Resolve model
         model_name = entity.get('model')
         model_info = model_catalog.get(model_name, {})
-        
+
         # Build entity config
         entity_config = {
             'name': entity.get('name'),
             'model_uri': model_info.get('sdf_path', f"models://{model_name}"),
             'pose': [float(v) for v in entity.get('pose', [0.0, 0.0, 0.0, 0.0, 0.0, 0.0])],
         }
-        
+
         if 'waypoints' in entity:
             entity_config['waypoints'] = [[float(v) for v in wp] for wp in entity['waypoints']]
-            
+
         if 'static' in entity:
             entity_config['static'] = entity['static']
-            
+
+        # 遮蔽体: アンテナを持たず、通信ではなく幾何遮蔽としてのみ振る舞う
+        if entity.get('role') == 'blocker':
+            blockage = dict(model_info.get('blockage', {}))
+            blockage.update(entity.get('blockage', {}))  # エンティティ側で上書き可
+            blockers[entity.get('name')] = {
+                'size': [float(v) for v in blockage.get('size', [1.0, 1.0, 2.0])],
+                'loss_db': float(blockage.get('loss_db', 20.0)),
+                **({'center_offset': [float(v) for v in blockage['center_offset']]}
+                   if 'center_offset' in blockage else {}),
+            }
+            if 'loop' in entity:
+                entity_config['loop'] = bool(entity['loop'])
+            blocker_entities[entity.get('name')] = entity_config
+            continue
+
         # Build antennas
         if 'antennas' in entity:
             for ant in entity['antennas']:
@@ -165,6 +182,9 @@ def generate_sim_params(scenario, overrides=None):
                 for k, v in spawn_entities.items():
                     if k == name:
                         targets.append(v)
+                for k, v in blocker_entities.items():
+                    if k == name:
+                        targets.append(v)
             
             for target in targets:
                 try:
@@ -177,6 +197,9 @@ def generate_sim_params(scenario, overrides=None):
         base_config['spawn_entities'] = spawn_entities
     if vehicles:
         base_config['vehicles'] = vehicles
+    if blocker_entities:
+        base_config['blocker_entities'] = blocker_entities
+        base_config['blockers'] = blockers
         
     # Temporary fix for sim_launch.py if it expects old suv
     if 'spawn_entities' in base_config and 'suv' in base_config['spawn_entities']:

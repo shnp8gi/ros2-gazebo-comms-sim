@@ -38,6 +38,7 @@ namespace tx_controller
         int establishment_step_count = 0;
         double last_rssi = -999.0;
         int assigned_bs_idx = -1;  // マルチペア: 割り当てられた基地局インデックス (-1 = 未割当)
+        bool measure_only = false; // 測定専用ペアネット (リンク確立するがデータ会計なし)
 
         struct LogRecord {
             double time_s = 0.0;
@@ -58,6 +59,10 @@ namespace tx_controller
             bool in_main_lobe = false;
             double off_boresight_e_deg = 0.0;
             double off_boresight_h_deg = 0.0;
+            bool link_los = true;
+            double blockage_loss_dB = 0.0;
+            double shadow_dB = 0.0;
+            double fading_dB = 0.0;
         };
         std::vector<LogRecord> log_records;
     };
@@ -101,6 +106,11 @@ namespace tx_controller
         bool in_main_lobe = false;
         double off_boresight_e = 0.0;
         double off_boresight_h = 0.0;
+        // チャネルモデル成分 (距離減衰のみの構成ではデフォルト値のまま)
+        bool is_los = true;
+        double blockage_loss_db = 0.0;
+        double shadow_db = 0.0;
+        double fading_loss_db = 0.0;
     };
 } // namespace tx_controller
 

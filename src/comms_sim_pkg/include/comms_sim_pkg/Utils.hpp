@@ -11,6 +11,20 @@ namespace tx_controller
 {
     namespace utils
     {
+        // 角度単位ユーティリティ（ドメイン非依存の純粋関数）
+        // unit は "deg" / "degree" のときのみ度に変換し、それ以外はラジアンのまま扱う。
+        inline bool is_degree_unit(const std::string& unit) {
+            return unit == "deg" || unit == "degree";
+        }
+
+        inline double convert_angle(double rad_value, const std::string& unit) {
+            return is_degree_unit(unit) ? (rad_value * 180.0 / M_PI) : rad_value;
+        }
+
+        inline std::string angle_unit_label(const std::string& unit) {
+            return is_degree_unit(unit) ? "deg" : "rad";
+        }
+
         inline Eigen::Matrix3d rpy_to_rotmat(double r, double p, double y) {
             Eigen::Matrix3d rx, ry, rz;
             rx << 1, 0, 0, 0, cos(r), -sin(r), 0, sin(r), cos(r);

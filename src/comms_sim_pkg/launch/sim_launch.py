@@ -618,6 +618,76 @@ def launch_setup(context, *args, **kwargs):
         spawn_delay += entity_spawn_interval
 
     # =========================================================================
+    # KKF制御プレーンノード: external_schedule + control_plane: "kkf_mpc" の場合に起動
+    # (sweep終了時のクリーンアップに巻き込まれないよう launch のライフサイクルに載せる)
+    # =========================================================================
+    link_params_for_cp = config.get('link_controller_node', {}).get('ros__parameters', {})
+    if (link_params_for_cp.get('scheduling_policy') == 'external_schedule'
+            and link_params_for_cp.get('control_plane') == 'kkf_mpc'):
+        kkf_scheduler = TimerAction(
+            period=gazebo_startup_delay,
+            actions=[
+                Node(
+                    package='comms_sim_pkg',
+                    executable='kkf_scheduler_node.py',
+                    name='kkf_scheduler',
+                    output='screen',
+                    arguments=['--config', str(config_path)],
+                )
+            ]
+        )
+        actions.append(kkf_scheduler)
+
+    # =========================================================================
+    # 遮蔽体スポーン: role=blocker のエンティティ
+    # (静的ならそのままスポーン、waypoints があれば WaypointMoverPlugin を付与)
+    # =========================================================================
+    blocker_entities = config.get('blocker_entities', {})
+    for b_key, b_cfg in blocker_entities.items():
+        b_name = b_cfg.get('name', b_key)
+        b_pose = b_cfg.get('pose', [0, 0, 0, 0, 0, 0])
+        if not isinstance(b_pose, list) or len(b_pose) != 6:
+            raise ValueError(f"遮蔽体 '{b_key}' のポーズが不正: {b_pose}")
+
+        b_model_path = _resolve_model_uri(b_cfg.get('model_uri', ''), model_prefix)
+        b_waypoints_raw = b_cfg.get('waypoints', [])
+
+        if b_waypoints_raw:
+            b_waypoints_param = []
+            for waypoint in b_waypoints_raw:
+                b_waypoints_param.extend([float(v) for v in waypoint])
+            mover_xml = f"""
+        <plugin filename="WaypointMoverPlugin.so" name="tx_controller::WaypointMoverPlugin">
+          <waypoints>{" ".join(map(str, b_waypoints_param))}</waypoints>
+          <loop>{"true" if b_cfg.get('loop', False) else "false"}</loop>
+          <all_ready_topic>/sim/all_ready</all_ready_topic>
+        </plugin>
+        """
+            config_suffix = os.path.splitext(os.path.basename(config_path))[0]
+            b_model_path = _generate_vehicle_sdf(b_model_path, b_name, mover_xml, suffix=config_suffix)
+
+        spawn_blocker = TimerAction(
+            period=spawn_delay,
+            actions=[
+                Node(
+                    package='ros_gz_sim',
+                    executable='create',
+                    name=f'spawn_{b_name}',
+                    output='screen',
+                    arguments=[
+                        '-world', str(world_name),
+                        '-file', str(b_model_path),
+                        '-name', str(b_name),
+                        '-x', str(b_pose[0]), '-y', str(b_pose[1]), '-z', str(b_pose[2]),
+                        '-R', str(b_pose[3]), '-P', str(b_pose[4]), '-Y', str(b_pose[5]),
+                    ]
+                )
+            ]
+        )
+        actions.append(spawn_blocker)
+        spawn_delay += entity_spawn_interval
+
+    # =========================================================================
     # ROS-Gazeboブリッジ
     # =========================================================================
     # YAMLからブリッジトピックを読み込み（共通トピックのみ）

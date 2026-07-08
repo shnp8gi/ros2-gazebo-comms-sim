@@ -26,6 +26,29 @@ find_package(gz-plugin2 REQUIRED)
 find_package(gz-transport13 REQUIRED)
 find_package(gz-msgs10 REQUIRED)
 find_package(gz-math7 REQUIRED)
+find_package(Protobuf REQUIRED)
+
+# =============================================================================
+# 制御プレーン⇔データプレーン間のカスタム protobuf メッセージ生成
+# (C++ はプラグインへ、Python は comms_sim_proto パッケージとしてインストール)
+# =============================================================================
+protobuf_generate_cpp(COMMS_PROTO_SRCS COMMS_PROTO_HDRS proto/comms_sim_msgs.proto)
+
+set(PY_PROTO_DIR ${CMAKE_CURRENT_BINARY_DIR}/comms_sim_proto)
+add_custom_command(
+  OUTPUT ${PY_PROTO_DIR}/comms_sim_msgs_pb2.py ${PY_PROTO_DIR}/__init__.py
+  COMMAND ${CMAKE_COMMAND} -E make_directory ${PY_PROTO_DIR}
+  COMMAND protobuf::protoc --python_out=${PY_PROTO_DIR}
+          -I${CMAKE_CURRENT_SOURCE_DIR}/proto
+          ${CMAKE_CURRENT_SOURCE_DIR}/proto/comms_sim_msgs.proto
+  COMMAND ${CMAKE_COMMAND} -E touch ${PY_PROTO_DIR}/__init__.py
+  DEPENDS proto/comms_sim_msgs.proto
+  COMMENT "Generating Python protobuf module (comms_sim_proto)"
+)
+add_custom_target(comms_sim_msgs_py ALL
+  DEPENDS ${PY_PROTO_DIR}/comms_sim_msgs_pb2.py ${PY_PROTO_DIR}/__init__.py)
+install(FILES ${PY_PROTO_DIR}/comms_sim_msgs_pb2.py ${PY_PROTO_DIR}/__init__.py
+  DESTINATION ${PYTHON_INSTALL_DIR}/comms_sim_proto)
 
 # =============================================================================
 # Gazebo Plugins
@@ -34,9 +57,11 @@ add_library(TxControllerPlugin SHARED
   src/TxControllerPlugin.cc
   src/antenna_pattern_parser.cpp
   src/comms_calculator.cpp
+  ${COMMS_PROTO_SRCS}
 )
 target_include_directories(TxControllerPlugin PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${CMAKE_CURRENT_BINARY_DIR}
   ${EIGEN3_INCLUDE_DIR}
 )
 target_link_libraries(TxControllerPlugin
@@ -45,13 +70,41 @@ target_link_libraries(TxControllerPlugin
   gz-transport13::gz-transport13
   gz-msgs10::gz-msgs10
   gz-math7::gz-math7
+  protobuf::libprotobuf
 )
 ament_target_dependencies(TxControllerPlugin
   yaml_cpp_vendor
 )
 set_target_properties(TxControllerPlugin PROPERTIES PREFIX "")
 
-install(TARGETS TxControllerPlugin
+# 移動遮蔽体用の軽量waypoint追従プラグイン (通信機能なし)
+add_library(WaypointMoverPlugin SHARED
+  src/WaypointMoverPlugin.cc
+)
+target_include_directories(WaypointMoverPlugin PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${EIGEN3_INCLUDE_DIR}
+)
+target_link_libraries(WaypointMoverPlugin
+  gz-sim8::gz-sim8
+  gz-plugin2::gz-plugin2
+  gz-transport13::gz-transport13
+  gz-msgs10::gz-msgs10
+  gz-math7::gz-math7
+)
+set_target_properties(WaypointMoverPlugin PROPERTIES PREFIX "")
+
+# KKF C++リファレンスのゴールデンダンプ (Python kkf_core との数値一致検証用)
+add_executable(kkf_golden_dump src/kkf_golden_dump.cc)
+target_include_directories(kkf_golden_dump PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${EIGEN3_INCLUDE_DIR}
+)
+install(TARGETS kkf_golden_dump
+  DESTINATION lib/${PROJECT_NAME}
+)
+
+install(TARGETS TxControllerPlugin WaypointMoverPlugin
   DESTINATION lib/${PROJECT_NAME}/plugins
 )
 
@@ -63,10 +116,18 @@ ament_python_install_package(${PROJECT_NAME})
 # =============================================================================
 # Install Python executables
 # =============================================================================
-install(PROGRAMS
+# 対象となるPythonノードスクリプトのリストを一元管理（DRY原則）
+# 実行権限は git のファイルモード(100755)で管理する。ビルド時にソースツリーへ
+# chmod する等の副作用は持たせないこと。
+set(PYTHON_EXECUTABLE_NODES
   comms_sim_pkg/sim_ready_gate_node.py
   comms_sim_pkg/progress_logger_node.py
   comms_sim_pkg/mission_coordinator_node.py
+  comms_sim_pkg/kkf_scheduler_node.py
+)
+
+install(PROGRAMS
+  ${PYTHON_EXECUTABLE_NODES}
   DESTINATION lib/${PROJECT_NAME}
 )
 

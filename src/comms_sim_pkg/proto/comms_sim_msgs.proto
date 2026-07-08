@@ -1,0 +1,49 @@
+// 制御プレーン(KKFスケジューラ)⇔データプレーン(Gazeboプラグイン)間の
+// gz-transport メッセージ定義。設計書 docs/kkf_v2i_system_design.md §7 参照。
+// C++/Python 双方で protoc 生成して型を共有する。
+syntax = "proto3";
+package comms_sim.msgs;
+
+// ペアネットの用途: DATA=通信リンク, MEASURE=測定専用(データ会計なし)
+enum LinkMode {
+  DATA = 0;
+  MEASURE = 1;
+}
+
+message Vector3 {
+  double x = 1;
+  double y = 2;
+  double z = 3;
+}
+
+// 1ペア分の測定エントリ。P2P制約により grant 中のペアのみが含まれる。
+message MeasurementEntry {
+  int32 ant = 1;           // 車載アンテナ index
+  int32 bs = 2;            // 基地局 index
+  double rssi_dbm = 3;     // 観測雑音込みの測定RSSI [dBm]
+  string link_state = 4;   // DISCONNECTED / ESTABLISHING / CONNECTED
+  LinkMode mode = 5;
+}
+
+// plugin → 制御プレーン (20 Hz sim time)
+message MeasurementReport {
+  double t_sim = 1;                       // sim time [s]
+  Vector3 vehicle_pos = 2;                // 車両原点の世界座標
+  repeated MeasurementEntry reports = 3;
+}
+
+// スケジュールの1区間: t_start 以降 (次エントリの t_start まで) の割当
+message ScheduleEntry {
+  double t_start = 1;      // sim time [s]
+  int32 ant = 2;
+  int32 bs = 3;
+  LinkMode mode = 4;
+}
+
+// 制御プレーン → plugin (5 Hz sim time)。
+// valid_until を過ぎたスケジュールは無効(プラグインは現割当を維持)。
+message HoSchedule {
+  double t_issued = 1;
+  double valid_until = 2;
+  repeated ScheduleEntry plan = 3;
+}

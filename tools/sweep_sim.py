@@ -46,6 +46,8 @@ import lib.system_monitor as sysmon
 from lib.sweep_kinematics import estimate_expected_duration
 from lib.sweep_data import average_summaries, get_completed_tasks, validate_sweep_summary
 from lib.scenario_loader import load_scenario, generate_sim_params, write_sim_params
+from lib.task_formatting import build_logging_strings, extract_legacy_overrides
+from lib.result_file_access import ensure_writable
 
 from lib.concurrency_guard import ConcurrencyGuard
 from lib.process_manager import ProcessManager
@@ -554,32 +556,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         run_idx, task_vars, overall_task_no = task_info[:3]
         local_task_no = overall_task_no
         
-    task_suffix_parts = []
-    params_list = []
-    y_val = 0.0
-    angle_val = 0.0
-    for k, state_overrides in task_vars.items():
-        if not state_overrides:
-            continue
-        val = state_overrides[0].get('value', 0)
-        raw_val = state_overrides[0].get('raw_value', val)
-        unit_str = state_overrides[0].get('unit', '')
-        
-        if k == 'rx_y_position': y_val = float(val)
-        if 'yaw' in k.lower(): angle_val = float(val)
-        
-        if isinstance(val, float):
-            task_suffix_parts.append(f"{k}_{val:g}")
-        else:
-            task_suffix_parts.append(f"{k}_{val}")
-            
-        if isinstance(raw_val, float):
-            params_list.append(f"{k}={raw_val:g}{unit_str}")
-        else:
-            params_list.append(f"{k}={raw_val}{unit_str}")
-            
-    task_suffix = "_".join(task_suffix_parts) if task_suffix_parts else "default"
-    params_str = ",".join(params_list)
+    task_suffix, params_str = build_logging_strings(task_vars)
+    y_val, angle_val = extract_legacy_overrides(task_vars)
     summary_filename = f"sweep_summary_{sweep_start_time}_run{run_idx}_{task_suffix}_w{worker_id}.csv"
     tmp_config_path = f"tools/sweep_build/sim_params_tmp_{worker_id}.yaml"
     ros_domain_id = 10 + worker_id
@@ -797,9 +775,8 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         is_valid = True
         reason = ""
         
-        summary_path = os.path.join(os.getcwd(), "sim_results", f"sweep_{sweep_start_time}", summary_filename)
+        summary_path = os.path.join(os.getcwd(), "sim_results", f"sweep_{sweep_start_time}", "summaries", summary_filename)
         
-        min_allowed_duration = 3.0
         min_allowed_duration = 3.0
         if t_expected is not None:
             min_allowed_duration = max(3.0, 0.5 * t_expected)
@@ -822,6 +799,9 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 
         if is_valid:
             try:
+                # コンテナ(root)が生成したCSVはホスト側から書き込めないことがあるため、注入前に所有権を保証する
+                if not is_docker:
+                    ensure_writable(summary_path)
                 with open(summary_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
                 if len(lines) >= 2:
@@ -1180,7 +1160,7 @@ def main_logic():
                     except Exception:
                         pass
 
-                pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", f"sweep_summary_{sweep_start_time}_run{run_idx}_*_w*.csv")
+                pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", "summaries", f"sweep_summary_{sweep_start_time}_run{run_idx}_*_w*.csv")
                 worker_csvs = glob.glob(pattern)
                 
                 for worker_csv in sorted(worker_csvs):

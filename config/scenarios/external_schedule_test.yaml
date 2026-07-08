@@ -1,0 +1,70 @@
+# フェーズB検証シナリオ: 外部スケジュール実行 (制御プレーン⇔データプレーンI/O)
+# チャネルは距離減衰のみ(channel:未指定)とし、grant切替とデータ会計の検証を明瞭にする
+scenario:
+  name: "external_schedule_test"
+  description: "新幹線 + 3基地局、外部スケジュール追従テスト"
+
+  base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+
+  simulation_overrides:
+    headless: true
+    real_time_factor: 5.0
+    logging_level: 3
+    physics_max_step_size: 0.001
+
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: "external_schedule"
+        schedule_topic: "/comms/ho_schedule"
+    comms_simulator_node:
+      ros__parameters:
+        # 検証用に送信電力を引き上げ、幾何的に不利なペアでもCONNECTEDに到達させる
+        # (外部スケジュールは時刻ベース固定パターンのため角度利得の不利を補償する)
+        tx_power: 53.0
+
+  model_catalog:
+    Shinkansen:
+      sdf_path: "models://Shinkansen"
+      description: "新幹線モデル（75m長）"
+      default_antenna_offset: [0.0, 0.0, 1.0]
+      is_rail_vehicle: true
+    antenna:
+      sdf_path: "models://antenna"
+      description: "基地局アンテナモデル"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+
+  entities:
+    - name: "antenna_0"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_0", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_1"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [0.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_1", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_2"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_2", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+
+    - name: "shinkansen"
+      model: "Shinkansen"
+      role: "tx"
+      pose: [-300, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-300, 0.0, 0.0, 83.33]
+        - [100.0, 0.0, 0.0, 83.33]
+      antennas:
+        - { name: "shinkansen_front", offset: [10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "shinkansen_mid",   offset: [0.0, 1.5, 1.0],  relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "shinkansen_rear",  offset: [-10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 1.5708] }

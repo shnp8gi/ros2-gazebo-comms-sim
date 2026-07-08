@@ -81,6 +81,13 @@ public:
                              double antenna_gain_db = 0.0,
                              bool add_noise = true);
 
+  // ChannelModel が算出した総損失 [dB] から RSSI/スループットを導出する
+  // (距離減衰の内訳はチャネル側の責務、リンクバジェット計算は本クラスの責務)
+  CommsMetrics calculate_from_loss(double distance,
+                                   double total_loss_db,
+                                   double antenna_gain_db,
+                                   bool add_noise = false);
+
   double calculate_distance(const Eigen::Vector3d& tx_pos, const Eigen::Vector3d& bs_pos) const;
   std::pair<double, double> calculate_rssi(double distance, double antenna_gain_db = 0.0, bool add_noise = true);
 

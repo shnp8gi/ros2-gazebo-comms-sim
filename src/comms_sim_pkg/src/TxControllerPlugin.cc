@@ -26,6 +26,7 @@
 #include <regex>
 #include <iomanip>
 #include <atomic>
+#include <mutex>
 #include "comms_sim_pkg/comms_calculator.hpp"
 #include "comms_sim_pkg/antenna_pattern_parser.hpp"
 
@@ -35,7 +36,12 @@
 #include "comms_sim_pkg/VehicleMotionController.hpp"
 #include "comms_sim_pkg/SimulationLogger.hpp"
 #include "comms_sim_pkg/CommsEnvironment.hpp"
+#include "comms_sim_pkg/BlockageEnvironment.hpp"
 #include "comms_sim_pkg/HandoverScheduler.hpp"
+#include "comms_sim_pkg/ExternalScheduleStrategy.hpp"
+#include "comms_sim_pkg/kkf/KkfConfig.hpp"
+#include "comms_sim_pkg/kkf/KkfPredictiveStrategy.hpp"
+#include "comms_sim_msgs.pb.h"
 
 namespace tx_controller
 {
@@ -48,6 +54,7 @@ namespace tx_controller
     public:
         TxControllerPlugin() = default;
         ~TxControllerPlugin() override {
+            std::lock_guard<std::mutex> lock(this->logs_mutex);
             if (this->comms_initialized && !this->logs_saved) {
                 this->logger.SaveLogs(this->model_name, this->vehicle_antennas, this->scheduling_policy);
                 this->logs_saved = true;
@@ -238,20 +245,23 @@ namespace tx_controller
             YAML::Node config = YAML::LoadFile(config_path);
             
             // 1. Read simulation configurations
-            std::string output_subdir = "";
-            std::string summary_filename = "";
+            LoggerConfig logger_config;
+            logger_config.config_file_path = this->config_file_path;
             if (config["simulation"]) {
                 if (config["simulation"]["logging_level"]) {
                     this->logging_level = config["simulation"]["logging_level"].as<int>(1);
                 }
                 if (config["simulation"]["output_subdir"]) {
-                    output_subdir = config["simulation"]["output_subdir"].as<std::string>();
+                    logger_config.output_subdir = config["simulation"]["output_subdir"].as<std::string>();
                 }
                 if (config["simulation"]["summary_filename"]) {
-                    summary_filename = config["simulation"]["summary_filename"].as<std::string>();
+                    logger_config.summary_filename = config["simulation"]["summary_filename"].as<std::string>();
+                }
+                if (config["simulation"]["logging_angle_unit"]) {
+                    logger_config.angle_unit = config["simulation"]["logging_angle_unit"].as<std::string>();
                 }
             }
-            this->logger.Configure(this->config_file_path, output_subdir, summary_filename);
+            this->logger.Configure(logger_config);
             
             // 2. Read comms parameters
             auto comms_params = config["comms_simulator_node"]["ros__parameters"];
@@ -272,6 +282,7 @@ namespace tx_controller
             this->ff_max_pairs = link_ctrl_params["ff_max_pairs"].as<int>(-1);
 
             this->comms_env.Configure(this->config_file_path);
+            this->blockage_env.Configure(config);
             this->scheduler.Configure(this->scheduling_policy, this->filter_main_lobe, this->min_hold_time_s,
                                       this->switch_margin_db, this->proactive_grace_period_s,
                                       this->proactive_handover_score_threshold, this->comm_data_limit_mb,
@@ -340,7 +351,51 @@ namespace tx_controller
 
             // Precalculate LUT for feedforward_optimal
             if (this->scheduling_policy == "feedforward_optimal") {
-                this->PrecalculateLUT();
+                this->PrecalculateLUT(local_waypoints);
+            }
+
+            // 測定レポート出力 (制御プレーンへの観測レポート、設計書§7)
+            if (comms_params["measurement_report"]) {
+                auto rep = comms_params["measurement_report"];
+                this->report_enabled = rep["enabled"].as<bool>(this->report_enabled);
+                this->report_period_s = rep["period_s"].as<double>(this->report_period_s);
+                this->report_noise_std_db = rep["noise_std_db"].as<double>(this->report_noise_std_db);
+                this->report_topic = rep["topic"].as<std::string>(this->report_topic);
+                this->report_observe_all_pairs =
+                    rep["observe_all_pairs"].as<bool>(this->report_observe_all_pairs);
+                this->report_rng.seed(rep["seed"].as<unsigned>(123));
+            }
+            if (this->report_enabled) {
+                this->report_pub = this->node.Advertise<comms_sim::msgs::MeasurementReport>(this->report_topic);
+            }
+
+            // 外部スケジュール実行戦略 (制御プレーンが生成したスケジュールに追従)
+            if (this->scheduling_policy == "external_schedule") {
+                std::string schedule_topic =
+                    link_ctrl_params["schedule_topic"].as<std::string>("/comms/ho_schedule");
+                this->external_strategy = std::make_shared<ExternalScheduleStrategy>();
+                this->scheduler.RegisterStrategy(this->external_strategy);
+                this->node.Subscribe(schedule_topic, &TxControllerPlugin::OnHoSchedule, this);
+                gzmsg << "[TxControllerPlugin] External schedule strategy registered (topic: "
+                      << schedule_topic << ")" << std::endl;
+            }
+
+            // Register KKF predictive strategy (第1層+第3層: 学習地図 + ビタビDP)
+            if (this->scheduling_policy == "kkf_predictive") {
+                std::vector<Eigen::Vector3d> track_points;
+                for (const auto& wp : local_waypoints) {
+                    track_points.push_back(Eigen::Vector3d(wp.x, wp.y, wp.z));
+                }
+                std::vector<Eigen::Vector3d> bs_antenna_positions;
+                for (const auto& bs : this->base_stations_cfg) {
+                    bs_antenna_positions.push_back(bs.position + bs.rotmat * bs.antenna_offset);
+                }
+                auto kkf_config = kkf::KkfConfig::FromYaml(link_ctrl_params);
+                this->scheduler.RegisterStrategy(std::make_shared<kkf::KkfPredictiveStrategy>(
+                    kkf_config, kkf::RoadCoordinate(track_points), bs_antenna_positions));
+                gzmsg << "[TxControllerPlugin] KKF predictive strategy registered ("
+                      << bs_antenna_positions.size() << " RSU maps, observe_all_pairs="
+                      << (kkf_config.observe_all_pairs ? "true" : "false") << ")" << std::endl;
             }
 
             this->comms_initialized = true;
@@ -349,9 +404,9 @@ namespace tx_controller
             gzmsg << "[TxControllerPlugin] Comms simulator initialized successfully!" << std::endl;
         }
 
-        void PrecalculateLUT() {
+        void PrecalculateLUT(const std::vector<Waypoint>& waypoints_to_use) {
             std::vector<Eigen::Vector3d> polyline_points;
-            for (const auto &wp : this->motion_controller.GetWaypoints()) {
+            for (const auto &wp : waypoints_to_use) {
                 polyline_points.push_back(Eigen::Vector3d(wp.x, wp.y, wp.z));
             }
 
@@ -465,7 +520,20 @@ namespace tx_controller
                   << this->switch_margin_db << " dB, Min Hold Dist: " << this->min_hold_distance_m << " m)" << std::endl;
         }
 
+        /// 制御プレーンからのスケジュール受信 (gz-transport受信スレッド)
+        void OnHoSchedule(const comms_sim::msgs::HoSchedule &msg) {
+            if (!this->external_strategy) return;
+            ExternalScheduleStrategy::Schedule schedule;
+            schedule.valid_until = msg.valid_until();
+            for (const auto &entry : msg.plan()) {
+                schedule.plan.push_back({entry.t_start(), entry.ant(), entry.bs(),
+                                         entry.mode() == comms_sim::msgs::MEASURE});
+            }
+            this->external_strategy->SetSchedule(schedule);
+        }
+
         void UpdateComms(const gz::sim::UpdateInfo &_info, gz::sim::EntityComponentManager &_ecm) {
+            std::lock_guard<std::mutex> lock(this->logs_mutex);
             if (!this->comms_initialized) return;
 
             // Wait until base stations are located in Gazebo
@@ -520,13 +588,15 @@ namespace tx_controller
             Eigen::Vector3d ori(vehicle_pose.Rot().Roll(), vehicle_pose.Rot().Pitch(), vehicle_pose.Rot().Yaw());
             Eigen::Matrix3d vehicle_rotmat = utils::rpy_to_rotmat(ori.x(), ori.y(), ori.z());
 
-            // 2. Compute comms metrics for all antennas
+            // 2. Compute comms metrics for all antennas (動的チャネル: 遮蔽・シャドウ・フェージング)
+            this->blockage_env.Refresh(_ecm);
             std::vector<std::vector<AntennaMetrics>> all_ant_bs_metrics = this->comms_env.CalculateMetrics(
-                this->vehicle_antennas, this->base_stations, pos, vehicle_rotmat);
+                this->vehicle_antennas, this->base_stations, pos, vehicle_rotmat,
+                current_time_s, &this->blockage_env.Obstacles());
 
             // 3. Scheduling Policy
             auto sched_res = this->scheduler.UpdateLinks(
-                current_time_s, pos, this->vehicle_antennas, this->base_stations,
+                current_time_s, pos, vehicle_rotmat, this->vehicle_antennas, this->base_stations,
                 all_ant_bs_metrics, this->active_antenna_idx, this->last_switch_time_s,
                 this->comms_env.GetRssiMin());
 
@@ -572,9 +642,25 @@ namespace tx_controller
             }
 
             // 4. Update Link States and Data Accumulation
+            bool do_report = this->report_enabled && current_time_s >= this->next_report_time;
+            comms_sim::msgs::MeasurementReport report_msg;
+            std::vector<bool> grant_flags(this->vehicle_antennas.size(), false);
+
             for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
                 auto &ant = this->vehicle_antennas[i];
-                bool has_grant = (this->scheduling_policy == "feedforward_optimal" || this->scheduling_policy == "simple_no_handover") ? (ant.assigned_bs_idx >= 0) : (static_cast<int>(i) == this->active_antenna_idx);
+                bool has_grant;
+                if (this->scheduling_policy == "feedforward_optimal" ||
+                    this->scheduling_policy == "simple_no_handover") {
+                    has_grant = ant.assigned_bs_idx >= 0;
+                } else if (this->scheduling_policy == "external_schedule" ||
+                           this->scheduling_policy == "kkf_predictive") {
+                    // 単一ペアネット方式: 割当BSが未確定 (スケジュール未着等) の間は
+                    // grantを与えない (フェイルセーフ = リンクなし)
+                    has_grant = (static_cast<int>(i) == this->active_antenna_idx) &&
+                                ant.assigned_bs_idx >= 0;
+                } else {
+                    has_grant = static_cast<int>(i) == this->active_antenna_idx;
+                }
                 
                 bool link_ready = false;
                 if (!has_grant || !ant.comm_active) {
@@ -596,10 +682,13 @@ namespace tx_controller
                     }
                 }
 
-                if (link_ready && ant.comm_active && this->all_ready) {
+                // measure_only (測定専用ペアネット) はリンク確立してもデータ会計を行わない
+                if (link_ready && ant.comm_active && this->all_ready && !ant.measure_only) {
                     ant.total_data_transmitted += ant_metrics_list[i].throughput * 1000.0 / 8.0 * dt;
                     if (this->comm_data_limit_mb > 0 && ant.total_data_transmitted >= this->comm_data_limit_mb) ant.comm_active = false;
                 }
+
+                grant_flags[i] = has_grant;
 
                 if (this->logging_level >= 3) {
                     typename AntennaInfo::LogRecord rec;
@@ -619,6 +708,10 @@ namespace tx_controller
                     rec.in_main_lobe = ant_metrics_list[i].in_main_lobe;
                     rec.off_boresight_e_deg = ant_metrics_list[i].off_boresight_e;
                     rec.off_boresight_h_deg = ant_metrics_list[i].off_boresight_h;
+                    rec.link_los = ant_metrics_list[i].is_los;
+                    rec.blockage_loss_dB = ant_metrics_list[i].blockage_loss_db;
+                    rec.shadow_dB = ant_metrics_list[i].shadow_db;
+                    rec.fading_dB = ant_metrics_list[i].fading_loss_db;
                     
                     rec.tx_x_m = pos.x();
                     rec.tx_y_m = pos.y();
@@ -648,6 +741,36 @@ namespace tx_controller
 
                     ant.log_records.push_back(rec);
                 }
+            }
+
+            // 測定レポートの発行 (20Hz sim 目安、physics step 毎の発行は禁止)
+            // P2P制約: grant中の割当ペアのみ (observe_all_pairs=true なら全ペア=理想観測の上限評価)
+            if (do_report) {
+                std::normal_distribution<double> meas_noise(0.0, this->report_noise_std_db);
+                for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
+                    const auto &ant = this->vehicle_antennas[i];
+                    for (size_t b = 0; b < this->base_stations.size(); ++b) {
+                        bool granted_pair = grant_flags[i] &&
+                                            ant.assigned_bs_idx == static_cast<int>(b);
+                        if (!this->report_observe_all_pairs && !granted_pair) continue;
+                        auto *entry = report_msg.add_reports();
+                        entry->set_ant(static_cast<int>(i));
+                        entry->set_bs(static_cast<int>(b));
+                        entry->set_rssi_dbm(all_ant_bs_metrics[i][b].best_rssi +
+                                            meas_noise(this->report_rng));
+                        entry->set_link_state(granted_pair ? ant.link_state : "DISCONNECTED");
+                        entry->set_mode((granted_pair && !ant.measure_only)
+                                            ? comms_sim::msgs::DATA
+                                            : comms_sim::msgs::MEASURE);
+                    }
+                }
+                report_msg.set_t_sim(current_time_s);
+                auto *vp = report_msg.mutable_vehicle_pos();
+                vp->set_x(pos.x());
+                vp->set_y(pos.y());
+                vp->set_z(pos.z());
+                this->report_pub.Publish(report_msg);
+                this->next_report_time = current_time_s + this->report_period_s;
             }
         }
 
@@ -726,6 +849,22 @@ namespace tx_controller
         std::string config_summary_filename = "sweep_summary.csv";
         std::string config_output_subdir = "";
         std::string config_output_dir = "/workspace/sim_results/";
+
+        std::mutex logs_mutex;
+        BlockageEnvironment blockage_env;
+
+        // 測定レポート出力 (データプレーンI/O)
+        bool report_enabled = true;
+        bool report_observe_all_pairs = false;  // false = P2P制約に忠実 (grantペアのみ)
+        double report_period_s = 0.05;
+        double report_noise_std_db = 2.0;
+        std::string report_topic = "/comms/measurement_report";
+        double next_report_time = 0.0;
+        std::mt19937 report_rng{123};
+        gz::transport::Node::Publisher report_pub;
+
+        // 外部スケジュール実行戦略 (scheduling_policy == "external_schedule" 時のみ)
+        std::shared_ptr<ExternalScheduleStrategy> external_strategy;
     };
 } // namespace tx_controller
 

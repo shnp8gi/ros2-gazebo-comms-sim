@@ -1,0 +1,111 @@
+# フェーズA検証シナリオ: 遮蔽体(静止+横断)によるLOS/NLOS遷移の確認
+scenario:
+  name: "blocker_test"
+  description: "新幹線 + 3基地局 + 静止/移動遮蔽体 (チャネルモデル検証用)"
+
+  base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+
+  simulation_overrides:
+    headless: true
+    real_time_factor: 5.0
+    logging_level: 3
+    physics_max_step_size: 0.001
+
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: "feedforward_optimal"
+        switch_margin_db: 2.0
+        min_hold_distance: 0.0
+    comms_simulator_node:
+      ros__parameters:
+        # 合成チャネル: 幾何遮蔽 + 空間相関シャドウイング + Rician/Rayleighフェージング
+        channel:
+          seed: 42
+          blockage:
+            enabled: true
+            max_total_loss_db: 60.0
+          shadowing:
+            enabled: true
+            sigma_db: 2.0
+            corr_distance_m: 10.0
+          fading:
+            enabled: true
+            k_los_db: 10.0
+            k_nlos_db: -100.0     # ほぼ K=0 (Rayleigh)
+            coherence_time_s: 0.05
+
+  model_catalog:
+    Shinkansen:
+      sdf_path: "models://Shinkansen"
+      description: "新幹線モデル（75m長）"
+      default_antenna_offset: [0.0, 0.0, 1.0]
+      is_rail_vehicle: true
+
+    antenna:
+      sdf_path: "models://antenna"
+      description: "基地局アンテナモデル"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+
+    TruckBlocker:
+      sdf_path: "models://SUV"      # 見た目はSUVを流用 (遮蔽形状は blockage.size が定義)
+      description: "遮蔽用トラック相当ボックス"
+      blockage:
+        size: [12.0, 2.5, 3.8]
+        loss_db: 30.0
+
+  entities:
+    # --- Rx（基地局）---
+    - name: "antenna_0"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-5.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_0", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+
+    - name: "antenna_1"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [0.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_1", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+
+    - name: "antenna_2"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [5.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_2", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+
+    # --- 遮蔽体 ---
+    # 静止トラック: antenna_1 の目前に駐車 → x≈0 付近通過時に antenna_1 系リンクが NLOS
+    - name: "truck_static"
+      model: "TruckBlocker"
+      role: "blocker"
+      static: true
+      pose: [0.0, 5.0, 0.0, 0.0, 0.0, 0.0]
+
+    # 移動トラック: 線路と基地局の間の側道を +x 方向へ走行 (列車と並走・追い抜かれ)
+    - name: "truck_moving"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [-120.0, 7.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-120.0, 7.0, 0.0, 15.0]
+        - [100.0, 7.0, 0.0, 15.0]
+
+    # --- Tx（車両）---
+    - name: "shinkansen"
+      model: "Shinkansen"
+      role: "tx"
+      pose: [-300, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-300, 0.0, 0.0, 83.33]
+        - [100.0, 0.0, 0.0, 83.33]
+      antennas:
+        - { name: "shinkansen_front", offset: [10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 0.0] }
+        - { name: "shinkansen_mid",   offset: [0.0, 1.5, 1.0],  relative_rpy: [0.0, 0.0, 0.0] }
+        - { name: "shinkansen_rear",  offset: [-10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 0.0] }

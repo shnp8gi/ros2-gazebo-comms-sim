@@ -11,7 +11,7 @@ scenario:
     headless: true
     real_time_factor: 5.0
     logging_level: 3
-    physics_max_step_size: 0.001
+    physics_max_step_size: 0.0001
 
   # スケジューリング等のシナリオ専用制御パラメータ上書き
   config_overrides:
@@ -20,9 +20,6 @@ scenario:
         scheduling_policy: "feedforward_optimal"
         switch_margin_db: 2.0
         min_hold_distance: 0.0
-        ff_max_pairs: -1
-        ff_hysteresis_margin_db: 2.0
-        proactive_handover_score_threshold: -130.0
 
   # ====================================================
   # モデルカタログ: 利用可能なモデルの定義

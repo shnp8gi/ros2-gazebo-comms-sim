@@ -165,7 +165,6 @@ link_controller_node:
     # 同時通信に使用する最大ペア数 (-1で全ペア使用)
     ff_max_pairs: -1
 
-
     # タイムスロット長 [s] (round_robin ポリシー時のみ有効)
     time_slot_duration_s: 10.0
 
@@ -309,7 +308,7 @@ spawn_entities:
     model_uri: "models://antenna"
     name: "antenna_1"
     # ポーズ: [x, y, z, roll, pitch, yaw]
-    pose: [0.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+    pose: [0.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
     static: true
     # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
     # （通信計算に使用: アンテナ位置 = pose + antenna_offset）
@@ -322,7 +321,7 @@ spawn_entities:
     model_uri: "models://antenna"
     name: "antenna_2"
     # ポーズ: [x, y, z, roll, pitch, yaw]
-    pose: [5.0, 1.0, 0.0, 0.0, 0.0, -1.5708]
+    pose: [5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
     static: true
     # モデル原点からのアンテナ位置オフセット [x, y, z] [m]
     # （通信計算に使用: アンテナ位置 = pose + antenna_offset）

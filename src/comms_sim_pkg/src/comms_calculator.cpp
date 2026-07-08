@@ -118,7 +118,7 @@ std::pair<double, double> CommsCalculator::calculate_rssi(double distance, doubl
 
   if (add_noise && noise_variance > 0) {
     std::normal_distribution<double> dist(0.0, std::sqrt(noise_variance));
-    rssi -= std::abs(dist(rng_));
+    rssi += dist(rng_);
   }
   return {rssi, path_loss};
 }
@@ -141,6 +141,19 @@ CommsMetrics CommsCalculator::calculate_all(const Eigen::Vector3d& tx_pos,
   double throughput = calculate_throughput(rssi);
 
   return {distance, rssi, path_loss, throughput, model_->model_name()};
+}
+
+CommsMetrics CommsCalculator::calculate_from_loss(double distance,
+                                                  double total_loss_db,
+                                                  double antenna_gain_db,
+                                                  bool add_noise) {
+  double rssi = tx_power_dbm_ - total_loss_db + antenna_gain_db;
+  if (add_noise && noise_variance > 0) {
+    std::normal_distribution<double> dist(0.0, std::sqrt(noise_variance));
+    rssi += dist(rng_);
+  }
+  double throughput = calculate_throughput(rssi);
+  return {distance, rssi, total_loss_db, throughput, model_->model_name()};
 }
 
 } // namespace comms_sim
