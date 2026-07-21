@@ -36,6 +36,9 @@ RUN apt-get update && apt-get install -y gz-harmonic && rm -rf /var/lib/apt/list
 RUN apt-get update && apt-get install -y ros-humble-ros-gzharmonic \
     python3-numpy python3-scipy python3-pandas python3-matplotlib && rm -rf /var/lib/apt/lists/*
 
+# 評価パイプライン (tools/sim.py): 結果の parquet 統合に pyarrow を使用
+RUN pip3 install --no-cache-dir pyarrow
+
 # Accept EULA for MS TrueType fonts and install Times New Roman (msttcorefonts)
 RUN echo "ttf-mscorefonts-installer msttcorefonts/accepted-mscorefonts-eula select true" | debconf-set-selections && \
     apt-get update && apt-get install -y --no-install-recommends \

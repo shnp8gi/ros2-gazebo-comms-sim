@@ -77,6 +77,11 @@ def generate_sim_params(scenario, overrides=None):
         if 'static' in entity:
             entity_config['static'] = entity['static']
 
+        # enabled: false のエンティティはスポーンしない (sweep変数での台数制御用。
+        # override適用後に最終判定するため、ここではフラグを保持するだけ)
+        if 'enabled' in entity:
+            entity_config['enabled'] = entity['enabled']
+
         # 遮蔽体: アンテナを持たず、通信ではなく幾何遮蔽としてのみ振る舞う
         if entity.get('role') == 'blocker':
             blockage = dict(model_info.get('blockage', {}))
@@ -120,8 +125,22 @@ def generate_sim_params(scenario, overrides=None):
             
     # Apply sweep overrides
     if overrides:
-        # Overrides format: [{'role': 'rx', 'field': 'pose[1]', 'value': 3.0}, ...]
+        # Overrides format:
+        #   entity: [{'role': 'rx', 'field': 'pose[1]', 'value': 3.0}, ...]
+        #   config: [{'config_path': 'link_controller_node.ros__parameters.control_plane',
+        #             'value': 'a3'}, ...]  (生成後の sim_params 辞書へのドットパス)
         for ovr in overrides:
+            config_path = ovr.get('config_path')
+            if config_path:
+                curr = base_config
+                parts = config_path.split('.')
+                for part in parts[:-1]:
+                    if part not in curr or not isinstance(curr[part], dict):
+                        curr[part] = {}
+                    curr = curr[part]
+                curr[parts[-1]] = ovr.get('value')
+                continue
+
             role = ovr.get('role')
             name = ovr.get('entity_name')
             field = ovr.get('field')
@@ -191,6 +210,20 @@ def generate_sim_params(scenario, overrides=None):
                     set_field(target, field, value)
                 except Exception as e:
                     print(f"Warning: Failed to set field {field} on {target.get('name')}: {e}")
+
+    # enabled=false のエンティティを除外 (sweep変数 field: enabled で台数を制御)
+    def _is_disabled(cfg):
+        return cfg.get('enabled') in (False, 0, 'false', 'False')
+
+    for key in [k for k, v in spawn_entities.items() if _is_disabled(v)]:
+        del spawn_entities[key]
+    vehicles = [v for v in vehicles if not _is_disabled(v)]
+    for key in [k for k, v in blocker_entities.items() if _is_disabled(v)]:
+        del blocker_entities[key]
+        blockers.pop(key, None)
+    for group in (spawn_entities.values(), vehicles, blocker_entities.values()):
+        for cfg in group:
+            cfg.pop('enabled', None)
 
     # Set the generated entities back to base_config
     if spawn_entities:

@@ -1,0 +1,32 @@
+# 5台×3BS 飢餓比較スモーク: 固定優先(entry) vs 動的優先(deficit_time)
+#   python3 tools/sim.py run --sweep-config scratch/road_5car_smoke_sweep.yaml --no-build
+sweep:
+  name: "road_5car_smoke"
+  description: "kkf_fixed vs kkf_deficit、遮蔽2台、飢餓解消の動作確認"
+  scenario: "config/scenarios/road_5car.yaml"
+
+  variables:
+    - name: method
+      cases:
+        kkf_fixed:
+          config:
+            link_controller_node.ros__parameters.kkf_priority: entry
+        kkf_deficit: {}   # シナリオ既定 = deficit_time
+
+    - name: blocked
+      entity_groups:
+        "2": [truck_c2, truck_c4]
+
+  analysis:
+    group_by: [method, blocked]
+    arm_var: method
+    baseline: kkf_deficit
+    metrics: [total_data_MB, min_car_data_MB, jain_index, connected_time_s]
+
+  execution:
+    num_runs: 1
+    base_seed: 12345
+    task_timeout_sec: 600
+    real_time_factor: 2.0
+    max_concurrency: 4
+    output_name: "road_5car_smoke"

@@ -34,6 +34,11 @@ def build_logging_strings(task_vars: dict) -> tuple:
         val = state_overrides[0].get('value', 0)
         raw_val = state_overrides[0].get('raw_value', val)
         unit_str = state_overrides[0].get('unit', '')
+        # labels 指定のある変数はラベルを代表値にする (例 method_kkf_full)
+        label = state_overrides[0].get('state_label')
+        if label is not None:
+            val = raw_val = label
+            unit_str = ''
 
         task_suffix_parts.append(f"{name}_{_format_number(val)}")
         params_list.append(f"{name}={_format_number(raw_val)}{unit_str}")

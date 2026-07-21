@@ -1,0 +1,84 @@
+# A3イベント型ベースライン検証シナリオ: hysteresis+TTT、MEASUREスロットで近傍プローブ
+# (kkf_mpc_test.yaml と同一条件で control_plane のみ差替え。A3は近傍測定に
+#  MEASUREスロットを要する規格忠実モード observe_all_pairs: false で運用する)
+scenario:
+  name: "a3_test"
+  description: "新幹線 + 3基地局、A3イベント型制御プレーン (external_schedule実行)"
+
+  base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+
+  simulation_overrides:
+    headless: true
+    real_time_factor: 5.0
+    logging_level: 3
+    physics_max_step_size: 0.001
+
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: "external_schedule"
+        control_plane: "a3"               # sim_launch が kkf_scheduler_node を自動起動
+        schedule_topic: "/comms/ho_schedule"
+        kkf_replan_period_s: 0.2          # 配信の定期リフレッシュ周期 (状態変化時は即時配信)
+        # A3 設定 (3GPP A3: hysteresis + Time-to-Trigger)
+        a3_hysteresis_db: 3.0
+        a3_time_to_trigger_s: 0.1
+        a3_l3_filter_beta: 0.5
+        a3_measure_period_s: 0.4          # 近傍プローブ周期
+        a3_measure_duration_s: 0.06       # プローブ窓長 (レポート周期 0.05s 以上)
+        a3_estimate_timeout_s: 4.0
+    comms_simulator_node:
+      ros__parameters:
+        # 実用的な範囲で接続可能になる中程度の送信電力
+        tx_power: 20.0
+        measurement_report:
+          enabled: true
+          period_s: 0.05
+          noise_std_db: 2.0
+          observe_all_pairs: false         # A3は規格忠実のP2P観測 (grant中ペアのみ) で運用
+
+  model_catalog:
+    Shinkansen:
+      sdf_path: "models://Shinkansen"
+      description: "新幹線モデル（75m長）"
+      default_antenna_offset: [0.0, 0.0, 1.0]
+      is_rail_vehicle: true
+    antenna:
+      sdf_path: "models://antenna"
+      description: "基地局アンテナモデル"
+      default_antenna_offset: [0.0, 0.0, 1.00]
+
+  entities:
+    - name: "antenna_0"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_0", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_1"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [0.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_1", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_2"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [5.0, 3.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_2", offset: [0.0, 0.0, 1.00], relative_rpy: [0.0, 0.0, 0.0] }
+
+    - name: "shinkansen"
+      model: "Shinkansen"
+      role: "tx"
+      pose: [-300, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-300, 0.0, 0.0, 83.33]
+        - [100.0, 0.0, 0.0, 83.33]
+      antennas:
+        - { name: "shinkansen_front", offset: [10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "shinkansen_mid",   offset: [0.0, 1.5, 1.0],  relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "shinkansen_rear",  offset: [-10.0, 1.5, 1.0], relative_rpy: [0.0, 0.0, 1.5708] }

@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <model name="SimpleBox">
+    <link name="body">
+      <!-- 底面を地面から 0.1 m 浮かせ、重力無効で接触計算をゼロにする -->
+      <pose>0 0 0.9 0 0 0</pose>
+      <gravity>false</gravity>
+      <inertial>
+        <mass>1500</mass>
+        <inertia>
+          <ixx>500</ixx><iyy>1500</iyy><izz>1500</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <collision name="collision">
+        <geometry><box><size>4.5 2.0 1.6</size></box></geometry>
+      </collision>
+      <visual name="visual">
+        <geometry><box><size>4.5 2.0 1.6</size></box></geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>

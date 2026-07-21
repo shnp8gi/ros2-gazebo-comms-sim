@@ -25,19 +25,24 @@ message MeasurementEntry {
   LinkMode mode = 5;
 }
 
-// plugin → 制御プレーン (20 Hz sim time)
+// plugin → 制御プレーン (20 Hz sim time)。
+// 複数Tx車両では車両(モデル)ごとのプラグインインスタンスが発行するため、
+// vehicle フィールドで発行元を識別する。
 message MeasurementReport {
   double t_sim = 1;                       // sim time [s]
   Vector3 vehicle_pos = 2;                // 車両原点の世界座標
   repeated MeasurementEntry reports = 3;
+  string vehicle = 4;                     // 発行元モデル名 (単一車両では省略可)
 }
 
-// スケジュールの1区間: t_start 以降 (次エントリの t_start まで) の割当
+// スケジュールの1区間: t_start 以降 (次エントリの t_start まで) の割当。
+// vehicle が空のエントリは全車両向け (単一車両構成の後方互換)。
 message ScheduleEntry {
   double t_start = 1;      // sim time [s]
-  int32 ant = 2;
+  int32 ant = 2;           // 車両ローカルのアンテナ index
   int32 bs = 3;
   LinkMode mode = 4;
+  string vehicle = 5;      // 適用先モデル名
 }
 
 // 制御プレーン → plugin (5 Hz sim time)。

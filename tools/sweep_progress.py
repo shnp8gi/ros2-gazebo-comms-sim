@@ -33,7 +33,7 @@ try:
     if hasattr(sweep_config, 'GENERIC_VARIABLES') and sweep_config.GENERIC_VARIABLES:
         task_count = 1
         for gv in sweep_config.GENERIC_VARIABLES:
-            task_count *= len(gv['values'])
+            task_count *= len(gv.get('states', gv.get('values', [])))
     else:
         Y_POSITIONS = getattr(sweep_config, 'Y_POSITIONS', [1.0])
         ANGLES_DEG = getattr(sweep_config, 'ANGLES_DEG', [0.0])

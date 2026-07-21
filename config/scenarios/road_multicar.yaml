@@ -1,0 +1,199 @@
+# 幹線道路 複数車両順次配信シナリオ
+# 60 km/h (16.67 m/s) の乗用車3台が時間差で沿道BSコリドーを通過し、それぞれが
+# 配信対象 (P2P制約: 車両あたり1ペアネット、BSあたり同時1台 = データプレーンの
+# BsOccupancyRegistry が排他)。隣接車線のトラック交通が移動遮蔽となる。
+# トラック台数 (遮蔽密度) と制御方式は sweep 変数で切り替える
+# (config/sweep/road_multicar_eval.yaml 参照。トラックは enabled フラグで台数制御)。
+scenario:
+  name: "road_multicar"
+  description: "幹線道路60km/h・乗用車3台順次通過 + トラック交通遮蔽 + BS4局60m間隔"
+
+  base_config: "src/comms_sim_pkg/config/sim_params.yaml"
+
+  simulation_overrides:
+    headless: true
+    real_time_factor: 2.0
+    logging_level: 3
+    physics_max_step_size: 0.001
+
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        # 方式は sweep 変数 "method" が上書きする (既定は提案フル)
+        scheduling_policy: "external_schedule"
+        control_plane: "kkf_mpc"
+        schedule_topic: "/comms/ho_schedule"
+        ff_max_pairs: 1
+        # 事前地図: プラグインが決定論RSSIプロファイルを出力し、KKFは
+        # 「事前測量地図 + 偏差のオンライン学習」のハイブリッドとして動作する
+        export_rssi_profile: true
+        # --- プランナ共通 (全方式同一) ---
+        kkf_replan_period_s: 0.2
+        kkf_horizon_s: 4.0
+        kkf_plan_dt_s: 0.2
+        kkf_kappa: 1.64
+        kkf_switch_cost: 3.0
+        kkf_idle_lcb_db: -110.0
+        # --- 第1層 ---
+        kkf_sigma_nu_db: 4.0
+        kkf_corr_length_s_m: 20.0
+        kkf_corr_length_t_s: 5.0
+        # --- 第2層 ---
+        # 閾値はRicianフェード尾部(数dB)より深く、トラック遮蔽(-30dB)より浅い-18dB。
+        # -10dBだと瞬時フェードの誤検出トラックが狭い接続窓(11m)にペナルティを
+        # 被せ、総データ量を有意に落とす (2026-07-10 調整実験)
+        kkf_tracker_enabled: true
+        kkf_tracker_threshold_db: -18.0
+        kkf_tracker_confirm_hits: 4
+        kkf_blockage_penalty_db: 15.0
+        # --- ts_kf ベースライン ---
+        tskf_process_noise_q: 25.0
+        tskf_prior_mean_dbm: -120.0
+        tskf_prior_var: 400.0
+        # --- a3 ベースライン ---
+        a3_hysteresis_db: 3.0
+        a3_time_to_trigger_s: 0.1
+        a3_l3_filter_beta: 0.5
+        a3_measure_period_s: 0.4
+        a3_measure_duration_s: 0.06
+        a3_estimate_timeout_s: 4.0
+    comms_simulator_node:
+      ros__parameters:
+        tx_power: 30.0
+        channel:
+          seed: 42            # sweep実行時に run毎シード注入で上書き (CRN)
+          blockage: { enabled: true, max_total_loss_db: 60.0 }
+          shadowing: { enabled: true, sigma_db: 4.0, corr_distance_m: 10.0 }
+          fading: { enabled: true, k_los_db: 10.0, k_nlos_db: -100.0, coherence_time_s: 0.05 }
+        measurement_report:
+          enabled: true
+          period_s: 0.05
+          noise_std_db: 2.0
+          observe_all_pairs: true   # sweep 変数 "method" が方式ごとに上書き
+          seed: 123                 # 同上 (run毎シード注入)
+
+  model_catalog:
+    # 物理は軽量box (SimpleBox: 重力無効・非接触)。SUVのメッシュ+関節接触が
+    # 1ms物理ステップを圧迫し実効RTFが1/6以下に落ちるため、ヘッドレス評価では
+    # 全車両をboxに置換する。遮蔽OBBは blockage 属性で与えるため通信計算は不変。
+    Car:
+      sdf_path: "models://SimpleBox"
+      description: "配信対象の乗用車 (軽量box)"
+      default_antenna_offset: [0.0, 0.0, 1.5]
+    antenna:
+      sdf_path: "models://antenna"
+      description: "沿道基地局アンテナ"
+      default_antenna_offset: [0.0, 0.0, 1.0]
+    TruckBlocker:
+      sdf_path: "models://SimpleBox"
+      description: "遮蔽用トラック相当 (軽量box、遮蔽OBBは blockage 属性)"
+      blockage:
+        size: [12.0, 2.5, 3.8]
+        loss_db: 30.0
+
+  entities:
+    # --- Rx (基地局: 60m間隔, y=10, 道路向き) ---
+    - name: "antenna_0"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-90.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_0", offset: [0.0, 0.0, 1.0], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_1"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [-30.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_1", offset: [0.0, 0.0, 1.0], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_2"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [30.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_2", offset: [0.0, 0.0, 1.0], relative_rpy: [0.0, 0.0, 0.0] }
+    - name: "antenna_3"
+      model: "antenna"
+      role: "rx"
+      static: true
+      pose: [90.0, 10.0, 0.0, 0.0, 0.0, -1.5708]
+      antennas:
+        - { name: "antenna_3", offset: [0.0, 0.0, 1.0], relative_rpy: [0.0, 0.0, 0.0] }
+
+    # --- Tx (配信対象車: 60km/h, 60m間隔で順次進入) ---
+    # 定義順 = 制御プレーンの計画優先順 (先行車が優先)
+    - name: "car_1"
+      model: "Car"
+      role: "tx"
+      pose: [-160.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-160.0, 0.0, 0.0, 16.67]
+        - [150.0, 0.0, 0.0, 16.67]
+      antennas:
+        - { name: "car_1_front", offset: [1.5, 0.8, 1.5], relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "car_1_rear",  offset: [-1.5, 0.8, 1.5], relative_rpy: [0.0, 0.0, 1.5708] }
+    - name: "car_2"
+      model: "Car"
+      role: "tx"
+      pose: [-220.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-220.0, 0.0, 0.0, 16.67]
+        - [150.0, 0.0, 0.0, 16.67]
+      antennas:
+        - { name: "car_2_front", offset: [1.5, 0.8, 1.5], relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "car_2_rear",  offset: [-1.5, 0.8, 1.5], relative_rpy: [0.0, 0.0, 1.5708] }
+    - name: "car_3"
+      model: "Car"
+      role: "tx"
+      pose: [-280.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+      waypoints:
+        - [-280.0, 0.0, 0.0, 16.67]
+        - [150.0, 0.0, 0.0, 16.67]
+      antennas:
+        - { name: "car_3_front", offset: [1.5, 0.8, 1.5], relative_rpy: [0.0, 0.0, 1.5708] }
+        - { name: "car_3_rear",  offset: [-1.5, 0.8, 1.5], relative_rpy: [0.0, 0.0, 1.5708] }
+
+    # --- 遮蔽トラック (台数は sweep 変数 "density" が enabled で制御) ---
+    # 並走車線 y=4.5 (+12 m/s, 車が追い越す), 対向車線 y=7.5 (-16.7 m/s)
+    - name: "truck_co_0"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [-200.0, 4.5, 0.0, 0.0, 0.0, 0.0]
+      waypoints: [[-200.0, 4.5, 0.0, 12.0], [130.0, 4.5, 0.0, 12.0]]
+    - name: "truck_co_1"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [-120.0, 4.5, 0.0, 0.0, 0.0, 0.0]
+      waypoints: [[-120.0, 4.5, 0.0, 12.0], [210.0, 4.5, 0.0, 12.0]]
+    - name: "truck_co_2"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [-40.0, 4.5, 0.0, 0.0, 0.0, 0.0]
+      waypoints: [[-40.0, 4.5, 0.0, 12.0], [290.0, 4.5, 0.0, 12.0]]
+    - name: "truck_co_3"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [40.0, 4.5, 0.0, 0.0, 0.0, 0.0]
+      waypoints: [[40.0, 4.5, 0.0, 12.0], [370.0, 4.5, 0.0, 12.0]]
+    - name: "truck_opp_0"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [20.0, 7.5, 0.0, 0.0, 0.0, 3.1416]
+      waypoints: [[20.0, 7.5, 0.0, 16.7], [-440.0, 7.5, 0.0, 16.7]]
+    - name: "truck_opp_1"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [90.0, 7.5, 0.0, 0.0, 0.0, 3.1416]
+      waypoints: [[90.0, 7.5, 0.0, 16.7], [-370.0, 7.5, 0.0, 16.7]]
+    - name: "truck_opp_2"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [160.0, 7.5, 0.0, 0.0, 0.0, 3.1416]
+      waypoints: [[160.0, 7.5, 0.0, 16.7], [-300.0, 7.5, 0.0, 16.7]]
+    - name: "truck_opp_3"
+      model: "TruckBlocker"
+      role: "blocker"
+      pose: [230.0, 7.5, 0.0, 0.0, 0.0, 3.1416]
+      waypoints: [[230.0, 7.5, 0.0, 16.7], [-230.0, 7.5, 0.0, 16.7]]

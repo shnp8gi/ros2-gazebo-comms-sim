@@ -14,6 +14,7 @@ import argparse
 import sys
 import glob
 import atexit
+import yaml
 import csv
 try:
     import psutil
@@ -48,6 +49,7 @@ from lib.sweep_data import average_summaries, get_completed_tasks, validate_swee
 from lib.scenario_loader import load_scenario, generate_sim_params, write_sim_params
 from lib.task_formatting import build_logging_strings, extract_legacy_overrides
 from lib.result_file_access import ensure_writable
+from lib import manifest as eval_manifest
 
 from lib.concurrency_guard import ConcurrencyGuard
 from lib.process_manager import ProcessManager
@@ -81,7 +83,8 @@ def fix_ownership(start_time_str=None):
                 
                 paths_to_fix = [
                     "/workspace/sim_results",
-                    "/workspace/tools/log"
+                    "/workspace/tools/log",
+                    "/workspace/tools/sweep_build"
                 ]
                 for p in paths_to_fix:
                     if os.path.exists(p):
@@ -97,7 +100,8 @@ def fix_ownership(start_time_str=None):
             gid = os.getgid()
             paths_to_fix = [
                 "/workspace/sim_results",
-                "/workspace/tools/log"
+                "/workspace/tools/log",
+                "/workspace/tools/sweep_build"
             ]
             for p in paths_to_fix:
                 subprocess.run(
@@ -660,7 +664,9 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             if 'simulation_overrides' not in target_scenario:
                 target_scenario['simulation_overrides'] = {}
             target_scenario['simulation_overrides']['summary_filename'] = summary_filename
-            target_scenario['simulation_overrides']['output_subdir'] = f"sweep_{sweep_start_time}"
+            # シミュレータ生出力 (detailed_logs/events/controls/summaries/
+            # rssi_profiles) は評価ディレクトリの raw/ 配下に集約する
+            target_scenario['simulation_overrides']['output_subdir'] = f"sweep_{sweep_start_time}/raw"
             target_scenario['simulation_overrides']['y_position'] = y_val
             target_scenario['simulation_overrides']['angle_deg'] = angle_val
             target_scenario['simulation_overrides']['headless'] = True
@@ -668,7 +674,12 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
             
             # Generate dict
             config_dict = generate_sim_params(scenario, overrides)
-            
+
+            # run毎シード注入 (CRN: run_idx のみに依存、方式・条件間で共通)
+            run_seed = sweep_config.inject_run_seeds(config_dict, run_idx)
+            if run_seed is not None:
+                print(f"[Worker {worker_id}] Run seed: {run_seed} (run {run_idx})")
+
             # Apply dithering to vehicles manually
             if dither_x != 0.0 and 'vehicles' in config_dict:
                 for v in config_dict['vehicles']:
@@ -775,7 +786,7 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
         is_valid = True
         reason = ""
         
-        summary_path = os.path.join(os.getcwd(), "sim_results", f"sweep_{sweep_start_time}", "summaries", summary_filename)
+        summary_path = os.path.join(os.getcwd(), "sim_results", f"sweep_{sweep_start_time}", "raw", "summaries", summary_filename)
         
         min_allowed_duration = 3.0
         if t_expected is not None:
@@ -802,15 +813,30 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 # コンテナ(root)が生成したCSVはホスト側から書き込めないことがあるため、注入前に所有権を保証する
                 if not is_docker:
                     ensure_writable(summary_path)
+                # スイープ変数の値を列として付与 (集計時のグループ化キーになる)。
+                # 値は labels 指定があればラベル、なければ raw_value。
+                var_cols = []
+                for var_name, state_overrides in task_vars.items():
+                    if not state_overrides:
+                        continue
+                    label = state_overrides[0].get(
+                        'state_label', state_overrides[0].get('raw_value', ''))
+                    var_cols.append((var_name, label))
+
                 with open(summary_path, 'r', encoding='utf-8') as f:
                     lines = f.readlines()
                 if len(lines) >= 2:
                     header = lines[0].strip()
                     if "y_position" not in header:
-                        new_header = "run_id,y_position,antenna_angle," + header
+                        existing = set(header.split(','))
+                        extra = [(n, v) for n, v in var_cols if n not in existing]
+                        extra_header = ''.join(f",{n}" for n, _ in extra)
+                        extra_values = ''.join(f",{v}" for _, v in extra)
+                        new_header = "run_id,y_position,antenna_angle," + header + extra_header
                         new_lines = [new_header + "\n"]
                         for line in lines[1:]:
-                            new_lines.append(f"{run_idx},{y_val},{angle_val}," + line)
+                            new_lines.append(
+                                f"{run_idx},{y_val},{angle_val}," + line.rstrip("\n") + extra_values + "\n")
                         with open(summary_path, 'w', encoding='utf-8') as f:
                             f.writelines(new_lines)
             except Exception as e:
@@ -986,27 +1012,64 @@ def main_logic():
     global PROGRESS_LOG
     PROGRESS_LOG = f"tools/log/{sweep_start_time}/sweep_progress.log"
     os.makedirs(os.path.dirname(PROGRESS_LOG), exist_ok=True)
+    # log_progress は sweep_config.PROGRESS_LOG に書くため同期させる
+    # (不一致だと manifest finalize が run 成否を拾えない)
+    sweep_config.PROGRESS_LOG = PROGRESS_LOG
 
     if not args.resume and os.path.exists(PROGRESS_LOG):
         os.remove(PROGRESS_LOG)
 
     # Ensure sweep_dir exists
     os.makedirs(sweep_dir, exist_ok=True)
-    
-    # Backup configuration files for the sweep
+
+    # 評価ディレクトリの初期化 (manifest.yaml + config/ スナップショット)。
+    # 「評価ディレクトリが唯一の契約」: 再現に必要な入力・環境・シード表を
+    # すべてディレクトリ内に自己完結させる。
     if not args.resume:
         try:
-            if args.sweep_config and os.path.exists(args.sweep_config):
-                shutil.copy2(args.sweep_config, os.path.join(sweep_dir, "sweep_config_backup.yaml"))
-                
             scen_path = 'config/scenarios/default.yaml'
             if global_sweep_data and 'scenario' in global_sweep_data:
                 scen_path = global_sweep_data['scenario']
-            
-            if os.path.exists(scen_path):
-                shutil.copy2(scen_path, os.path.join(sweep_dir, "scenario_config_backup.yaml"))
+            base_cfg_path = sweep_config.CONFIG_PATH
+            try:
+                with open(scen_path, 'r', encoding='utf-8') as f:
+                    scen_yaml = yaml.safe_load(f) or {}
+                base_cfg_path = (scen_yaml.get('scenario', scen_yaml)
+                                 .get('base_config', base_cfg_path))
+            except Exception:
+                pass
+            output_name = (global_sweep_data or {}).get(
+                'execution', {}).get('output_name') or f"sweep_{sweep_start_time}"
+            eval_manifest.init_manifest(
+                sweep_dir,
+                name=str(output_name),
+                sweep_config_path=args.sweep_config,
+                scenario_path=scen_path,
+                base_config_path=base_cfg_path,
+                num_runs=sweep_config.NUM_RUNS,
+                base_seed=sweep_config.BASE_SEED,
+                seed_stride=sweep_config.RUN_SEED_STRIDE,
+                derive_run_seeds=sweep_config.DERIVE_RUN_SEEDS,
+                generic_variables=sweep_config.GENERIC_VARIABLES,
+            )
         except Exception as e:
-            print(f"[Sweep Sim] Failed to backup configuration files: {e}")
+            print(f"[Sweep Sim] Failed to initialize eval directory manifest: {e}")
+
+    # 検証・resume の期待エンティティはシナリオ由来の実効configから得る。
+    # sweep_config.CONFIG_PATH (ベースconfig) の車両リストはシナリオと無関係な
+    # ことがあり (例: shinkansen既定 vs road_multicar)、誤検証→無駄リトライになる
+    expected_config_path = sweep_config.CONFIG_PATH
+    try:
+        _scen_path = 'config/scenarios/default.yaml'
+        if global_sweep_data and 'scenario' in global_sweep_data:
+            _scen_path = global_sweep_data['scenario']
+        if os.path.exists(_scen_path):
+            expected_config_path = "tools/sweep_build/expected_config.yaml"
+            write_sim_params(generate_sim_params(load_scenario(_scen_path)),
+                             expected_config_path)
+    except Exception as e:
+        print(f"[Sweep Sim] Warning: failed to build expected config: {e}")
+        expected_config_path = sweep_config.CONFIG_PATH
 
     # Copy manifest to results folder if chunk_idx is not None
     if chunk_idx is not None and args.manifest:
@@ -1034,7 +1097,7 @@ def main_logic():
             is_completed = False
             if args.resume:
                 if r_idx not in completed_cache:
-                    completed_cache[r_idx] = get_completed_tasks(sweep_dir, r_idx, config_path=sweep_config.CONFIG_PATH)
+                    completed_cache[r_idx] = get_completed_tasks(sweep_dir, r_idx, config_path=expected_config_path)
                 for cy, cang in completed_cache[r_idx]:
                     if abs(cy - y_val) < 0.01 and abs(cang - ang_val) < 0.05:
                         is_completed = True
@@ -1059,7 +1122,7 @@ def main_logic():
         for run_idx in range(1, num_runs + 1):
             completed_set = set()
             if args.resume:
-                completed_set = get_completed_tasks(sweep_dir, run_idx, config_path=sweep_config.CONFIG_PATH)
+                completed_set = get_completed_tasks(sweep_dir, run_idx, config_path=expected_config_path)
                 
             for combo in combinations:
                 task_vars = dict(zip(var_names, combo))
@@ -1160,7 +1223,7 @@ def main_logic():
                     except Exception:
                         pass
 
-                pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", "summaries", f"sweep_summary_{sweep_start_time}_run{run_idx}_*_w*.csv")
+                pattern = os.path.join("sim_results", f"sweep_{sweep_start_time}", "raw", "summaries", f"sweep_summary_{sweep_start_time}_run{run_idx}_*_w*.csv")
                 worker_csvs = glob.glob(pattern)
                 
                 for worker_csv in sorted(worker_csvs):
@@ -1199,7 +1262,7 @@ def main_logic():
 
             # データ完全性検証の実行
             print("\nChecking data integrity of sweep results...")
-            is_valid, failed_list = validate_sweep_summary(sweep_dir, sweep_config.CONFIG_PATH, y_positions, angles_deg, num_runs)
+            is_valid, failed_list = validate_sweep_summary(sweep_dir, expected_config_path, y_positions, angles_deg, num_runs)
 
             # バリデーションレポートの出力
             report_path = os.path.join(sweep_dir, "validation_report.txt")
@@ -1313,6 +1376,30 @@ def main_logic():
 
     fix_ownership(sweep_start_time)
     log_progress(f"DONE task={total_runs_tasks} params=[-] status=SWEEP_COMPLETE ts={datetime.datetime.now().isoformat()}")
+
+    # manifest に run 成否・終了時刻を反映し、進捗ログもディレクトリへ取り込む
+    try:
+        eval_manifest.finalize_manifest(
+            os.path.join("sim_results", f"sweep_{sweep_start_time}"),
+            progress_log_path=PROGRESS_LOG)
+    except Exception as e:
+        print(f"[Sweep Sim] Warning: failed to finalize manifest: {e}")
+
+    # execution.output_name 指定時は結果ディレクトリを分かりやすい名前へ移動する
+    # (1シナリオ=1フォルダ)。既存の場合はタイムスタンプを付けて衝突回避。
+    output_name = None
+    if 'global_sweep_data' in globals() and global_sweep_data:
+        output_name = global_sweep_data.get('execution', {}).get('output_name')
+    if output_name and chunk_idx is None:
+        src = os.path.join("sim_results", f"sweep_{sweep_start_time}")
+        dst = os.path.join("sim_results", str(output_name))
+        if os.path.exists(dst):
+            dst = f"{dst}_{sweep_start_time}"
+        try:
+            shutil.move(src, dst)
+            print(f"\n[Sweep Sim] Results directory: {dst}")
+        except Exception as e:
+            print(f"[Sweep Sim] Warning: failed to rename results dir to {dst}: {e}")
 
 if __name__ == '__main__':
     def main():

@@ -95,6 +95,37 @@ class KrigedKalmanFilter:
             variance = max(variance, 1e-6)
         return mean, variance
 
+    def predict_batch(self, s_arr, t_arr):
+        """複数クエリ点 (s_i, t_i) の一括予測。predict_at と数値同一。
+
+        制御プレーンの再計画 (車両×アンテナ×ステージ) では predict_at の逐次呼出が
+        ボトルネックになるため、共分散ベクトルと分散低減を行列演算で一括計算する。
+
+        Returns:
+            (means, variances): いずれも shape (len(s_arr),)
+        """
+        s_arr = np.asarray(s_arr, dtype=float)
+        t_arr = np.asarray(t_arr, dtype=float)
+        Phi = np.vstack([self.basis.evaluate(s) for s in s_arr])
+        means = Phi @ self.alpha
+        variances = (np.einsum('ij,jk,ik->i', Phi, self.P, Phi)
+                     + self.params.sigma_nu ** 2)
+
+        n = len(self.residuals)
+        if n > 0:
+            res = np.array([(r[0], r[1]) for r in self.residuals])
+            C0 = (self.params.sigma_nu ** 2 *
+                  np.exp(-np.abs(s_arr[:, None] - res[None, :, 0])
+                         / self.params.corr_length_s_m) *
+                  np.exp(-np.abs(t_arr[:, None] - res[None, :, 1])
+                         / self.params.corr_length_t_s))
+            means = means + C0 @ self._kriging_weights
+            sol = np.linalg.solve(self._C, C0.T)          # (n, Q)
+            reduction = np.einsum('qn,nq->q', C0, sol)
+            variances = variances - np.minimum(reduction, self.params.sigma_nu ** 2)
+            variances = np.maximum(variances, 1e-6)
+        return means, variances
+
     def observation_count(self):
         return len(self.residuals)
 
@@ -108,13 +139,12 @@ class KrigedKalmanFilter:
         n = len(self.residuals)
         if n == 0:
             return
-        res = list(self.residuals)
-        C = np.empty((n, n))
-        nu = np.empty(n)
-        for j in range(n):
-            for k in range(n):
-                C[j, k] = self._covariance(res[j][0], res[j][1], res[k][0], res[k][1])
-            C[j, j] += res[j][3]  # ナゲット (観測雑音)
-            nu[j] = res[j][2]
+        res = np.asarray(self.residuals, dtype=float)  # 列: s, t, value, noise_var
+        C = (self.params.sigma_nu ** 2 *
+             np.exp(-np.abs(res[:, 0, None] - res[None, :, 0])
+                    / self.params.corr_length_s_m) *
+             np.exp(-np.abs(res[:, 1, None] - res[None, :, 1])
+                    / self.params.corr_length_t_s))
+        C[np.diag_indices(n)] += res[:, 3]  # ナゲット (観測雑音)
         self._C = C
-        self._kriging_weights = np.linalg.solve(C, nu)
+        self._kriging_weights = np.linalg.solve(C, res[:, 2])

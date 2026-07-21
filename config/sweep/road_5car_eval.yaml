@@ -1,0 +1,66 @@
+# 5台×3BS 需要超過評価 (研究本体)
+#   実行: python3 tools/sim.py run --sweep-config config/sweep/road_5car_eval.yaml
+#   集計: python3 tools/sim.py analyze sim_results/road_5car_eval
+#   作図: python3 tools/sim.py plot sim_results/road_5car_eval
+#   報告: python3 tools/sim.py report sim_results/road_5car_eval
+#
+# 方式 (cases = 1条件1ブロック):
+#   lut          静的LUT (feedforward)。車間調停なし・データプレーン早い者勝ち
+#   a3           3GPP A3イベント型。調停なし・予測なし
+#   ts_kf        時系列KF予測HO。調停は固定優先 (entry)
+#   kkf_fixed    提案KKF + 固定優先 (entry) — 飢餓の実証用 (モチベーション)
+#   kkf_deficit  提案KKF + 動的優先 (deficit_time) — 飢餓解消
+#
+# 遮蔽 (blocked = ハンデ持ち車両の数): 並走トラックの enabled を entity_groups
+# で切替。b0=遮蔽なし, b1=car_2のみ, b2=car_2+car_4, b4=car_1,2,4,5 (car_3のみ素通し)
+sweep:
+  name: "road_5car_eval"
+  description: "5方式 × 並走遮蔽4条件 × N run (5台/3BS 需要超過・BS排他)"
+  scenario: "config/scenarios/road_5car.yaml"
+
+  variables:
+    - name: method
+      cases:
+        lut:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: feedforward_optimal
+            link_controller_node.ros__parameters.control_plane: none
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: false
+        a3:
+          config:
+            link_controller_node.ros__parameters.control_plane: a3
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: false
+        ts_kf:
+          config:
+            link_controller_node.ros__parameters.control_plane: ts_kf
+        kkf_fixed:
+          config:
+            link_controller_node.ros__parameters.kkf_priority: entry
+        kkf_deficit: {}   # シナリオ既定 (kkf_mpc + deficit_time) のまま
+
+    - name: blocked
+      entity_groups:
+        "0": []
+        "1": [truck_c2]
+        "2": [truck_c2, truck_c4]
+        "4": [truck_c1, truck_c2, truck_c4, truck_c5]
+
+  analysis:
+    group_by: [method, blocked]
+    arm_var: method
+    baseline: kkf_deficit
+    metrics: [total_data_MB, connected_time_s, min_car_data_MB,
+              jain_index, nlos_grant_pct, ho_count]
+
+  execution:
+    num_runs: 15
+    base_seed: 12345          # 全条件共通 = CRN
+    task_timeout_sec: 900
+    real_time_factor: 2.0
+    # 並列度は4以下厳守。12並列ではCPU競合でPython制御プレーンの再計画が
+    # 遅延し、閉ループ方式 (kkf/ts_kf/a3) の性能が崩壊する
+    # (実測 2026-07-17: kkf_deficit 同一シードで 8006MB→2236MB。
+    #  対照実験として sim_results/road_5car_eval_c12 に12並列版を保全)
+    max_concurrency: 4
+    output_name: "road_5car_eval"

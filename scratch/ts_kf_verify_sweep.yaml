@@ -1,0 +1,17 @@
+# 検証用: ts_kf 制御プレーンの閉ループ動作確認 (1タスク)
+sweep:
+  name: "verify_ts_kf"
+  description: "時系列KFベースラインの閉ループ検証"
+  scenario: "config/scenarios/ts_kf_test.yaml"
+  variables:
+    - name: "synchronized_antenna_yaw"
+      targets:
+        - entity_role: "rx"
+          field: "antennas.*.relative_rpy[2]"
+          unit: "degree"
+          range: { start: 0.0, end: 0.0, step: 10.0 }
+  execution:
+    num_runs: 1
+    task_timeout_sec: 600
+    real_time_factor: 5.0
+    max_concurrency: 1

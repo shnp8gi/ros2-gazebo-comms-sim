@@ -26,42 +26,34 @@ if not dfs:
     sys.exit(0)
 
 combined = pd.concat(dfs, ignore_index=True)
-agg_rules = {{
-    'total_data_MB': ['mean', 'std'],
-    'connected_time_s': ['mean', 'std'],
-    'average_throughput_Gbps': ['mean', 'std'],
-    'average_rssi_dBm': ['mean', 'std'],
-    'handover_count': ['mean', 'std']
-}}
-averaged = combined.groupby(['y_position', 'antenna_angle', 'vehicle_name'], as_index=False).agg(agg_rules)
+metric_cols = ['total_data_MB', 'connected_time_s', 'average_throughput_Gbps',
+               'average_rssi_dBm', 'handover_count']
+agg_rules = {{m: ['mean', 'std'] for m in metric_cols if m in combined.columns}}
+# グループ化キー = メトリクス以外の全列 (スイープ変数列を自動的に含む)
+group_cols = [c for c in combined.columns
+              if c not in agg_rules and not c.endswith('_std') and c != 'run_id']
+averaged = combined.groupby(group_cols, as_index=False, dropna=False).agg(agg_rules)
 
 new_cols = []
 for col in averaged.columns:
-    if isinstance(col, tuple) and col[0] not in ['y_position', 'antenna_angle', 'vehicle_name']:
+    if isinstance(col, tuple) and col[0] not in group_cols:
         if col[1] == 'mean':
             new_cols.append(col[0])
         else:
             new_cols.append(f"{{col[0]}}_std")
     else:
-        new_cols.append(col[0])
+        new_cols.append(col[0] if isinstance(col, tuple) else col)
 averaged.columns = new_cols
 
-for col in ['total_data_MB_std', 'connected_time_s_std', 'average_throughput_Gbps_std', 'average_rssi_dBm_std', 'handover_count_std']:
-    averaged[col] = averaged[col].fillna(0.0)
-
-averaged['total_data_MB'] = averaged['total_data_MB'].round(3)
-averaged['total_data_MB_std'] = averaged['total_data_MB_std'].round(3)
-averaged['connected_time_s'] = averaged['connected_time_s'].round(3)
-averaged['connected_time_s_std'] = averaged['connected_time_s_std'].round(3)
-averaged['average_throughput_Gbps'] = averaged['average_throughput_Gbps'].round(3)
-averaged['average_throughput_Gbps_std'] = averaged['average_throughput_Gbps_std'].round(3)
-averaged['average_rssi_dBm'] = averaged['average_rssi_dBm'].round(3)
-averaged['average_rssi_dBm_std'] = averaged['average_rssi_dBm_std'].round(3)
-averaged['handover_count'] = averaged['handover_count'].round(1)
-averaged['handover_count_std'] = averaged['handover_count_std'].round(1)
+for m in agg_rules:
+    if f"{{m}}_std" in averaged.columns:
+        averaged[f"{{m}}_std"] = averaged[f"{{m}}_std"].fillna(0.0)
+        digits = 1 if m == 'handover_count' else 3
+        averaged[m] = averaged[m].round(digits)
+        averaged[f"{{m}}_std"] = averaged[f"{{m}}_std"].round(digits)
 
 averaged.insert(0, 'run_id', 'AVERAGE')
-averaged = averaged.sort_values(by=['y_position', 'antenna_angle', 'vehicle_name'])
+averaged = averaged.sort_values(by=group_cols)
 os.makedirs(os.path.dirname(output_file), exist_ok=True)
 averaged.to_csv(output_file, index=False)
 """
@@ -72,41 +64,31 @@ def _build_averaged_df(dfs):
     import pandas as pd
 
     combined = pd.concat(dfs, ignore_index=True)
-    agg_rules = {
-        'total_data_MB': ['mean', 'std'],
-        'connected_time_s': ['mean', 'std'],
-        'average_throughput_Gbps': ['mean', 'std'],
-        'average_rssi_dBm': ['mean', 'std'],
-        'handover_count': ['mean', 'std']
-    }
-    averaged = combined.groupby(['y_position', 'antenna_angle', 'vehicle_name'], as_index=False).agg(agg_rules)
+    metric_cols = ['total_data_MB', 'connected_time_s', 'average_throughput_Gbps',
+                   'average_rssi_dBm', 'handover_count']
+    agg_rules = {m: ['mean', 'std'] for m in metric_cols if m in combined.columns}
+    # グループ化キー = メトリクス以外の全列 (スイープ変数列を自動的に含む)
+    group_cols = [c for c in combined.columns
+                  if c not in agg_rules and not c.endswith('_std') and c != 'run_id']
+    averaged = combined.groupby(group_cols, as_index=False, dropna=False).agg(agg_rules)
 
     new_cols = []
     for col in averaged.columns:
-        if isinstance(col, tuple) and col[0] not in ['y_position', 'antenna_angle', 'vehicle_name']:
+        if isinstance(col, tuple) and col[0] not in group_cols:
             new_cols.append(col[0] if col[1] == 'mean' else f"{col[0]}_std")
         else:
-            new_cols.append(col[0])
+            new_cols.append(col[0] if isinstance(col, tuple) else col)
     averaged.columns = new_cols
 
-    std_cols = ['total_data_MB_std', 'connected_time_s_std', 'average_throughput_Gbps_std',
-                'average_rssi_dBm_std', 'handover_count_std']
-    for col in std_cols:
-        averaged[col] = averaged[col].fillna(0.0)
-
-    averaged['total_data_MB'] = averaged['total_data_MB'].round(3)
-    averaged['total_data_MB_std'] = averaged['total_data_MB_std'].round(3)
-    averaged['connected_time_s'] = averaged['connected_time_s'].round(3)
-    averaged['connected_time_s_std'] = averaged['connected_time_s_std'].round(3)
-    averaged['average_throughput_Gbps'] = averaged['average_throughput_Gbps'].round(3)
-    averaged['average_throughput_Gbps_std'] = averaged['average_throughput_Gbps_std'].round(3)
-    averaged['average_rssi_dBm'] = averaged['average_rssi_dBm'].round(3)
-    averaged['average_rssi_dBm_std'] = averaged['average_rssi_dBm_std'].round(3)
-    averaged['handover_count'] = averaged['handover_count'].round(1)
-    averaged['handover_count_std'] = averaged['handover_count_std'].round(1)
+    for m in agg_rules:
+        if f"{m}_std" in averaged.columns:
+            averaged[f"{m}_std"] = averaged[f"{m}_std"].fillna(0.0)
+            digits = 1 if m == 'handover_count' else 3
+            averaged[m] = averaged[m].round(digits)
+            averaged[f"{m}_std"] = averaged[f"{m}_std"].round(digits)
 
     averaged.insert(0, 'run_id', 'AVERAGE')
-    averaged = averaged.sort_values(by=['y_position', 'antenna_angle', 'vehicle_name'])
+    averaged = averaged.sort_values(by=group_cols)
     return averaged
 
 

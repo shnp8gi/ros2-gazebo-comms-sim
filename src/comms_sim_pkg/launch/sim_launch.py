@@ -618,12 +618,13 @@ def launch_setup(context, *args, **kwargs):
         spawn_delay += entity_spawn_interval
 
     # =========================================================================
-    # KKF制御プレーンノード: external_schedule + control_plane: "kkf_mpc" の場合に起動
+    # 制御プレーンノード: external_schedule + control_plane が
+    # "kkf_mpc" (提案) / "ts_kf" (時系列KF) / "a3" (A3イベント型) の場合に起動
     # (sweep終了時のクリーンアップに巻き込まれないよう launch のライフサイクルに載せる)
     # =========================================================================
     link_params_for_cp = config.get('link_controller_node', {}).get('ros__parameters', {})
     if (link_params_for_cp.get('scheduling_policy') == 'external_schedule'
-            and link_params_for_cp.get('control_plane') == 'kkf_mpc'):
+            and link_params_for_cp.get('control_plane') in ('kkf_mpc', 'ts_kf', 'a3')):
         kkf_scheduler = TimerAction(
             period=gazebo_startup_delay,
             actions=[

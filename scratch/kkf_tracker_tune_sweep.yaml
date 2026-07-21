@@ -1,0 +1,44 @@
+# トラッカー調整検証: kkf_full のみ、閾値-18dB/確定4ヒット (フェード誤検出対策)
+# base_seed 共通 = 本番 road_multicar_eval と run 対応の paired 比較が可能
+sweep:
+  name: "road_multicar_kkftune"
+  description: "kkf_full tracker tuning (threshold -18, confirm 4)"
+  scenario: "config/scenarios/road_multicar.yaml"
+
+  variables:
+    - name: method
+      labels: [kkf_full]
+      targets:
+        - config: "link_controller_node.ros__parameters.scheduling_policy"
+          values: [external_schedule]
+        - config: "link_controller_node.ros__parameters.control_plane"
+          values: [kkf_mpc]
+        - config: "link_controller_node.ros__parameters.kkf_tracker_enabled"
+          values: [true]
+        - config: "link_controller_node.ros__parameters.kkf_tracker_threshold_db"
+          values: [-18.0]
+        - config: "link_controller_node.ros__parameters.kkf_tracker_confirm_hits"
+          values: [4]
+        - config: "comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs"
+          values: [true]
+        - config: "comms_simulator_node.ros__parameters.measurement_report.enabled"
+          values: [true]
+    - name: density
+      labels: [0, 2, 4, 8]
+      targets:
+        - { entity_name: truck_co_0,  field: enabled, values: [false, true,  true,  true] }
+        - { entity_name: truck_opp_0, field: enabled, values: [false, true,  true,  true] }
+        - { entity_name: truck_co_1,  field: enabled, values: [false, false, true,  true] }
+        - { entity_name: truck_opp_1, field: enabled, values: [false, false, true,  true] }
+        - { entity_name: truck_co_2,  field: enabled, values: [false, false, false, true] }
+        - { entity_name: truck_opp_2, field: enabled, values: [false, false, false, true] }
+        - { entity_name: truck_co_3,  field: enabled, values: [false, false, false, true] }
+        - { entity_name: truck_opp_3, field: enabled, values: [false, false, false, true] }
+
+  execution:
+    num_runs: 15
+    base_seed: 12345
+    task_timeout_sec: 900
+    real_time_factor: 2.0
+    max_concurrency: 12
+    output_name: "road_multicar_kkftune"

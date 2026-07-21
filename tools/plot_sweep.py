@@ -1029,9 +1029,71 @@ def generate_table_rows(df, opt_angle):
                     
     return "\n".join(rows)
 
+def generate_generic_plots(df, plots_dir, x_var, series_var=None, vehicle=None):
+    """任意のスイープ変数列を x 軸にした汎用プロット群を生成する。
+
+    x_var:      x軸に使う列名 (例 "density")
+    series_var: 系列の分割に使う列名 (例 "method"、省略時は vehicle_name 系列)
+    vehicle:    対象 vehicle_name (省略時は *_total 行、無ければ全行)
+    """
+    os.makedirs(plots_dir, exist_ok=True)
+    setup_matplotlib_style()
+
+    for col in [x_var] + ([series_var] if series_var else []):
+        if col not in df.columns:
+            print(f"Error: column '{col}' not in sweep_summary.csv "
+                  f"(available: {', '.join(df.columns)})")
+            sys.exit(1)
+
+    if vehicle:
+        data = df[df['vehicle_name'] == vehicle]
+    else:
+        totals = df[df['vehicle_name'].astype(str).str.endswith('_total')]
+        data = totals if not totals.empty else df
+
+    metrics = [
+        ('total_data_MB', 'Total transferred data [MB]'),
+        ('average_throughput_Gbps', 'Average throughput [Gbps]'),
+        ('average_rssi_dBm', 'Average RSSI [dBm]'),
+        ('connected_time_s', 'Connected time [s]'),
+        ('handover_count', 'Handover count'),
+    ]
+    series_col = series_var if series_var else 'vehicle_name'
+    numeric_x = pd.api.types.is_numeric_dtype(data[x_var])
+
+    for metric, ylabel in metrics:
+        if metric not in data.columns:
+            continue
+        fig, ax = plt.subplots(figsize=(6.4, 4.2))
+        for key, grp in data.groupby(series_col):
+            grp = grp.sort_values(x_var)
+            x = grp[x_var] if numeric_x else grp[x_var].astype(str)
+            ax.errorbar(x, grp[metric],
+                        yerr=grp.get(f'{metric}_std'),
+                        label=str(key), marker='o', markersize=4.5,
+                        linewidth=1.8, capsize=3)
+        ax.set_xlabel(x_var)
+        ax.set_ylabel(ylabel)
+        if numeric_x:
+            ax.set_xticks(sorted(data[x_var].unique()))
+        ax.grid(alpha=0.3, linewidth=0.5)
+        ax.legend(fontsize=8, title=series_col)
+        fig.tight_layout()
+        out = os.path.join(plots_dir, f"{metric}_vs_{x_var}.png")
+        fig.savefig(out, dpi=300)
+        plt.close(fig)
+        print(f"  wrote {out}")
+
+
 def main():
     parser = argparse.ArgumentParser(description="Generate plots and HTML report for sweep simulation")
     parser.add_argument("sweep_dir", nargs="?", default=None, help="Path to sweep results directory (e.g. sim_results/sweep_20260605_160503)")
+    parser.add_argument("--x-var", default=None,
+                        help="x軸に使う列名 (例: density)。指定時は汎用プロットモード")
+    parser.add_argument("--series-var", default=None,
+                        help="系列分割に使う列名 (例: method)。--x-var と併用")
+    parser.add_argument("--vehicle", default=None,
+                        help="汎用モードで対象にする vehicle_name (省略時 *_total)")
     args = parser.parse_args()
     
     sweep_dir = args.sweep_dir
@@ -1042,7 +1104,9 @@ def main():
             print(f"Error: {sim_results_dir} directory does not exist.")
             sys.exit(1)
             
-        sweeps = [os.path.join(sim_results_dir, d) for d in os.listdir(sim_results_dir) if d.startswith("sweep_")]
+        # sweep_summary.csv を持つディレクトリを対象 (output_name でリネームされた結果も含む)
+        sweeps = [os.path.join(sim_results_dir, d) for d in os.listdir(sim_results_dir)
+                  if os.path.exists(os.path.join(sim_results_dir, d, "sweep_summary.csv"))]
         if not sweeps:
             print("Error: No sweep directories found in sim_results.")
             sys.exit(1)
@@ -1058,7 +1122,14 @@ def main():
         
     print(f"Reading data from {summary_path}...")
     df = pd.read_csv(summary_path)
-    
+
+    if args.x_var:
+        plots_dir = os.path.join(sweep_dir, "plots")
+        print(f"Generating generic plots (x={args.x_var}, series={args.series_var})...")
+        generate_generic_plots(df, plots_dir, args.x_var, args.series_var, args.vehicle)
+        print(f"Generic plots saved to {plots_dir}")
+        return
+
     plots_dir = os.path.join(sweep_dir, "plots")
     print("Generating static matplotlib plots...")
     generate_static_plots(df, plots_dir)

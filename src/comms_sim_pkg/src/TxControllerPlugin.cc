@@ -26,6 +26,7 @@
 #include <regex>
 #include <iomanip>
 #include <atomic>
+#include <map>
 #include <mutex>
 #include "comms_sim_pkg/comms_calculator.hpp"
 #include "comms_sim_pkg/antenna_pattern_parser.hpp"
@@ -45,6 +46,43 @@
 
 namespace tx_controller
 {
+
+    /**
+     * BsOccupancyRegistry
+     * -------------------
+     * 複数Tx車両のプラグインインスタンス間で共有するBS占有台帳 (プロセス内 singleton)。
+     * P2P (802.15.3e ペアネット) では1つのBSデバイスは同時に1つのペアネットにしか
+     * 参加できないため、他車が占有中のBSへの grant は物理的に成立しない。
+     * MEASURE (測定専用) ペアネットも同様にBSを占有する。
+     */
+    class BsOccupancyRegistry {
+    public:
+        static BsOccupancyRegistry& Instance() {
+            static BsOccupancyRegistry inst;
+            return inst;
+        }
+
+        /// owner の占有を desired_bs のみに同期する (他の占有は解放)。
+        /// desired_bs<0 は全解放。占有に成功(既得含む)したら true。
+        bool Sync(const std::string& owner, int desired_bs) {
+            std::lock_guard<std::mutex> lock(this->mtx);
+            for (auto it = this->owner_by_bs.begin(); it != this->owner_by_bs.end();) {
+                if (it->second == owner && it->first != desired_bs) it = this->owner_by_bs.erase(it);
+                else ++it;
+            }
+            if (desired_bs < 0) return false;
+            auto it = this->owner_by_bs.find(desired_bs);
+            if (it == this->owner_by_bs.end()) {
+                this->owner_by_bs[desired_bs] = owner;
+                return true;
+            }
+            return it->second == owner;
+        }
+
+    private:
+        std::mutex mtx;
+        std::map<int, std::string> owner_by_bs;
+    };
 
     class TxControllerPlugin :
         public gz::sim::System,
@@ -253,6 +291,7 @@ namespace tx_controller
                 }
                 if (config["simulation"]["output_subdir"]) {
                     logger_config.output_subdir = config["simulation"]["output_subdir"].as<std::string>();
+                    this->config_output_subdir = logger_config.output_subdir;
                 }
                 if (config["simulation"]["summary_filename"]) {
                     logger_config.summary_filename = config["simulation"]["summary_filename"].as<std::string>();
@@ -354,6 +393,13 @@ namespace tx_controller
                 this->PrecalculateLUT(local_waypoints);
             }
 
+            // 決定論RSSIプロファイルの出力 (制御プレーンの事前地図 = 事前測量相当。
+            // LUTと同じ決定論チャネルで全ペアのRSSI(経路位置)を書き出し、
+            // KKF はこれを平均関数として偏差のみを学習する)
+            if (link_ctrl_params["export_rssi_profile"].as<bool>(false)) {
+                this->ExportRssiProfile(local_waypoints, current_model_name);
+            }
+
             // 測定レポート出力 (制御プレーンへの観測レポート、設計書§7)
             if (comms_params["measurement_report"]) {
                 auto rep = comms_params["measurement_report"];
@@ -402,6 +448,59 @@ namespace tx_controller
             this->scheduler.SetLUT(this->lut);
             gzmsg << "[TxControllerPlugin] Precalculated LUT with " << this->lut.size() << " trajectory points." << std::endl;
             gzmsg << "[TxControllerPlugin] Comms simulator initialized successfully!" << std::endl;
+        }
+
+        /**
+         * 決定論チャネル (距離減衰+アンテナ利得のみ) での全ペアRSSIを経路に沿って
+         * サンプリングし CSV 出力する。制御プレーンが事前地図 (平均関数) として読む。
+         * 事前測量 (サイトサーベイ) に相当し、遮蔽体・シャドウイング・フェージングは
+         * 含まない (LUT の事前知識と同一 = 公平比較)。
+         */
+        void ExportRssiProfile(const std::vector<Waypoint>& waypoints_to_use,
+                               const std::string& model_name_str) {
+            std::vector<Eigen::Vector3d> polyline_points;
+            for (const auto &wp : waypoints_to_use) {
+                polyline_points.push_back(Eigen::Vector3d(wp.x, wp.y, wp.z));
+            }
+            double res = std::max(0.5, this->heatmap_resolution_m);
+            auto samples = utils::sample_trajectory(polyline_points, res);
+            if (samples.empty()) return;
+
+            std::string subdir = this->config_output_subdir.empty()
+                                     ? std::string("default") : this->config_output_subdir;
+            std::string dir = "/workspace/sim_results/" + subdir + "/rssi_profiles";
+            try {
+                std::filesystem::create_directories(dir);
+            } catch (const std::exception& e) {
+                std::cerr << "[TxControllerPlugin] rssi_profiles dir error: " << e.what() << std::endl;
+                return;
+            }
+            std::string path = dir + "/" + model_name_str + "_profile.csv";
+            std::ofstream ofs(path);
+            if (!ofs.is_open()) return;
+
+            size_t num_tx = this->vehicle_antennas.size();
+            size_t num_rx = this->base_stations_cfg.size();
+            ofs << "px,py,pz";
+            for (size_t a = 0; a < num_tx; ++a)
+                for (size_t b = 0; b < num_rx; ++b)
+                    ofs << ",rssi_" << a << "_" << b;
+            ofs << "\n";
+
+            for (const auto &sample : samples) {
+                Eigen::Matrix3d rot = utils::rpy_to_rotmat(0.0, 0.0, sample.yaw);
+                auto all_metrics = this->comms_env.CalculateMetrics(
+                    this->vehicle_antennas, this->base_stations_cfg, sample.pos, rot);
+                ofs << std::fixed << std::setprecision(3)
+                    << sample.pos.x() << "," << sample.pos.y() << "," << sample.pos.z();
+                for (size_t a = 0; a < num_tx; ++a)
+                    for (size_t b = 0; b < num_rx; ++b)
+                        ofs << "," << all_metrics[a][b].best_rssi;
+                ofs << "\n";
+            }
+            ofs.close();
+            gzmsg << "[TxControllerPlugin] Exported deterministic RSSI profile ("
+                  << samples.size() << " pts) to " << path << std::endl;
         }
 
         void PrecalculateLUT(const std::vector<Waypoint>& waypoints_to_use) {
@@ -526,6 +625,9 @@ namespace tx_controller
             ExternalScheduleStrategy::Schedule schedule;
             schedule.valid_until = msg.valid_until();
             for (const auto &entry : msg.plan()) {
+                // 複数Tx車両: vehicle が指定されたエントリは該当車両のみが実行する
+                // (空文字は全車両向け = 単一車両構成の後方互換)
+                if (!entry.vehicle().empty() && entry.vehicle() != this->model_name) continue;
                 schedule.plan.push_back({entry.t_start(), entry.ant(), entry.bs(),
                                          entry.mode() == comms_sim::msgs::MEASURE});
             }
@@ -646,6 +748,7 @@ namespace tx_controller
             comms_sim::msgs::MeasurementReport report_msg;
             std::vector<bool> grant_flags(this->vehicle_antennas.size(), false);
 
+            bool any_grant_synced = false;
             for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
                 auto &ant = this->vehicle_antennas[i];
                 bool has_grant;
@@ -661,7 +764,16 @@ namespace tx_controller
                 } else {
                     has_grant = static_cast<int>(i) == this->active_antenna_idx;
                 }
-                
+
+                // BS排他 (複数Tx車両): 他車が占有中のBSへの grant は成立しない。
+                // 車両あたり1ペアネット前提 (本評価の全ポリシー) のため、複数grant時は
+                // 最後の割当が優先される。
+                if (has_grant && ant.assigned_bs_idx >= 0) {
+                    has_grant = BsOccupancyRegistry::Instance().Sync(
+                        this->model_name, ant.assigned_bs_idx);
+                    any_grant_synced = true;
+                }
+
                 bool link_ready = false;
                 if (!has_grant || !ant.comm_active) {
                     if (ant.link_state != "DISCONNECTED") {
@@ -743,6 +855,11 @@ namespace tx_controller
                 }
             }
 
+            // grant が1つも無いステップでは自車のBS占有を解放する
+            if (!any_grant_synced) {
+                BsOccupancyRegistry::Instance().Sync(this->model_name, -1);
+            }
+
             // 測定レポートの発行 (20Hz sim 目安、physics step 毎の発行は禁止)
             // P2P制約: grant中の割当ペアのみ (observe_all_pairs=true なら全ペア=理想観測の上限評価)
             if (do_report) {
@@ -765,6 +882,7 @@ namespace tx_controller
                     }
                 }
                 report_msg.set_t_sim(current_time_s);
+                report_msg.set_vehicle(this->model_name);
                 auto *vp = report_msg.mutable_vehicle_pos();
                 vp->set_x(pos.x());
                 vp->set_y(pos.y());

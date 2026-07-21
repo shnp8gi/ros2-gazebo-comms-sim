@@ -1,0 +1,48 @@
+# 幹線道路・複数車両順次配信の本評価 (単一ファイルで 方式x密度 の全20条件)
+#   実行:   python3 tools/sweep_sim.py --sweep-config config/sweep/road_multicar_eval.yaml
+#   進捗:   python3 tools/sweep_progress.py --watch
+#   作図:   python3 tools/plot_sweep.py sim_results/road_multicar_eval --x-var density --series-var method
+#
+# CRN: base_seed 固定 + run毎シード導出により、同一 run 番号は全条件で同一乱数
+# (方式間・密度間の paired 比較が成立)。
+sweep:
+  name: "road_multicar_eval"
+  description: "5方式 x 遮蔽密度4条件 x N=15 (乗用車3台順次配信、BS排他あり)"
+  scenario: "config/scenarios/road_multicar.yaml"
+
+  variables:
+    # 制御方式: 5方式を config ターゲットの並列リストで切替 (labels が結果CSVの列値)
+    - name: method
+      labels: [lut, a3, ts_kf, kkf_notrk, kkf_full]
+      targets:
+        - config: "link_controller_node.ros__parameters.scheduling_policy"
+          values: [feedforward_optimal, external_schedule, external_schedule, external_schedule, external_schedule]
+        - config: "link_controller_node.ros__parameters.control_plane"
+          values: [none, a3, ts_kf, kkf_mpc, kkf_mpc]
+        - config: "link_controller_node.ros__parameters.kkf_tracker_enabled"
+          values: [true, true, true, false, true]
+        - config: "comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs"
+          values: [false, false, true, true, true]
+        - config: "comms_simulator_node.ros__parameters.measurement_report.enabled"
+          values: [false, true, true, true, true]
+
+    # 遮蔽密度: トラック8台の enabled を状態ごとに切替 (0/2/4/8台)
+    - name: density
+      labels: [0, 2, 4, 8]
+      targets:
+        - { entity_name: truck_co_0,  field: enabled, values: [false, true,  true,  true] }
+        - { entity_name: truck_opp_0, field: enabled, values: [false, true,  true,  true] }
+        - { entity_name: truck_co_1,  field: enabled, values: [false, false, true,  true] }
+        - { entity_name: truck_opp_1, field: enabled, values: [false, false, true,  true] }
+        - { entity_name: truck_co_2,  field: enabled, values: [false, false, false, true] }
+        - { entity_name: truck_opp_2, field: enabled, values: [false, false, false, true] }
+        - { entity_name: truck_co_3,  field: enabled, values: [false, false, false, true] }
+        - { entity_name: truck_opp_3, field: enabled, values: [false, false, false, true] }
+
+  execution:
+    num_runs: 15
+    base_seed: 12345          # 全条件共通 = CRN
+    task_timeout_sec: 900
+    real_time_factor: 2.0
+    max_concurrency: 12
+    output_name: "road_multicar_eval"   # 結果は sim_results/road_multicar_eval/ に集約

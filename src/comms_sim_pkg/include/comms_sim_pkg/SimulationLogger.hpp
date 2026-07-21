@@ -212,9 +212,9 @@ namespace tx_controller
                 }
             }
 
-            // 2. Save event log
+            // 2. Save event log (複数Tx車両で衝突しないようモデル名を含める)
             if (!this->event_records.empty()) {
-                std::string event_filename = events_dir + "/" + file_prefix + "_handover_events.csv";
+                std::string event_filename = events_dir + "/" + file_prefix + "_" + model_name + "_handover_events.csv";
                 std::ofstream ofs_event(event_filename);
                 if (ofs_event.is_open()) {
                     ofs_event << "time_s,event_type,active_antenna,prev_antenna,details\n";
@@ -230,9 +230,9 @@ namespace tx_controller
                 }
             }
 
-            // 3. Save control log
+            // 3. Save control log (複数Tx車両で衝突しないようモデル名を含める)
             if (!this->control_records.empty()) {
-                std::string control_filename = controls_dir + "/" + file_prefix + "_control_log.csv";
+                std::string control_filename = controls_dir + "/" + file_prefix + "_" + model_name + "_control_log.csv";
                 std::ofstream ofs_ctrl(control_filename);
                 if (ofs_ctrl.is_open()) {
                     ofs_ctrl << "time_s,vehicle_x,vehicle_y,vehicle_yaw_" << utils::angle_unit_label(this->config.angle_unit)
@@ -250,12 +250,18 @@ namespace tx_controller
             }
 
             // 4. Save summary
+            // 複数Tx車両では各車のプラグインインスタンスが同一サマリファイルへ書くため、
+            // プロセス内 mutex で直列化して追記する (SaveLogs はインスタンスごとに1回のみ)。
+            static std::mutex summary_file_mutex;
+            std::lock_guard<std::mutex> sum_lock(summary_file_mutex);
             std::string sum_filename = summaries_dir + "/" + (this->config.summary_filename.empty() ? (model_name + "_summary.csv") : this->config.summary_filename);
-            std::ofstream ofs_sum(sum_filename);
+            bool fresh_file = !std::filesystem::exists(sum_filename) ||
+                              std::filesystem::file_size(sum_filename) == 0;
+            std::ofstream ofs_sum(sum_filename, std::ios::app);
             if (ofs_sum.is_open()) {
                 CsvSummaryFormatter formatter;
-                ofs_sum << formatter.GetHeader();
-                
+                if (fresh_file) ofs_sum << formatter.GetHeader();
+
                 int handover_count = 0;
                 for (const auto& ev : this->event_records) {
                     if (ev.event_type.find("HANDOVER") != std::string::npos) {
@@ -270,7 +276,7 @@ namespace tx_controller
                     ofs_sum << formatter.Format(metrics);
                 }
 
-                if (vehicle_antennas.size() >= 3) {
+                if (vehicle_antennas.size() >= 2) {
                     auto total_metrics = MetricsCalculator::CalculateTotal(model_name, antenna_metrics, scheduling_policy, handover_count);
                     ofs_sum << formatter.Format(total_metrics);
                 } else if (vehicle_antennas.empty()) {

@@ -2,6 +2,20 @@
 import numpy as np
 
 
+class ConstantBasis:
+    """
+    定数基底 φ(s) = [1]。α = [バイアス] に対応する。
+    事前地図 (決定論RSSIプロファイル) を平均関数とする偏差学習モードで使う
+    (偏差場のトレンドは距離依存を持たないため定数のみ)。
+    """
+
+    def dimension(self):
+        return 1
+
+    def evaluate(self, s):
+        return np.array([1.0])
+
+
 class LogDistanceBasis:
     """
     対数距離基底 φ(s) = [1, log10(max(d(s), d_min))]^T。

@@ -1,0 +1,41 @@
+# 新パイプラインの一気通貫スモークテスト用ミニスイープ
+#   - 行指向 cases 記法 (方式) + entity_groups 記法 (遮蔽密度) の実機検証
+#   - sim.py run -> analyze -> plot -> report -> reproduce -> verify を通す
+#   実行: python3 tools/sim.py run --sweep-config scratch/pipeline_smoke_sweep.yaml
+sweep:
+  name: "pipeline_smoke"
+  description: "新記法・manifest・raw layout・parquet統合の一気通貫検証 (2方式x2密度x1run)"
+  scenario: "config/scenarios/road_multicar.yaml"
+
+  variables:
+    - name: method
+      cases:
+        lut:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: feedforward_optimal
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: false
+        ts_kf:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: external_schedule
+            link_controller_node.ros__parameters.control_plane: ts_kf
+            comms_simulator_node.ros__parameters.measurement_report.enabled: true
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: true
+
+    - name: density
+      entity_groups:
+        "0": []
+        "8": [truck_co_0, truck_co_1, truck_co_2, truck_co_3,
+              truck_opp_0, truck_opp_1, truck_opp_2, truck_opp_3]
+
+  analysis:
+    group_by: [method, density]
+    baseline: ts_kf
+
+  execution:
+    num_runs: 1
+    base_seed: 12345
+    task_timeout_sec: 600
+    real_time_factor: 2.0
+    max_concurrency: 4
+    output_name: "pipeline_smoke"
