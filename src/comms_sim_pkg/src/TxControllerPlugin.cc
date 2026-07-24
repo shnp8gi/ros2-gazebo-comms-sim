@@ -307,6 +307,12 @@ namespace tx_controller
             double comm_data_limit = comms_params["comm_data_limit_mb"].as<double>(-1.0);
             this->comm_data_limit_mb = comm_data_limit;
             this->link_establishment_time_ms = comms_params["link_establishment_time_ms"].as<double>(2.0);
+            // 通信計算の間引き周期 [s] (0 = 物理ステップ毎 = 従来動作)。物理は
+            // 1kHz でもチャネル評価 (指向性補間 + 遮蔽OBB) はその精度を要さず、
+            // ここが多車両×多遮蔽体で RTF のボトルネックになる。間引き時は
+            // 経過sim時間を実効dtとしてデータ会計・リンク確立に用いるため、
+            // report_period_s 以下に保てば観測レポート周期は変わらない。
+            this->comms_update_period_s = comms_params["comms_update_period_s"].as<double>(0.0);
 
             // 4. Link controller parameters
             auto link_ctrl_params = config["link_controller_node"]["ros__parameters"];
@@ -678,6 +684,19 @@ namespace tx_controller
             double dt = std::chrono::duration<double>(_info.dt).count();
             if (dt <= 0.0) return;
 
+            // 通信計算の間引き (comms_update_period_s > 0)。実効 dt = 前回comms
+            // 更新からの経過sim時間とし、データ会計 (throughput·dt) とリンク確立
+            // (T_est/dt ステップ) の総量が物理ステップ毎と一致するようにする。
+            if (this->comms_update_period_s > 0.0) {
+                if (this->last_comms_time_s >= 0.0) {
+                    double elapsed = current_time_s - this->last_comms_time_s;
+                    // 1e-9 の許容で「ちょうど周期」を取りこぼさない
+                    if (elapsed < this->comms_update_period_s - 1e-9) return;
+                    dt = elapsed;
+                }
+                this->last_comms_time_s = current_time_s;
+            }
+
             if (this->start_time_sec < 0.0) {
                 this->start_time_sec = current_time_s;
             }
@@ -970,6 +989,10 @@ namespace tx_controller
 
         std::mutex logs_mutex;
         BlockageEnvironment blockage_env;
+
+        // 通信計算の間引き (0 = 物理ステップ毎)。last_comms_time_s は実効dt算出用
+        double comms_update_period_s = 0.0;
+        double last_comms_time_s = -1.0;
 
         // 測定レポート出力 (データプレーンI/O)
         bool report_enabled = true;

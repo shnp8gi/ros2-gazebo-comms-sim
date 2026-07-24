@@ -5,6 +5,7 @@
 #include <memory>
 #include <Eigen/Dense>
 #include <yaml-cpp/yaml.h>
+#include "comms_sim_pkg/RateModel.hpp"
 
 namespace comms_sim {
 
@@ -71,10 +72,17 @@ struct CommsMetrics {
 
 class CommsCalculator {
 public:
+  // 旧互換: mcs_table_path から MCS テーブル写像を内部生成する
   CommsCalculator(std::unique_ptr<PropagationModel> model = nullptr,
                   double tx_power_dbm = 20.0,
                   double noise_variance = 2.0,
                   const std::string& mcs_table_path = "");
+
+  // レート写像 (IRateModel) を注入する構成 (本番仕様 §4.3)
+  CommsCalculator(std::unique_ptr<PropagationModel> model,
+                  double tx_power_dbm,
+                  double noise_variance,
+                  std::unique_ptr<IRateModel> rate_model);
 
   CommsMetrics calculate_all(const Eigen::Vector3d& tx_pos,
                              const Eigen::Vector3d& bs_pos,
@@ -97,11 +105,9 @@ public:
 
 private:
   std::unique_ptr<PropagationModel> model_;
+  std::unique_ptr<IRateModel> rate_model_;
   std::mt19937 rng_;
-  std::vector<double> mcs_rssi_, mcs_throughput_;
 
-  void load_mcs_table(const std::string& path);
-  void init_default_mcs_table();
   double calculate_throughput(double rssi) const;
 };
 

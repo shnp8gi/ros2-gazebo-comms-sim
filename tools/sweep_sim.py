@@ -46,8 +46,10 @@ import lib.system_monitor as sysmon
 
 from lib.sweep_kinematics import estimate_expected_duration
 from lib.sweep_data import average_summaries, get_completed_tasks, validate_sweep_summary
-from lib.scenario_loader import load_scenario, generate_sim_params, write_sim_params
+from lib.scenario_loader import (load_scenario, generate_sim_params,
+                                 write_sim_params, apply_scenario_overrides)
 from lib.task_formatting import build_logging_strings, extract_legacy_overrides
+from lib import traffic_gen
 from lib.result_file_access import ensure_writable
 from lib import manifest as eval_manifest
 
@@ -659,7 +661,22 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                 scen_path = 'config/scenarios/default.yaml'
                 
             scenario = load_scenario(scen_path)
-            
+
+            # scenario レベルの sweep 上書き (cases の scenario: キー、例: traffic
+            # 密度)。展開より前に適用しないと掃引がきかない
+            scenario_ovrs = [o for o in overrides if o.get('scenario_path')]
+            if scenario_ovrs:
+                apply_scenario_overrides(scenario, scenario_ovrs)
+                overrides = [o for o in overrides if not o.get('scenario_path')]
+
+            # 遮蔽交通流の run 毎決定論展開 (traffic: セクション、本番仕様 §3.3)。
+            # シードは run_idx のみに依存するため方式・条件間で同一実現 (CRN)
+            traffic_seed = sweep_config.traffic_seed_for(run_idx)
+            n_traffic = traffic_gen.expand_traffic(scenario, traffic_seed)
+            if n_traffic:
+                print(f"[Worker {worker_id}] Traffic expanded: {n_traffic} blockers "
+                      f"(seed {traffic_seed})")
+
             target_scenario = scenario['scenario'] if 'scenario' in scenario else scenario
             if 'simulation_overrides' not in target_scenario:
                 target_scenario['simulation_overrides'] = {}

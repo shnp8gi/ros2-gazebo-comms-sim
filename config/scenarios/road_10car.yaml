@@ -1,0 +1,223 @@
+# 本番シナリオ (本番仕様 docs/production_sim_spec.md)。
+# tools/gen_road_scenario.py により生成 — 手編集より再生成を推奨:
+#   python3 tools/gen_road_scenario.py --out config/scenarios/road_10car.yaml
+# 角度規約: RSU yaw = -90°+rsu_tilt (下流へ) / 車アンテナ relative yaw = +veh_tilt (RSU側へ)
+# traffic: は run 毎に tools/lib/traffic_gen.py が blocker へ決定論展開する (CRN)
+scenario:
+  name: road_10car
+  description: '幹線道路 60km/h・乗用車10台×RSU3局 (需要超過) + 車種混合の確率交通遮蔽 (traffic: を run 毎展開)。RSU yaw=-90°+15.0°
+    (下流へ), 車アンテナ +15.0° (RSU側へ)。tools/gen_road_scenario.py により生成'
+  base_config: src/comms_sim_pkg/config/sim_params.yaml
+  simulation_overrides: {headless: true, real_time_factor: 2.0, logging_level: 3, physics_max_step_size: 0.001}
+  config_overrides:
+    link_controller_node:
+      ros__parameters: {scheduling_policy: external_schedule, control_plane: kkf_mpc, schedule_topic: /comms/ho_schedule,
+        ff_max_pairs: 1, export_rssi_profile: true, kkf_use_prior: false, kkf_assigner: hungarian, kkf_switch_bonus_db: 3.0,
+        kkf_replan_period_s: 0.2, kkf_horizon_s: 4.0, kkf_plan_dt_s: 0.2, kkf_kappa: 1.0, kkf_idle_lcb_db: -110.0,
+        kkf_basis: rbf, kkf_rbf_num_bases: 20, kkf_rbf_width_m: 0.0, kkf_sigma_nu_db: 4.0, kkf_corr_length_s_m: 20.0,
+        kkf_corr_length_t_s: 5.0, kkf_varmap_enabled: true, kkf_varmap_grid_m: 2.0, kkf_varmap_prior_var_db2: 0.0,
+        kkf_state_dir: '', kkf_state_save: false, kkf_q_forget: 0.05, kkf_state_gamma: 0.997, kkf_tracker_enabled: false,
+        tskf_process_noise_q: 25.0, tskf_prior_mean_dbm: -120.0, tskf_prior_var: 400.0}
+    comms_simulator_node:
+      ros__parameters:
+        tx_power: -7.0
+        comms_update_period_s: 0.005
+        rate_model: {type: shannon, bandwidth_hz: 100000000.0, noise_floor_dbm: -95.0, efficiency: 1.0,
+          snr_min_db: 0.0, snr_cap_db: 50.0}
+        channel:
+          seed: 42
+          blockage: {enabled: true, max_total_loss_db: 60.0}
+          shadowing: {enabled: true, type: frozen, sigma_db: 4.0, corr_length_m: 6.0, environment_seed: 1,
+            grid_m: 1.5, axis: x, u_min: -362.0, u_max: 200.0}
+          fading: {enabled: false}
+        measurement_report: {enabled: true, period_s: 0.05, noise_std_db: 2.0, observe_all_pairs: false,
+          seed: 123}
+  model_catalog:
+    Car:
+      sdf_path: models://SimpleBox
+      description: 配信対象の乗用車 (軽量box)
+      default_antenna_offset: [0.0, 0.0, 1.35]
+    antenna:
+      sdf_path: models://antenna
+      description: 沿道RSUアンテナ
+      default_antenna_offset: [0.0, 0.0, 2.5]
+    SedanBlocker:
+      sdf_path: models://GhostBox
+      description: 乗用車 (車高1.5m、視線下=遮蔽せず)
+      blockage:
+        size: [4.5, 1.8, 1.5]
+        loss_db: 8.0
+    TruckBlocker:
+      sdf_path: models://GhostBox
+      description: トラック (車高3.8m)
+      blockage:
+        size: [12.0, 2.5, 3.8]
+        loss_db: 26.0
+    BusBlocker:
+      sdf_path: models://GhostBox
+      description: バス (車高3.2m)
+      blockage:
+        size: [11.0, 2.5, 3.2]
+        loss_db: 22.0
+  traffic:
+    seed: 0
+    window_s: [0.0, 29.7]
+    corridor: [-150.0, 150.0]
+    margin_m: 30.0
+    max_vehicles: 200
+    tx_entry_jitter_s: 0.0
+    vehicle_mix:
+    - {model: SedanBlocker, ratio: 0.75}
+    - {model: TruckBlocker, ratio: 0.15}
+    - {model: BusBlocker, ratio: 0.1}
+    lanes:
+    - y: 2.5
+      direction: 1
+      speed_mps: 5.0
+      headway_s: {dist: lognormal, mean: 4.0, sigma: 0.6, min: 1.5}
+    - y: 4.5
+      direction: -1
+      speed_mps: 16.7
+      headway_s: {dist: exponential, mean: 6.0, min: 1.5}
+    - y: 6.0
+      direction: -1
+      speed_mps: 16.7
+      headway_s: {dist: exponential, mean: 8.0, min: 1.5}
+  entities:
+  - name: antenna_0
+    model: antenna
+    role: rx
+    static: true
+    pose: [-60.0, 8.0, 0.0, 0.0, 0.0, -1.308997]
+    antennas:
+    - name: antenna_0
+      offset: [0.0, 0.0, 2.5]
+      relative_rpy: [0.0, 0.0, 0.0]
+  - name: antenna_1
+    model: antenna
+    role: rx
+    static: true
+    pose: [0.0, 8.0, 0.0, 0.0, 0.0, -1.308997]
+    antennas:
+    - name: antenna_1
+      offset: [0.0, 0.0, 2.5]
+      relative_rpy: [0.0, 0.0, 0.0]
+  - name: antenna_2
+    model: antenna
+    role: rx
+    static: true
+    pose: [60.0, 8.0, 0.0, 0.0, 0.0, -1.308997]
+    antennas:
+    - name: antenna_2
+      offset: [0.0, 0.0, 2.5]
+      relative_rpy: [0.0, 0.0, 0.0]
+  - name: car_1
+    model: Car
+    role: tx
+    pose: [-150.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-150.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_1_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_2
+    model: Car
+    role: tx
+    pose: [-168.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-168.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_2_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_3
+    model: Car
+    role: tx
+    pose: [-186.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-186.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_3_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_4
+    model: Car
+    role: tx
+    pose: [-204.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-204.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_4_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_5
+    model: Car
+    role: tx
+    pose: [-222.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-222.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_5_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_6
+    model: Car
+    role: tx
+    pose: [-240.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-240.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_6_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_7
+    model: Car
+    role: tx
+    pose: [-258.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-258.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_7_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_8
+    model: Car
+    role: tx
+    pose: [-276.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-276.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_8_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_9
+    model: Car
+    role: tx
+    pose: [-294.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-294.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_9_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]
+  - name: car_10
+    model: Car
+    role: tx
+    pose: [-312.0, 0.0, 0.0, 0.0, 0.0, 0.0]
+    waypoints:
+    - [-312.0, 0.0, 0.0, 16.67]
+    - [150.0, 0.0, 0.0, 16.67]
+    antennas:
+    - name: car_10_ant
+      offset: [0.0, 0.0, 1.35]
+      relative_rpy: [0.0, 0.0, 0.261799]

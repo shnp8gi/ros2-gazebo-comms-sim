@@ -7,12 +7,20 @@ kkf_scheduler_node
 責務: gz-transport の I/O と周期制御のみ。数理 (予測器・ビタビDP) は
 comms_sim_pkg.kkf_core に全面委譲し、本ファイルは数式を持たない。
 
-制御則は link_controller_node.control_plane で選択する:
-  - "kkf_mpc": KKF地図 (第1層) + 遮蔽トラッカー (第2層) + ビタビDP — 提案手法
-  - "ts_kf":   ペアごとのスカラーKF時系列外挿 + ビタビDP — 先行研究ベースライン
-                (空間構造・遮蔽追跡なし。プランナ・実行系は kkf_mpc と共通)
+制御則は link_controller_node.control_plane で選択する (本番仕様 §7 の arm):
+  - "kkf_mpc": KKF地図 (第1層、RBF基底 + σ_ν²(s) 自己組織化) — 提案手法。
+                kkf_state_dir 指定で収束状態をロード (kkf_conv)、なしで kkf_cold
+  - "ts_kf":   ペアごとのスカラーKF時系列外挿 — 先行研究ベースライン
+                (tskf_trend_fallback: true で未観測対は決定論プロファイル代用)
+  - "trend":   決定論プロファイル (距離減衰+両端指向性) のみ、実測不使用 — 下界
+  - "oracle":  全対の現在真値 (observe_all_pairs + 雑音0 が前提) — 情報上界
   - "a3":      A3イベント型 (hysteresis+TTT、MEASUREスロットで近傍プローブ)
                 — 予測なしの標準ベースライン (kkf_core.a3 参照)
+
+L3 (車間割当) は kkf_assigner で選択する:
+  - "priority_dp": 逐次優先度付きビタビDP (従来。kkf_priority: entry/deficit_time)
+  - "hungarian":   リスク調整効用 μ−κσ のハンガリアン割当 (本番仕様 §6)。
+                    切替抑制は現割当BSへの kkf_switch_bonus_db で行う
 
 複数Tx車両 (順次配信):
   - 全車両のレポートを単一トピックで購読し、レポートの vehicle フィールドで振り分ける
@@ -43,9 +51,11 @@ import numpy as np
 import yaml
 
 from comms_sim_pkg.kkf_core import (
-    RoadCoordinate, ConstantBasis, LogDistanceBasis, KkfParams, Observation,
-    KrigedKalmanFilter, solve_handover_plan, TrackerParams, BlockageTracker,
-    ScalarKfParams, ScalarRssiKF, A3Params, A3Controller,
+    RoadCoordinate, ConstantBasis, LogDistanceBasis, RbfBasis, KkfParams,
+    Observation, KrigedKalmanFilter, solve_handover_plan, TrackerParams,
+    BlockageTracker, ScalarKfParams, ScalarRssiKF, A3Params, A3Controller,
+    VarianceMapParams, AleatoricVarianceMap, RemStore, basis_hash,
+    solve_assignment,
 )
 from comms_sim_pkg.kkf_core.geometry import rpy_to_rotmat
 
@@ -105,6 +115,41 @@ class SchedulerConfig:
         subdir = cfg.get('simulation', {}).get('output_subdir', '')
         self.profile_dir = (f"/workspace/sim_results/{subdir}/rssi_profiles"
                             if subdir else None)
+        # kkf arm が事前地図ハイブリッドを使うか。本番仕様 §7 では kkf_cold/conv
+        # は「まっさら→自己組織化」のため false (プロファイルは trend/kf 用に
+        # 出力だけする)。既定 true = 従来の kkf_full (=kkf_prior arm) 互換
+        self.kkf_use_prior = bool(link.get('kkf_use_prior', True))
+
+        # --- L3 割当方式 (本番仕様 §6) ---
+        self.assigner = link.get('kkf_assigner', 'priority_dp')
+        self.switch_bonus_db = float(link.get('kkf_switch_bonus_db', 3.0))
+
+        # --- 第1層の基底 (本番仕様 §5.1) ---
+        # "auto" = 従来動作 (prior あり→Constant / なし→LogDistance)、"rbf" = RBF基底
+        self.basis_type = link.get('kkf_basis', 'auto')
+        self.rbf_num_bases = int(link.get('kkf_rbf_num_bases', 20))
+        self.rbf_width_m = float(link.get('kkf_rbf_width_m', 0.0))
+        self.rbf_s_min = float(link.get('kkf_rbf_s_min', 0.0))
+        self.rbf_s_max = float(link.get('kkf_rbf_s_max', 0.0))  # 0 = 道路全長
+
+        # --- σ_ν²(s) 自己組織化マップ (本番仕様 §5.2) ---
+        self.varmap_enabled = bool(link.get('kkf_varmap_enabled', False))
+        self.varmap_grid_m = float(link.get('kkf_varmap_grid_m', 2.0))
+        self.varmap_prior_var_db2 = float(link.get('kkf_varmap_prior_var_db2', 0.0))
+
+        # --- 走行間永続化 (本番仕様 §5.3) ---
+        self.state_dir = str(link.get('kkf_state_dir', '') or '')
+        self.state_save = bool(link.get('kkf_state_save', False))
+        self.q_forget = float(link.get('kkf_q_forget', 0.05))
+        self.state_gamma = float(link.get('kkf_state_gamma', 0.997))
+        self.state_save_period_s = float(link.get('kkf_state_save_period_s', 2.0))
+        self.kkf_freeze = bool(link.get('kkf_freeze', False))
+
+        # --- arm: ts_kf の未観測対フォールバック / oracle (本番仕様 §7) ---
+        self.tskf_trend_fallback = bool(link.get('tskf_trend_fallback', False))
+        self.oracle_staleness_s = float(link.get('oracle_staleness_s', 1.0))
+        self.observe_all_pairs = bool(report_cfg.get('observe_all_pairs', False))
+        self.report_noise_std = float(report_cfg.get('noise_std_db', 2.0))
 
         # C++ KkfConfig と同一のパラメータ名 (link_controller_node.ros__parameters)
         self.replan_period_s = link.get('kkf_replan_period_s', 0.2)
@@ -261,28 +306,87 @@ def load_prior_profiles(cfg: SchedulerConfig, road: RoadCoordinate,
 
 
 class KkfMapPredictor:
-    """提案手法: RSUごとのKKF地図 (第1層) + 遮蔽トラッカー (第2層)。
+    """提案手法: RSUごとのKKF地図 (第1層) + σ_ν²(s) 自己組織化マップ。
 
     地図は弧長座標上の場であり車両に依存しない = 複数車両で自然に共有される
     (先行車の測定が後続車の予測を改善する)。
 
-    事前地図 (PriorProfile) がある場合は「決定論プロファイルを平均関数、
-    KKFは偏差 (シャドウイング・遮蔽・モデル誤差) のみ学習」のハイブリッド動作。
-    事前地図が無い場合は従来どおり対数距離トレンドで RSSI を直接学習する。
+    基底 (kkf_basis):
+      - "auto": 従来動作。事前地図 (PriorProfile) があれば ConstantBasis の
+        偏差学習、なければ LogDistanceBasis の直接学習
+      - "rbf":  RBF基底で平均場 (指向性ウィンドウ込み) を直接学習する。
+        まっさら開始→自己組織化 (kkf_cold/conv、本番仕様 §5.1) の構成
+
+    σ_ν²(s) (kkf_varmap_enabled): 更新後残差の二乗を割引累積し、予測分散に
+    のみ加算する遮蔽リスクマップ (Kalman ゲインには使わない、本番仕様 §5.2)。
+
+    永続化 (kkf_state_dir / kkf_state_save): (α, P, S2, W) を RSU ごとに
+    保存・復元し、忘却は load 時に適用する (本番仕様 §5.3)。
     """
 
     def __init__(self, cfg: SchedulerConfig, road: RoadCoordinate, priors=None):
         self.cfg = cfg
         self.priors = priors
-        if priors:
-            self.maps = [KrigedKalmanFilter(ConstantBasis(), cfg.kkf_params)
-                         for _ in cfg.bs_positions]
+        self.frozen = cfg.kkf_freeze
+
+        s_max = cfg.rbf_s_max if cfg.rbf_s_max > cfg.rbf_s_min else road.total_length()
+        if cfg.basis_type == 'rbf':
+            bases = [RbfBasis(cfg.rbf_s_min, s_max, cfg.rbf_num_bases,
+                              cfg.rbf_width_m) for _ in cfg.bs_positions]
+        elif priors:
+            bases = [ConstantBasis() for _ in cfg.bs_positions]
         else:
-            self.maps = [KrigedKalmanFilter(LogDistanceBasis(road, p), cfg.kkf_params)
-                         for p in cfg.bs_positions]
-        # 第2層: RSUごとに独立の遮蔽トラッカー (そのRSUの残差マップの影を追跡)
+            bases = [LogDistanceBasis(road, p) for p in cfg.bs_positions]
+        self.maps = [KrigedKalmanFilter(b, cfg.kkf_params) for b in bases]
+
+        # σ_ν²(s): 位置依存の偶然的分散 (遮蔽リスクマップ)
+        self.varmaps = None
+        if cfg.varmap_enabled:
+            vm_params = VarianceMapParams(
+                s_min=cfg.rbf_s_min, s_max=s_max, grid_m=cfg.varmap_grid_m,
+                prior_var_db2=cfg.varmap_prior_var_db2)
+            self.varmaps = [AleatoricVarianceMap(vm_params)
+                            for _ in cfg.bs_positions]
+
+        # 第2層: RSUごとに独立の遮蔽トラッカー (そのRSUの残差マップの影を追跡)。
+        # 本番構成では無効 (σ_ν²マップが代替) だが比較用に残す
         self.trackers = [BlockageTracker(cfg.tracker_params)
                          for _ in cfg.bs_positions] if cfg.tracker_enabled else None
+
+        # 走行間永続化: load はここ (忘却込み)、save は save_state()
+        self.store = RemStore(cfg.state_dir) if cfg.state_dir else None
+        self.run_count = 0
+        if self.store:
+            loaded = 0
+            for b, kkf in enumerate(self.maps):
+                st = self.store.load(b, expected_basis_hash=basis_hash(bases[b].config()),
+                                     q_forget=cfg.q_forget, gamma=cfg.state_gamma)
+                if st is None:
+                    continue
+                kkf.alpha = st['alpha']
+                kkf.P = st['P']
+                if self.varmaps:
+                    self.varmaps[b].load_state(st['S2'], st['W'])
+                self.run_count = max(self.run_count, int(st['meta'].get('run_count', 0)))
+                loaded += 1
+            print(f"[kkf_scheduler] REM state loaded: {loaded}/{len(self.maps)} maps "
+                  f"(run_count={self.run_count}, dir={cfg.state_dir})", flush=True)
+
+    def save_state(self, t):
+        """定期スナップショット (アトミック上書き)。学習相の run 間受け渡しに使う。"""
+        if not self.store:
+            return
+        for b, kkf in enumerate(self.maps):
+            if self.varmaps:
+                s2, w = self.varmaps[b].S2, self.varmaps[b].W
+            else:
+                s2, w = np.zeros(1), np.zeros(1)
+            self.store.save(b, kkf.alpha, kkf.P, s2, w, {
+                'basis_hash': basis_hash(kkf.basis.config()),
+                'bs_id': b,
+                'run_count': self.run_count + 1,
+                'last_t': float(t),
+            })
 
     def _prior_mean(self, vid, ant, bs, s):
         if not self.priors or vid not in self.priors:
@@ -292,19 +396,25 @@ class KkfMapPredictor:
 
     def ingest(self, vid, t, antenna_s, entries):
         """entries: [(ant, bs, rssi_dbm)] を地図更新・トラッカー観測に振り分ける。"""
+        if self.frozen:
+            return  # kkf_freeze: 評価用に状態を凍結 (予測のみ)
         per_bs = [[] for _ in self.maps]
         for ant, bs, rssi in entries:
             s_obs = antenna_s[ant]
             z = rssi
             if self.priors:
                 z = rssi - self._prior_mean(vid, ant, bs, s_obs)  # 偏差のみ学習
-            # 式(10): 予測遮蔽帯内の観測は先回りで観測雑音を減格 (σ²_NLOS)
+            # 式(10): 予測遮蔽帯内の観測は先回りで観測雑音を減格 (σ²_NLOS)。
+            # 本番構成 (トラッカー無効) では固定 R_meas = σ_ν² を観測ノイズに
+            # 流用しない (平均場学習を殺さない、本番仕様 §5.2)
             noise_var = self.cfg.meas_noise_var
             if self.trackers and self.trackers[bs].is_blocked(s_obs, t):
                 noise_var = self.cfg.nlos_noise_var
             per_bs[bs].append(Observation(s=s_obs, t=t, z=z, noise_var=noise_var))
         for b, obs in enumerate(per_bs):
             fresh_residuals = self.maps[b].update(t, obs)
+            if self.varmaps:
+                self.varmaps[b].update_batch(fresh_residuals)
             if self.trackers:
                 self.trackers[b].ingest(t, fresh_residuals)
 
@@ -312,6 +422,9 @@ class KkfMapPredictor:
         mean, var = self.maps[bs].predict_at(s_future, t_future)
         if self.priors:
             mean += self._prior_mean(vid, ant, bs, s_future)
+        # σ_ν²(s) は予測分散にのみ加算 (本番仕様 §5.2)
+        if self.varmaps:
+            var += self.varmaps[bs].query(s_future)
         value = mean - kappa * math.sqrt(var)
         # 式(11) 第3項: 遮蔽帯の通過が予測される区間・時刻にはペナルティを加算
         if self.trackers and self.trackers[bs].is_blocked(s_future, t_future):
@@ -323,6 +436,8 @@ class KkfMapPredictor:
         means, variances = self.maps[bs].predict_batch(s_arr, t_arr)
         if self.priors and vid in self.priors:
             means = means + self.priors[vid].mean_batch(ant, bs, s_arr)
+        if self.varmaps:
+            variances = variances + self.varmaps[bs].query_batch(s_arr)
         values = means - kappa * np.sqrt(variances)
         if self.trackers:
             trk = self.trackers[bs]
@@ -332,11 +447,18 @@ class KkfMapPredictor:
         return values
 
     def status(self):
-        n_tracks = 0
+        parts = [f"prior={'on' if self.priors else 'off'}"]
         if self.trackers:
             n_tracks = sum(sum(1 for tr in trk.tracks if tr.is_confirmed())
                            for trk in self.trackers)
-        return f"tracks={n_tracks} prior={'on' if self.priors else 'off'}"
+            parts.append(f"tracks={n_tracks}")
+        if self.varmaps:
+            contrasts = ",".join(f"{vm.contrast():.1f}" for vm in self.varmaps)
+            parts.append(f"σν²contrast=[{contrasts}]")
+        if self.store:
+            parts.append(f"run_count={self.run_count}"
+                         + (" frozen" if self.frozen else ""))
+        return " ".join(parts)
 
     def track_detail(self, t):
         """検証用: 確定トラックの (BS index, 中心弧長s, 速度) を返す。"""
@@ -354,12 +476,17 @@ class TimeSeriesKfPredictor:
 
     空間構造を持たないため、前方の未観測区間の遮蔽・利得変化は原理的に
     予測できない (s_future は受け取るが使わない)。車間の情報共有もない。
+
+    tskf_trend_fallback: true (本番仕様 §7 の kf arm) では未観測対の予測を
+    無情報事前 (prior_mean_dbm) ではなく決定論プロファイル (trend) で代用する
+    — 情報制約を「trend + 実測時系列」に揃えるため。
     """
 
-    def __init__(self, cfg: SchedulerConfig, num_bs):
+    def __init__(self, cfg: SchedulerConfig, num_bs, priors=None):
         self.cfg = cfg
         self.num_bs = num_bs
         self.filters = {}  # (vid, ant, bs) -> ScalarRssiKF
+        self.priors = priors if cfg.tskf_trend_fallback else None
 
     def _filter(self, vid, ant, bs):
         key = (vid, ant, bs)
@@ -367,16 +494,29 @@ class TimeSeriesKfPredictor:
             self.filters[key] = ScalarRssiKF(self.cfg.scalar_kf_params)
         return self.filters[key]
 
+    def _trend_mean(self, vid, ant, bs, s):
+        if not self.priors or vid not in self.priors:
+            return None
+        return self.priors[vid].mean(ant, bs, s)
+
     def ingest(self, vid, t, antenna_s, entries):
         for ant, bs, rssi in entries:
             self._filter(vid, ant, bs).update(t, rssi, self.cfg.meas_noise_var)
 
     def lcb(self, vid, ant, bs, s_future, t_future, kappa):
-        mean, var = self._filter(vid, ant, bs).predict_at(t_future)
+        f = self._filter(vid, ant, bs)
+        if not f.initialized():
+            trend = self._trend_mean(vid, ant, bs, s_future)
+            if trend is not None:
+                return trend - kappa * math.sqrt(self.cfg.scalar_kf_params.prior_var)
+        mean, var = f.predict_at(t_future)
         return mean - kappa * math.sqrt(var)
 
     def lcb_batch(self, vid, ant, bs, s_arr, t_arr, kappa):
         f = self._filter(vid, ant, bs)
+        if not f.initialized() and self.priors and vid in self.priors:
+            means = self.priors[vid].mean_batch(ant, bs, s_arr)
+            return means - kappa * math.sqrt(self.cfg.scalar_kf_params.prior_var)
         out = np.empty(len(t_arr))
         for i, t in enumerate(t_arr):
             mean, var = f.predict_at(t)
@@ -385,15 +525,92 @@ class TimeSeriesKfPredictor:
 
     def status(self):
         n_init = sum(1 for f in self.filters.values() if f.initialized())
-        return f"kf_init={n_init}/{len(self.filters)}"
+        return (f"kf_init={n_init}/{len(self.filters)}"
+                f" fallback={'trend' if self.priors else 'prior'}")
+
+
+class TrendPredictor:
+    """arm: trend (下界)。決定論成分 (距離減衰 + 両端指向性) の完全知識のみ。
+
+    実測レポートを一切使わない (ingest は破棄)。σ=0 のため κ は効かない。
+    シャドウ・動的遮蔽を知らないことが情報制約 (本番仕様 §7)。
+    export_rssi_profile: true が前提 (決定論プロファイルが情報源)。
+    """
+
+    MISSING_DB = -150.0  # プロファイルに無いペア (割当対象外相当)
+
+    def __init__(self, cfg: SchedulerConfig, priors):
+        if not priors:
+            raise ValueError(
+                "control_plane: trend には export_rssi_profile: true が必要")
+        self.priors = priors
+
+    def ingest(self, vid, t, antenna_s, entries):
+        pass  # 実測は使わない (情報制約)
+
+    def lcb(self, vid, ant, bs, s_future, t_future, kappa):
+        prof = self.priors.get(vid)
+        m = prof.mean(ant, bs, s_future) if prof else None
+        return self.MISSING_DB if m is None else m
+
+    def lcb_batch(self, vid, ant, bs, s_arr, t_arr, kappa):
+        prof = self.priors.get(vid)
+        if prof is None or (ant, bs) not in prof.table:
+            return np.full(len(s_arr), self.MISSING_DB)
+        return prof.mean_batch(ant, bs, s_arr)
+
+    def status(self):
+        return "trend (deterministic profile only)"
+
+
+class OraclePredictor:
+    """arm: oracle (情報上界)。全対の現在真値を保持し、予測せず瞬時値で選ぶ。
+
+    observe_all_pairs: true + noise_std_db: 0 のレポート設定が前提
+    (満たさない場合は起動時に警告)。T_est ≪ スロットのため瞬時貪欲で
+    ほぼ上界になる (本番仕様 §7)。
+    """
+
+    MISSING_DB = -150.0
+
+    def __init__(self, cfg: SchedulerConfig):
+        self.staleness_s = cfg.oracle_staleness_s
+        self.latest = {}  # (vid, ant, bs) -> (t, rssi)
+        if not cfg.observe_all_pairs or cfg.report_noise_std > 0.0:
+            print("[kkf_scheduler] WARN: oracle には observe_all_pairs: true と "
+                  f"noise_std_db: 0 が必要 (現在 all_pairs={cfg.observe_all_pairs}, "
+                  f"noise={cfg.report_noise_std}) — 情報上界になっていない",
+                  flush=True)
+
+    def ingest(self, vid, t, antenna_s, entries):
+        for ant, bs, rssi in entries:
+            self.latest[(vid, ant, bs)] = (t, rssi)
+
+    def lcb(self, vid, ant, bs, s_future, t_future, kappa):
+        rec = self.latest.get((vid, ant, bs))
+        if rec is None or (t_future - rec[0]) > self.staleness_s:
+            return self.MISSING_DB
+        return rec[1]
+
+    def lcb_batch(self, vid, ant, bs, s_arr, t_arr, kappa):
+        return np.array([self.lcb(vid, ant, bs, 0.0, t, kappa) for t in t_arr])
+
+    def status(self):
+        return f"oracle pairs={len(self.latest)}"
 
 
 def make_predictor(cfg: SchedulerConfig, road: RoadCoordinate):
     if cfg.control_plane == 'kkf_mpc':
-        priors = load_prior_profiles(cfg, road)
+        priors = load_prior_profiles(cfg, road) if cfg.kkf_use_prior else None
         return KkfMapPredictor(cfg, road, priors)
     if cfg.control_plane == 'ts_kf':
-        return TimeSeriesKfPredictor(cfg, len(cfg.bs_positions))
+        priors = (load_prior_profiles(cfg, road)
+                  if cfg.tskf_trend_fallback else None)
+        return TimeSeriesKfPredictor(cfg, len(cfg.bs_positions), priors)
+    if cfg.control_plane == 'trend':
+        return TrendPredictor(cfg, load_prior_profiles(cfg, road))
+    if cfg.control_plane == 'oracle':
+        return OraclePredictor(cfg)
     raise ValueError(f"未知の control_plane: {cfg.control_plane}")
 
 
@@ -415,6 +632,11 @@ class MpcScheduler:
         # 実配信バイトのフィードバックは無いため、自ノードが発行した計画の
         # k=0 が非idleだった時間 (replan周期の積算) を提供サービス量の代理とする
         self.granted_time = {v['name']: 0.0 for v in cfg.vehicles}
+
+        # hungarian 割当の現ペア (vid -> (ant, bs) | None)。切替ヒステリシス
+        # (kkf_switch_bonus_db) の参照元
+        self.current_pair = {v['name']: None for v in cfg.vehicles}
+        self.last_save_t = -1e18
 
         self.lock = threading.Lock()
         self.inbox = []
@@ -461,8 +683,73 @@ class MpcScheduler:
 
         self.report_count += 1
 
-    # --- 再計画 (第3層 + 車間の逐次優先度付き割当) ---
+    # --- 再計画 (第3層) : kkf_assigner で割当方式を選ぶ ---
     def _replan(self, t):
+        if self.cfg.assigner == 'hungarian':
+            self._replan_hungarian(t)
+        else:
+            self._replan_priority_dp(t)
+
+    def _replan_hungarian(self, t):
+        """リスク調整効用 μ−κσ のハンガリアン割当 (本番仕様 §6)。
+
+        各再計画時刻の k=0 行列のみを解く (瞬時大域最適)。予測の価値は
+        LCB の μ (学習済み平均場) と σ (σ_ν² リスクマップ) を通じて入る。
+        ping-pong 抑制は現割当 BS への switch_bonus_db (ヒステリシス)。
+        余剰の車は自然に idle (min_utility = kkf_idle_lcb_db)。
+        """
+        wall0 = time.monotonic()
+        cfg = self.cfg
+        active = []   # (vid, vs, ant_s)
+        for v in cfg.vehicles:
+            vs = self.vstates[v['name']]
+            ant_s = vs.antenna_s_at(t)
+            if ant_s is not None:
+                active.append((v['name'], vs, ant_s))
+        if not active:
+            return
+
+        n_veh, n_bs = len(active), self.num_bs
+        utility = np.empty((n_veh, n_bs))
+        best_ant = np.zeros((n_veh, n_bs), dtype=int)
+        for i, (vid, vs, ant_s) in enumerate(active):
+            for b in range(n_bs):
+                # 車両の各アンテナのうち最良のものでそのBSを代表させる
+                vals = [self.predictor.lcb(vid, a, b, ant_s[a], t, cfg.kappa)
+                        for a in range(len(ant_s))]
+                a_best = int(np.argmax(vals))
+                utility[i, b] = vals[a_best]
+                best_ant[i, b] = a_best
+            cur = self.current_pair.get(vid)
+            if cur is not None and cur[1] < n_bs:
+                utility[i, cur[1]] += cfg.switch_bonus_db
+
+        pairs, _ = solve_assignment(utility, min_utility=cfg.idle_lcb_db)
+
+        sched = msgs.HoSchedule(
+            t_issued=t, valid_until=t + max(1.0, 2.5 * cfg.replan_period_s))
+        for i, (vid, vs, ant_s) in enumerate(active):
+            if i in pairs:
+                b = pairs[i]
+                a = int(best_ant[i, b])
+                self.current_pair[vid] = (a, b)
+                vs.current_state = a * n_bs + b
+                self.granted_time[vid] += cfg.replan_period_s
+                sched.plan.add(t_start=t, ant=a, bs=b, mode=msgs.DATA, vehicle=vid)
+            else:
+                self.current_pair[vid] = None
+                vs.current_state = len(ant_s) * n_bs  # idle
+                sched.plan.add(t_start=t, ant=0, bs=-1, mode=msgs.DATA, vehicle=vid)
+        self.pub.publish(sched)
+
+        if os.environ.get('KKF_DEBUG'):
+            picked = {active[i][0]: (int(best_ant[i, b]), int(b))
+                      for i, b in pairs.items()}
+            print(f"[kkf_debug] t={t:.2f} hungarian pairs={picked} "
+                  f"u_max={utility.max():.1f} "
+                  f"wall={1e3 * (time.monotonic() - wall0):.0f}ms", flush=True)
+
+    def _replan_priority_dp(self, t):
         wall0 = time.monotonic()
         cfg = self.cfg
         K = max(1, round(cfg.horizon_s / cfg.plan_dt_s))
@@ -546,6 +833,21 @@ class MpcScheduler:
                 print(f"[track_debug] t={t:.2f} bs={b} s_center={s:.1f} v_est={v:+.1f}",
                       flush=True)
 
+    def _maybe_save_state(self, force=False):
+        """走行間永続化 (kkf_state_save)。定期 + 終了時のベストエフォート保存。
+
+        アトミック上書きのため、ノードが SIGKILL されても直近スナップショット
+        (既定 2s sim 間隔) までは残る (gz teardown segfault に保存を依存させない)。
+        """
+        cfg = self.cfg
+        if not (cfg.state_save and cfg.state_dir
+                and hasattr(self.predictor, 'save_state')):
+            return
+        if force or (self.last_t - self.last_save_t >= cfg.state_save_period_s):
+            if self.last_t >= 0.0:
+                self.predictor.save_state(self.last_t)
+                self.last_save_t = self.last_t
+
     def spin(self):
         """取込・計画・配信ループ (メインスレッド)。sim time はレポート由来の last_t。"""
         last_status_wall = time.monotonic()
@@ -560,6 +862,7 @@ class MpcScheduler:
                 if self.last_t >= 0.0 and self.last_t >= self.next_plan_t:
                     self._replan(self.last_t)
                     self.next_plan_t = self.last_t + self.cfg.replan_period_s
+                    self._maybe_save_state()
 
                 if time.monotonic() - last_status_wall >= 2.0:
                     last_status_wall = time.monotonic()
@@ -571,6 +874,11 @@ class MpcScheduler:
                           f"{kin} {self.predictor.status()}", flush=True)
         except KeyboardInterrupt:
             pass
+        finally:
+            try:
+                self._maybe_save_state(force=True)
+            except Exception as e:
+                print(f"[kkf_scheduler] state save on exit failed: {e}", flush=True)
 
 
 class A3Scheduler:

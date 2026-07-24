@@ -44,68 +44,23 @@ CommsCalculator::CommsCalculator(std::unique_ptr<PropagationModel> model,
                                  double tx_power_dbm,
                                  double noise_variance,
                                  const std::string& mcs_table_path)
+    : CommsCalculator(std::move(model), tx_power_dbm, noise_variance,
+                      std::make_unique<McsTableRateModel>(mcs_table_path)) {}
+
+CommsCalculator::CommsCalculator(std::unique_ptr<PropagationModel> model,
+                                 double tx_power_dbm,
+                                 double noise_variance,
+                                 std::unique_ptr<IRateModel> rate_model)
     : noise_variance(noise_variance), tx_power_dbm_(tx_power_dbm), rng_(std::random_device{}()) {
   if (model) {
     model_ = std::move(model);
   } else {
     model_ = std::make_unique<LogDistancePathLossModel>();
   }
-
-  if (!mcs_table_path.empty()) {
-    load_mcs_table(mcs_table_path);
-  } else {
-    init_default_mcs_table();
-  }
-
-  if (!mcs_rssi_.empty()) {
-    rssi_min = mcs_rssi_.front();
-    rssi_max = mcs_rssi_.back();
-  }
-}
-
-void CommsCalculator::load_mcs_table(const std::string& path) {
-  std::ifstream file(path);
-  if (!file.is_open()) {
-    std::cerr << "Failed to open MCS table: " << path << std::endl;
-    init_default_mcs_table();
-    return;
-  }
-
-  std::vector<std::pair<double, double>> data;
-  std::string line;
-  while (std::getline(file, line)) {
-    line.erase(0, line.find_first_not_of(" \r\n\t"));
-    if (line.empty() || line[0] == '#' || (line.size() >= 2 && line[0] == '/' && line[1] == '/')) {
-      continue;
-    }
-    std::stringstream ss(line);
-    std::string t1, t2;
-    if (std::getline(ss, t1, ',') && std::getline(ss, t2, ',')) {
-      try {
-        data.emplace_back(std::stod(t1), std::stod(t2));
-      } catch (...) {
-        // ignore
-      }
-    }
-  }
-
-  if (data.empty()) {
-    init_default_mcs_table();
-    return;
-  }
-
-  std::sort(data.begin(), data.end());
-  mcs_rssi_.clear();
-  mcs_throughput_.clear();
-  for (const auto& p : data) {
-    mcs_rssi_.push_back(p.first);
-    mcs_throughput_.push_back(p.second);
-  }
-}
-
-void CommsCalculator::init_default_mcs_table() {
-  mcs_rssi_ = {-61, -58, -55, -51, -45, -39};
-  mcs_throughput_ = {2.5813, 3.2853, 5.1627, 6.5707, 9.856, 13.1413};
+  rate_model_ = rate_model ? std::move(rate_model)
+                           : std::make_unique<McsTableRateModel>("");
+  rssi_min = rate_model_->MinRssiDbm();
+  rssi_max = rate_model_->MaxRssiDbm();
 }
 
 double CommsCalculator::calculate_distance(const Eigen::Vector3d& tx_pos, const Eigen::Vector3d& bs_pos) const {
@@ -124,12 +79,7 @@ std::pair<double, double> CommsCalculator::calculate_rssi(double distance, doubl
 }
 
 double CommsCalculator::calculate_throughput(double rssi) const {
-  if (rssi <= rssi_min) return 0.0;
-  if (rssi >= rssi_max) return mcs_throughput_.back();
-
-  auto it = std::upper_bound(mcs_rssi_.begin(), mcs_rssi_.end(), rssi);
-  size_t idx = std::distance(mcs_rssi_.begin(), it) - 1;
-  return mcs_throughput_[idx];
+  return rate_model_->RateGbps(rssi);
 }
 
 CommsMetrics CommsCalculator::calculate_all(const Eigen::Vector3d& tx_pos,

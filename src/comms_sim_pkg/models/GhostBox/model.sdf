@@ -1,0 +1,25 @@
+<?xml version="1.0"?>
+<sdf version="1.8">
+  <model name="GhostBox">
+    <link name="body">
+      <!-- collision を持たない可視ボックス。遮蔽車 (role: blocker) 用。
+           混雑した交通流では車線間・車間で物理形状が重なり得るため、
+           接触ソルバに載せない (SimpleBox の collision 込み形状は
+           重なり時に RTF を 1/30 以下へ落とす)。
+           通信の遮蔽 OBB は model_catalog.blockage が与えるので、
+           collision の有無は通信計算に影響しない -->
+      <pose>0 0 0.9 0 0 0</pose>
+      <gravity>false</gravity>
+      <inertial>
+        <mass>1500</mass>
+        <inertia>
+          <ixx>500</ixx><iyy>1500</iyy><izz>1500</izz>
+          <ixy>0</ixy><ixz>0</ixz><iyz>0</iyz>
+        </inertia>
+      </inertial>
+      <visual name="visual">
+        <geometry><box><size>4.5 2.0 1.6</size></box></geometry>
+      </visual>
+    </link>
+  </model>
+</sdf>

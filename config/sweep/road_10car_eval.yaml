@@ -1,0 +1,93 @@
+# 本番評価 (本番仕様 docs/production_sim_spec.md §7-§8): 10台×3RSU 需要超過
+#
+# 二相構成:
+#   1) 学習相 (先に実行、収束は learning_curve.csv で確認):
+#      python3 tools/sim.py learn --scenario config/scenarios/road_10car.yaml \
+#          --name road_10car_learn --runs 100 --snapshot-every 10
+#   2) 評価相 (本ファイル):
+#      python3 tools/sim.py run --sweep-config config/sweep/road_10car_eval.yaml
+#      python3 tools/sim.py analyze sim_results/road_10car_eval
+#
+# arm と情報制約 (仕様 §7 の表。ここに書いた設定が制約の実体):
+#   lut       静的LUT (環境既知・動的遮蔽を知らない参考上界ベースライン)
+#   trend     決定論プロファイルのみ (距離+両端指向性)。実測・遮蔽・シャドウを知らない = 下界
+#   kf        ペア時系列KF + 未観測対は trend 代用。grant対のみ観測
+#   kkf_cold  自己組織化REM、毎走行まっさら。grant対のみ観測
+#   kkf_conv  学習相の収束REMをロード (本命)。grant対のみ観測、状態は読み取り専用
+#   oracle    全対の現在真値 (observe_all_pairs + 雑音0) = 情報上界
+#
+# CRN: 全 arm ×全密度で base_seed 共通 → 同一 run_idx は同一の交通実現・測定雑音。
+# 学習相のシード域 (learn の --base-seed 既定 512345〜) と重ねないこと。
+sweep:
+  name: "road_10car_eval"
+  description: "6 arm × 遮蔽密度3条件 × N run (10台/3RSU 需要超過・固定シャドウ環境)"
+  scenario: "config/scenarios/road_10car.yaml"
+
+  variables:
+    - name: method
+      cases:
+        lut:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: feedforward_optimal
+            link_controller_node.ros__parameters.control_plane: none
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+        trend:
+          config:
+            link_controller_node.ros__parameters.control_plane: trend
+        kf:
+          config:
+            link_controller_node.ros__parameters.control_plane: ts_kf
+            link_controller_node.ros__parameters.tskf_trend_fallback: true
+        kkf_cold:
+          config:
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+        kkf_conv:
+          config:
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            # 学習相の収束状態を読み取り専用でロード (kkf_state_save は
+            # シナリオ既定 false のまま = 全 run が同一状態から開始)
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/road_10car_learn/rem_state
+        oracle:
+          config:
+            link_controller_node.ros__parameters.control_plane: oracle
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: true
+            comms_simulator_node.ros__parameters.measurement_report.noise_std_db: 0.0
+
+    # 遮蔽密度 (仕様 §8.3): 車頭時間と大型車混入率で発生率を数段階に掃引。
+    # scenario: キーは生成前のシナリオ辞書へ適用される (traffic_gen より前)
+    - name: density
+      cases:
+        low:      # 大型車 ~10%、流量まばら
+          scenario:
+            traffic.vehicle_mix[0].ratio: 0.90
+            traffic.vehicle_mix[1].ratio: 0.06
+            traffic.vehicle_mix[2].ratio: 0.04
+            traffic.lanes[0].headway_s.mean: 8.0
+            traffic.lanes[1].headway_s.mean: 10.0
+            traffic.lanes[2].headway_s.mean: 12.0
+        mid: {}   # シナリオ既定 (大型車 25% 相当・渋滞車線あり)
+        high:     # 渋滞+大型車 50% (遮蔽発生率の上限側)
+          scenario:
+            traffic.vehicle_mix[0].ratio: 0.50
+            traffic.vehicle_mix[1].ratio: 0.30
+            traffic.vehicle_mix[2].ratio: 0.20
+            traffic.lanes[0].headway_s.mean: 2.5
+            traffic.lanes[1].headway_s.mean: 4.0
+            traffic.lanes[2].headway_s.mean: 5.0
+
+  analysis:
+    group_by: [method, density]
+    arm_var: method
+    baseline: kkf_conv
+    metrics: [total_data_MB, connected_time_s, min_car_data_MB,
+              jain_index, nlos_grant_pct, ho_count]
+
+  execution:
+    # 本番は n≈100 (n=30 では不足、標準誤差併記)。まず 15 で smoke → 拡大
+    num_runs: 15
+    base_seed: 12345
+    task_timeout_sec: 900
+    real_time_factor: 2.0
+    # 閉ループ方式を含むため 4 以下厳守 (CPU競合で制御プレーンが崩壊する)
+    max_concurrency: 4
+    output_name: "road_10car_eval"

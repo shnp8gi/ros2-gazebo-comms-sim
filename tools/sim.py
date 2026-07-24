@@ -450,6 +450,141 @@ def cmd_clean(args):
     return 0
 
 
+# ------------------------------------------------------------------ learn
+
+def cmd_learn(args):
+    """学習相 (本番仕様 §8.1): kkf arm を直列反復し REM を自己組織化させる。
+
+    run ごとに sweep_sim を 1-run で起動し、共有 rem_state/ を介して
+    (α, P, S2, W) を受け渡す。base_seed を run ごとに +stride するため、
+    シード列は「単一スイープで num_runs=N」と同一 (交通は run 毎に変わり、
+    持続シャドウは environment_seed で固定 = 学習相の定義そのもの)。
+
+    学習ディレクトリのレイアウト (評価ディレクトリ契約の拡張):
+      sim_results/<name>/rem_state/                  最新状態 (= 収束状態)
+      sim_results/<name>/rem_state_snapshots/after_run_<m>/
+                                                     学習曲線・学習量掃引用
+      sim_results/<name>/learning_curve.csv          収束確認 (σ_ν² contrast 等)
+      sim_results/<name>/runs/run_<m>/               各 run の sweep 出力
+      sim_results/<name>/learn_manifest.yaml         再現に必要な入力の記録
+
+    評価相 (kkf_conv) は kkf_state_dir に上記 rem_state (またはスナップ
+    ショット) を指定し、kkf_state_save: false で読み取り専用にする。
+    """
+    if not IN_CONTAINER:
+        return delegate_to_container(sys.argv[1:])
+    import shutil
+    import numpy as np
+
+    name = args.name
+    learn_dir = os.path.join('sim_results', name)
+    state_dir = os.path.join(learn_dir, 'rem_state')
+    snap_root = os.path.join(learn_dir, 'rem_state_snapshots')
+    runs_root = os.path.join(learn_dir, 'runs')
+    for d in (learn_dir, state_dir, snap_root, runs_root, 'scratch'):
+        os.makedirs(d, exist_ok=True)
+    curve_path = os.path.join(learn_dir, 'learning_curve.csv')
+
+    stride = 1000  # sweep_config.RUN_SEED_STRIDE と一致させる
+    start_run = 1
+    if args.resume and os.path.exists(curve_path):
+        with open(curve_path) as f:
+            rows = [r for r in f.read().splitlines()[1:] if r]
+        if rows:
+            start_run = max(int(r.split(',')[0]) for r in rows) + 1
+        print(f"[learn] resume: run {start_run} から再開")
+    elif os.listdir(state_dir) and not args.resume:
+        sys.exit(f"[learn] {state_dir} に既存状態があります。継続なら --resume、"
+                 "やり直しなら rem_state/ を削除してください "
+                 "(黙って混ぜると収束履歴が汚染されるため中断)")
+
+    def state_metrics():
+        rows = []
+        for f in sorted(glob.glob(os.path.join(state_dir, 'bs*.npz'))):
+            bs = int(os.path.basename(f)[2:-4])
+            with np.load(f) as d:
+                alpha, P, S2, W = d['alpha'], d['P'], d['S2'], d['W']
+            ok = W >= 0.5
+            if ok.sum() >= 4:
+                var = S2[ok] / W[ok]
+                med = max(float(np.median(var)), 1e-12)
+                contrast = float(np.quantile(var, 0.9)) / med
+            else:
+                contrast = 1.0
+            rows.append({'bs': bs, 'alpha': alpha, 'p_trace': float(np.trace(P)),
+                         'contrast': contrast})
+        return rows
+
+    prev_alpha = {r['bs']: r['alpha'] for r in state_metrics()}
+    if start_run == 1:
+        with open(curve_path, 'w') as f:
+            f.write("run,bs,p_trace,sigma_nu_contrast,alpha_rms_delta_db\n")
+
+    for m in range(start_run, args.runs + 1):
+        sweep = {'sweep': {
+            'name': f"{name}_run{m}",
+            'scenario': args.scenario,
+            'variables': [{'name': 'method', 'cases': {'kkf_learn': {'config': {
+                'link_controller_node.ros__parameters.control_plane': 'kkf_mpc',
+                'link_controller_node.ros__parameters.kkf_state_dir':
+                    f"/workspace/{state_dir}",
+                'link_controller_node.ros__parameters.kkf_state_save': True,
+            }}}}],
+            'execution': {
+                'output_name': f"{name}/runs/run_{m}",
+                'num_runs': 1,
+                'base_seed': args.base_seed + stride * (m - 1),
+                'task_timeout_sec': args.timeout,
+                'max_concurrency': 1,
+            },
+        }}
+        sweep_path = os.path.join('scratch', f"learn_{name}.yaml")
+        with open(sweep_path, 'w') as f:
+            yaml.dump(sweep, f, sort_keys=False, allow_unicode=True)
+
+        print(f"\n[learn] ===== run {m}/{args.runs} "
+              f"(base_seed {sweep['sweep']['execution']['base_seed']}) =====")
+        rc = subprocess.call(
+            ['bash', '-c', f"cd /workspace && PYTHONDONTWRITEBYTECODE=1 "
+                           f"python3 tools/sweep_sim.py --sweep-config {sweep_path}"])
+        if rc != 0:
+            sys.exit(f"[learn] run {m} が失敗 (exit {rc})。状態は {state_dir} に "
+                     f"保存済み — 原因解消後 --resume で継続可能")
+
+        for r in state_metrics():
+            pa = prev_alpha.get(r['bs'])
+            delta = (float(np.sqrt(np.mean((r['alpha'] - pa) ** 2)))
+                     if pa is not None and pa.shape == r['alpha'].shape else float('nan'))
+            prev_alpha[r['bs']] = r['alpha']
+            with open(curve_path, 'a') as f:
+                f.write(f"{m},{r['bs']},{r['p_trace']:.4f},"
+                        f"{r['contrast']:.3f},{delta:.4f}\n")
+
+        if (args.snapshot_every > 0
+                and (m % args.snapshot_every == 0 or m == args.runs)):
+            snap = os.path.join(snap_root, f"after_run_{m}")
+            shutil.rmtree(snap, ignore_errors=True)
+            shutil.copytree(state_dir, snap)
+            print(f"[learn] snapshot: {snap}")
+
+    with open(os.path.join(learn_dir, 'learn_manifest.yaml'), 'w') as f:
+        yaml.dump({
+            'name': name,
+            'scenario': args.scenario,
+            'runs': args.runs,
+            'base_seed': args.base_seed,
+            'seed_stride': stride,
+            'snapshot_every': args.snapshot_every,
+            'state_dir': state_dir,
+            'note': ('評価相 (kkf_conv) は kkf_state_dir にこの rem_state を指定し '
+                     'kkf_state_save: false で使う。評価相の base_seed は学習相の '
+                     'シード域 [base_seed, base_seed+stride·runs) と重ねないこと'),
+            'finished_at': datetime.datetime.now().isoformat(timespec='seconds'),
+        }, f, sort_keys=False, allow_unicode=True)
+    print(f"\n[learn] 完了: {learn_dir} (learning_curve.csv で収束を確認)")
+    return 0
+
+
 # ------------------------------------------------------------------ main
 
 def main():
@@ -464,6 +599,19 @@ def main():
 
     p = sub.add_parser('status', help='進捗表示')
     p.add_argument('--watch', action='store_true')
+
+    p = sub.add_parser('learn', help='学習相: kkf を直列反復し REM を収束させる')
+    p.add_argument('--scenario', required=True,
+                   help='例: config/scenarios/road_10car.yaml')
+    p.add_argument('--name', required=True,
+                   help='学習ディレクトリ名 (sim_results/<name>)')
+    p.add_argument('--runs', type=int, default=100, help='学習走行数 (80〜120)')
+    p.add_argument('--base-seed', type=int, default=512345,
+                   help='学習相のシード基点 (評価相の域と重ねない)')
+    p.add_argument('--snapshot-every', type=int, default=10,
+                   help='m 走行ごとに rem_state をスナップショット (0=無効)')
+    p.add_argument('--timeout', type=int, default=900)
+    p.add_argument('--resume', action='store_true')
 
     p = sub.add_parser('analyze', help='parquet統合 + runs/agg/paired 集計')
     p.add_argument('eval_dir')
@@ -494,9 +642,10 @@ def main():
         return delegate_to_container(sys.argv[1:])
     os.chdir('/workspace' if IN_CONTAINER else REPO_ROOT)
 
-    return {'run': cmd_run, 'status': cmd_status, 'analyze': cmd_analyze,
-            'plot': cmd_plot, 'report': cmd_report, 'reproduce': cmd_reproduce,
-            'verify': cmd_verify, 'clean': cmd_clean}[args.command](args)
+    return {'run': cmd_run, 'status': cmd_status, 'learn': cmd_learn,
+            'analyze': cmd_analyze, 'plot': cmd_plot, 'report': cmd_report,
+            'reproduce': cmd_reproduce, 'verify': cmd_verify,
+            'clean': cmd_clean}[args.command](args)
 
 
 if __name__ == '__main__':

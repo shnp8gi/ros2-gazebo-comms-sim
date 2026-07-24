@@ -34,11 +34,14 @@ namespace tx_controller
             std::string h_plane_path = tx_controller::utils::resolve_path(comms_params["h_plane_path"].as<std::string>(""));
 
             auto pl = comms_params["path_loss"];
-            
+
             auto prop_model = comms_sim::PropagationModelFactory::Create(pl);
-            
+
+            // レート写像 (RSSI→Mbps)。rate_model: 未指定なら MCS テーブル (旧互換)。
+            auto rate_model = comms_sim::RateModelFactory::Create(
+                comms_params["rate_model"], mcs_table_path);
             this->comms_calculator = std::make_unique<comms_sim::CommsCalculator>(
-                std::move(prop_model), tx_power, noise_variance, mcs_table_path);
+                std::move(prop_model), tx_power, noise_variance, std::move(rate_model));
 
             // 合成チャネル(遮蔽・シャドウイング・フェージング)。channel: 未指定なら
             // 距離減衰のみと等価に振る舞う(後方互換)。

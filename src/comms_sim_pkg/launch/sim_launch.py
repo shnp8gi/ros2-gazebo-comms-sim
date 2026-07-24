@@ -624,7 +624,8 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     link_params_for_cp = config.get('link_controller_node', {}).get('ros__parameters', {})
     if (link_params_for_cp.get('scheduling_policy') == 'external_schedule'
-            and link_params_for_cp.get('control_plane') in ('kkf_mpc', 'ts_kf', 'a3')):
+            and link_params_for_cp.get('control_plane') in ('kkf_mpc', 'ts_kf', 'a3',
+                                                            'trend', 'oracle')):
         kkf_scheduler = TimerAction(
             period=gazebo_startup_delay,
             actions=[

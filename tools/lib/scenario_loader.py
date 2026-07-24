@@ -20,6 +20,39 @@ def deep_merge(dict1, dict2):
 def load_scenario(scenario_path):
     return load_yaml(scenario_path)
 
+def apply_scenario_overrides(scenario, overrides):
+    """cases の scenario: 上書き (生成前のシナリオ辞書へのドットパス) を適用する。
+
+    traffic: 等の scenario レベル定義を sweep 変数で掃引するためのフック。
+    パスは 'traffic.lanes[0].headway_s.mean' 形式 ([n] はリスト添字)。
+    config_overrides (生成後 sim_params へのドットパス) とは別物。
+    """
+    sc = scenario['scenario'] if 'scenario' in scenario else scenario
+    for ovr in overrides:
+        path = ovr.get('scenario_path')
+        if not path:
+            continue
+        curr = sc
+        parts = path.split('.')
+        for i, part in enumerate(parts):
+            name, idxs = part, []
+            while name.endswith(']') and '[' in name:
+                open_idx = name.rindex('[')
+                idxs.insert(0, int(name[open_idx + 1:-1]))
+                name = name[:open_idx]
+            last = (i == len(parts) - 1)
+            if last and not idxs:
+                curr[name] = ovr.get('value')
+                break
+            nxt = curr[name] if name else curr
+            for j, k in enumerate(idxs):
+                if last and j == len(idxs) - 1:
+                    nxt[k] = ovr.get('value')
+                    break
+                nxt = nxt[k]
+            curr = nxt
+    return scenario
+
 def generate_sim_params(scenario, overrides=None):
     """
     Generates the final sim_params dictionary from a scenario definition

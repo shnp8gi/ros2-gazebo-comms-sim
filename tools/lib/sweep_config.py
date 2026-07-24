@@ -98,6 +98,20 @@ def run_seed_for(run_idx, base_seed=None):
     return int(base_seed) + RUN_SEED_STRIDE * (int(run_idx) - 1)
 
 
+def traffic_seed_for(run_idx):
+    """遮蔽交通展開 (traffic:) のシード。run_idx のみに依存 = CRN 成立。
+
+    derive_run_seeds: false のときは None を返し、traffic_gen は
+    シナリオ yaml の traffic.seed (固定) を使う。
+    オフセット +30 は既存の +10 (report) / +20 (kkf_seed) に続く規約。
+    なお channel.shadowing.environment_seed (走行間固定の持続シャドウ) は
+    ここでは扱わない — run 毎に変えてはならないため注入対象外 (本番仕様 §4.2)。
+    """
+    if not DERIVE_RUN_SEEDS:
+        return None
+    return run_seed_for(run_idx) + 30
+
+
 def inject_run_seeds(config_dict, run_idx):
     """生成済み sim_params 辞書へ run 導出シードを注入する (CRN対応)。
 
@@ -147,6 +161,9 @@ def expand_cases(var):
 
     config: 生成後 sim_params 辞書へのドットパス→値。
     entities: エンティティ名→{field: value}。
+    scenario: シナリオ辞書 (生成前) へのドットパス→値。traffic: 等の
+              scenario レベル定義の掃引用 (例 traffic.lanes[0].headway_s.mean)。
+              交通展開 (traffic_gen) より前に適用される。
     ケース間でキーが揃っている必要はない (書いたものだけ上書きされる)。
     """
     states = []
@@ -155,6 +172,9 @@ def expand_cases(var):
         overrides = []
         for path, value in (spec.get('config') or {}).items():
             overrides.append({'config_path': path, 'value': value,
+                              'raw_value': value, 'field': None, 'unit': ''})
+        for path, value in (spec.get('scenario') or {}).items():
+            overrides.append({'scenario_path': path, 'value': value,
                               'raw_value': value, 'field': None, 'unit': ''})
         for ent_name, fields in (spec.get('entities') or {}).items():
             for field, value in (fields or {}).items():

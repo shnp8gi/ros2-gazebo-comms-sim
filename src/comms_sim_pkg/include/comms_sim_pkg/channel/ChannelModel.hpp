@@ -59,7 +59,7 @@ namespace comms_sim
                 sample.blockage_loss_db = blockage.excess_loss_db;
             }
             if (this->shadowing_model) {
-                sample.shadow_db = this->shadowing_model->SampleDb(link_id, tx_pos);
+                sample.shadow_db = this->shadowing_model->SampleDb(link_id, tx_pos, rx_pos);
             }
             if (this->fading_model) {
                 sample.fading_loss_db = this->fading_model->SampleLossDb(link_id, sample.is_los, t);
@@ -89,6 +89,13 @@ namespace comms_sim
      *                  coherence_time_s: 0.05 }
      *     seed: 42
      * セクションが無い場合は距離減衰のみ(旧構成と同一の振る舞い)。
+     *
+     * 持続シャドウ (走行間固定、本番仕様 §4.2) は type: frozen で選択する:
+     *   shadowing: { enabled: true, type: frozen, sigma_db: 4.0,
+     *                corr_length_m: 6.0, environment_seed: 1,
+     *                grid_m: 1.5, axis: x, u_min: -1000.0, u_max: 1000.0 }
+     * environment_seed のみが場を決め、run 毎に注入される channel.seed は
+     * 参照しない (学習相・評価相で環境が固定される)。
      */
     class ChannelModelFactory {
     public:
@@ -110,10 +117,24 @@ namespace comms_sim
                 }
                 YAML::Node s = channel["shadowing"];
                 if (s && s["enabled"].as<bool>(true)) {
-                    shadowing = std::make_unique<GudmundsonShadowingModel>(
-                        s["sigma_db"].as<double>(4.0),
-                        s["corr_distance_m"].as<double>(10.0),
-                        seed + 1);
+                    std::string type = s["type"].as<std::string>("gudmundson");
+                    if (type == "frozen") {
+                        std::string axis_name = s["axis"].as<std::string>("x");
+                        int axis = (axis_name == "y") ? 1 : (axis_name == "z") ? 2 : 0;
+                        shadowing = std::make_unique<FrozenFieldShadowingModel>(
+                            s["sigma_db"].as<double>(4.0),
+                            s["corr_length_m"].as<double>(6.0),
+                            s["environment_seed"].as<unsigned>(1),
+                            s["grid_m"].as<double>(1.5),
+                            axis,
+                            s["u_min"].as<double>(-1000.0),
+                            s["u_max"].as<double>(1000.0));
+                    } else {
+                        shadowing = std::make_unique<GudmundsonShadowingModel>(
+                            s["sigma_db"].as<double>(4.0),
+                            s["corr_distance_m"].as<double>(10.0),
+                            seed + 1);
+                    }
                 }
                 YAML::Node f = channel["fading"];
                 if (f && f["enabled"].as<bool>(true)) {
