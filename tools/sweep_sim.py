@@ -443,13 +443,21 @@ sweep_state = {
     "concurrency": 0,
     "completed": 0,
     "running_tasks": {},
-    "task_durations": []
+    "task_durations": [],
+    "scenario_name": ""
 }
 
 def _dump_sweep_state():
-    """現在の sweep_state を JSON ファイルに書き出す (progress_lock 内部で呼ばれる想定)"""
+    """現在の sweep_state を JSON ファイルに書き出す (progress_lock 内部で呼ばれる想定)
+
+    SWEEP_SIM_SUPPRESS_STATE=1 のときは書き出しを抑止する。多段オーケストレータ
+    (sim.py learn 等) が 1-run の sweep_sim を反復起動する場合、各 run が状態ファイル
+    を total_tasks=1 で上書きすると全体進捗が壊れるため、オーケストレータ側に
+    状態ファイルの所有権を委ねる用途。既定 (未設定) は従来通り書き出す。"""
     import json
     import datetime
+    if os.environ.get("SWEEP_SIM_SUPPRESS_STATE"):
+        return
     sweep_state["last_updated"] = datetime.datetime.now().isoformat()
     sweep_state["sweep_dir_name"] = globals().get("sweep_start_time", "")
     try:
@@ -933,18 +941,26 @@ def main_logic():
         cpu_count = os.cpu_count() or 4
     except Exception:
         cpu_count = 4
+    # 並列度の優先順位: CLI -j > sweep yaml の execution.max_concurrency > auto(CPU数)。
+    # yaml 値は「宣言した並列上限」なのでプール自体をその値で作り、負荷ゲートは
+    # その範囲内で調整する。閉ループ方式はCPU競合で崩壊するため、yaml で 4 等を
+    # 宣言すると確実に守られる (従来 yaml 値は無視され auto=CPU数で走っていた)。
     MAX_CONCURRENCY_CAP = cpu_count
     concurrency_arg = args.concurrency
-    if concurrency_arg <= 0:
+    if concurrency_arg > 0:
+        concurrency = concurrency_arg
+        print(f"[Sweep Sim] Concurrency from -j: {concurrency}")
+    elif sweep_config.MAX_CONCURRENCY:
+        concurrency = int(sweep_config.MAX_CONCURRENCY)
+        print(f"[Sweep Sim] Concurrency from sweep yaml (execution.max_concurrency): "
+              f"{concurrency}")
+    else:
         # 自動モード: CPU・メモリから最適並列数を算出
         # スレッドプールはMAX_CONCURRENCY_CAPで作成し、ゲートで実際の並列数を制御
         # (プロファイリング後に最適値が上がっても対応可能にするため)
         initial_optimal = get_optimal_concurrency(max_limit=MAX_CONCURRENCY_CAP)
         concurrency = MAX_CONCURRENCY_CAP
         print(f"[Sweep Sim] Auto concurrency: {initial_optimal} parallel (pool size: {MAX_CONCURRENCY_CAP}, will adjust after profiling)")
-    else:
-        concurrency = concurrency_arg
-        print(f"[Sweep Sim] Concurrency manually set to limit: {concurrency}")
 
     manifest_data = None
     chunk_idx = None
@@ -1165,6 +1181,10 @@ def main_logic():
         total_tasks_per_run = len(combinations)
         total_runs_tasks = total_tasks_per_run * num_runs
 
+    if global_sweep_data and global_sweep_data.get('scenario'):
+        with progress_lock:
+            sweep_state["scenario_name"] = os.path.splitext(
+                os.path.basename(global_sweep_data['scenario']))[0]
     log_progress(f"START {datetime.datetime.now().isoformat()} TOTAL={total_runs_tasks} CONCURRENCY={concurrency}")
 
     print(f"Starting parameter sweep: Y_POSITIONS={y_positions}, ANGLES_DEG={angles_deg}")

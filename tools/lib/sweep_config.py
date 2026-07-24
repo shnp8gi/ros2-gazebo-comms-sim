@@ -24,6 +24,11 @@ TASK_TIMEOUT_SEC = 300
 # スイープ時の加速倍率 (ヘッドレス時のみ有効.1.0=リアルタイム)
 SWEEP_REAL_TIME_FACTOR = 1.0
 
+# 最大並列タスク数 (execution.max_concurrency)。None = auto (CPU数)。
+# 閉ループ方式 (kkf/ts_kf/a3) はCPU競合で制御プレーンが律速し性能が崩壊する
+# ため、それらを含むスイープでは 4 以下を指定する (yaml で宣言、CLI -j が優先)。
+MAX_CONCURRENCY = None
+
 # run毎シード導出 (CRN: Common Random Numbers)
 # シードは run_idx のみから導出し、スイープ変数・シナリオには依存させない。
 # → 同一 run_idx は全方式・全条件で同一の乱数系列 (CRN)、run 間は独立となり、
@@ -228,20 +233,21 @@ def expand_entity_groups(var):
 def load_sweep_config(yaml_path=None):
     global NUM_RUNS, TASK_TIMEOUT_SEC, SWEEP_REAL_TIME_FACTOR
     global GENERIC_VARIABLES
-    global DERIVE_RUN_SEEDS, BASE_SEED
-    
+    global DERIVE_RUN_SEEDS, BASE_SEED, MAX_CONCURRENCY
+
     sweep_data = None
     GENERIC_VARIABLES = []
-    
+
     if yaml_path and os.path.exists(yaml_path):
         with open(yaml_path, 'r', encoding='utf-8') as f:
             sweep_data = yaml.safe_load(f).get('sweep', {})
-            
+
     if sweep_data:
         exec_cfg = sweep_data.get('execution', {})
         NUM_RUNS = exec_cfg.get('num_runs', NUM_RUNS)
         TASK_TIMEOUT_SEC = exec_cfg.get('task_timeout_sec', TASK_TIMEOUT_SEC)
         SWEEP_REAL_TIME_FACTOR = exec_cfg.get('real_time_factor', SWEEP_REAL_TIME_FACTOR)
+        MAX_CONCURRENCY = exec_cfg.get('max_concurrency', MAX_CONCURRENCY)
         DERIVE_RUN_SEEDS = exec_cfg.get('derive_run_seeds', DERIVE_RUN_SEEDS)
         BASE_SEED = exec_cfg.get('base_seed', BASE_SEED)
         
