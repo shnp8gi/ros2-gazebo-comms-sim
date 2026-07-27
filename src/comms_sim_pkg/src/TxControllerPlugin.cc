@@ -322,6 +322,8 @@ namespace tx_controller
             // 経過sim時間を実効dtとしてデータ会計・リンク確立に用いるため、
             // report_period_s 以下に保てば観測レポート周期は変わらない。
             this->comms_update_period_s = comms_params["comms_update_period_s"].as<double>(0.0);
+            // コリドーゲーティング (0 = 無効 = 全ペア評価 = 後方互換)
+            this->link_eval_radius_m = comms_params["link_eval_radius_m"].as<double>(0.0);
 
             // 4. Link controller parameters
             auto link_ctrl_params = config["link_controller_node"]["ros__parameters"];
@@ -718,6 +720,31 @@ namespace tx_controller
             Eigen::Vector3d ori(vehicle_pose.Rot().Roll(), vehicle_pose.Rot().Pitch(), vehicle_pose.Rot().Yaw());
             Eigen::Matrix3d vehicle_rotmat = utils::rpy_to_rotmat(ori.x(), ori.y(), ori.z());
 
+            // 1b. コリドーゲーティング (車両単位の早期打ち切り)。
+            // 全 RSU が評価半径の外なら、この tick の通信処理をまるごと省く。
+            // ペア単位のスキップだけでは BlockageEnvironment::Refresh (遮蔽体ごとの
+            // ECM pose 取得 + 回転行列) が「車両数 × 遮蔽体数」で残り、連続交通流では
+            // ここが支配的になるため、車両単位で先に落とす。
+            //
+            // 安全性: 半径は接続閾値の到達距離より十分大きく取る規約なので、grant を
+            // 保持したまま半径外に出ることは起こらない。念のため未割当のときだけ省く。
+            if (this->link_eval_radius_m > 0.0) {
+                bool any_in_range = false;
+                for (const auto& bs : this->base_stations) {
+                    Eigen::Vector3d bs_ant = bs.position + bs.rotmat * bs.antenna_offset;
+                    if ((pos - bs_ant).squaredNorm()
+                            <= this->link_eval_radius_m * this->link_eval_radius_m) {
+                        any_in_range = true;
+                        break;
+                    }
+                }
+                bool holds_grant = false;
+                for (const auto& ant : this->vehicle_antennas) {
+                    if (ant.assigned_bs_idx >= 0) { holds_grant = true; break; }
+                }
+                if (!any_in_range && !holds_grant) return;
+            }
+
             // 2. Compute comms metrics for all antennas (動的チャネル: 遮蔽・シャドウ・フェージング)
             // 自車も遮蔽体として登録され得る (role: tx + blockage 属性) ため、
             // 自分の OBB は障害物リストから除外する。除外しないと自分の箱で
@@ -725,7 +752,8 @@ namespace tx_controller
             this->blockage_env.Refresh(_ecm, this->model_name);
             std::vector<std::vector<AntennaMetrics>> all_ant_bs_metrics = this->comms_env.CalculateMetrics(
                 this->vehicle_antennas, this->base_stations, pos, vehicle_rotmat,
-                current_time_s, &this->blockage_env.Obstacles());
+                current_time_s, &this->blockage_env.Obstacles(),
+                this->link_eval_radius_m);
 
             // 3. Scheduling Policy
             auto sched_res = this->scheduler.UpdateLinks(
@@ -1036,6 +1064,7 @@ namespace tx_controller
 
         // 通信計算の間引き (0 = 物理ステップ毎)。last_comms_time_s は実効dt算出用
         double comms_update_period_s = 0.0;
+        double link_eval_radius_m = 0.0;
         double last_comms_time_s = -1.0;
 
         // 測定レポート出力 (データプレーンI/O)

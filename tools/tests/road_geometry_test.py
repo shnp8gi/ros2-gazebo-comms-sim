@@ -165,7 +165,8 @@ defaults = argparse.Namespace(
     rsu_tilt_deg=45.0, rsu_tilt_pattern='alternate', veh_tilt_deg='auto',
     ant_h=1.35, corridor_margin_m=40.0, speed=16.7, headway_mean_s=5.0,
     target_ratio=0.30, window_s=60.0, warmup_s=5.0, tx_power=-7.0,
-    snr_min_db=26.5, environment_seed=1, rtf=2.0, comms_update_period_s=0.005)
+    snr_min_db=26.5, environment_seed=1, rtf=2.0, comms_update_period_s=0.005,
+    link_eval_radius_m=100.0)
 
 sc = build_scenario(defaults)['scenario']
 rsus = sc['entities']

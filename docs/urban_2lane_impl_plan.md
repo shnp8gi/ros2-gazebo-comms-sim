@@ -46,7 +46,7 @@
 | `tools/lib/road_geometry.py` | 道路断面・アンテナ角・相互ボアサイト・視線高さの純関数 (stdlib のみ) |
 | `tools/gen_urban_scenario.py` | シナリオ yaml の生成 (対象車は生成せず traffic に委ねる) |
 | `config/scenarios/road_urban_2lane.yaml` | 生成物 (真実はこちら) |
-| `tools/tests/road_geometry_test.py` | 41 件、全緑 |
+| `tools/tests/road_geometry_test.py` | 53 件、全緑 |
 
 ### 実装中に判明したこと
 

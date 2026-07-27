@@ -143,6 +143,11 @@ def build_scenario(a):
                 'ros__parameters': {
                     'tx_power': a.tx_power,
                     'comms_update_period_s': a.comms_update_period_s,
+                    # コリドーゲーティング (0 = 無効)。連続交通流では待機中の車も
+                    # 全 tick で全 RSU 分を評価するため、圏外確定のペアを落とす。
+                    # 閾値 -68.5dBm の到達距離 (両端ボアサイトで ~65m) より十分
+                    # 大きく取ること (でないと情報上界 oracle_inst が壊れる)
+                    'link_eval_radius_m': a.link_eval_radius_m,
                     # snr_min_db は接続閾値そのもの (仕様 §3.1)。
                     #   rssi_min = noise_floor + snr_min_db = -95 + 26.5 = -68.5 dBm
                     # = MCS テーブル下限と等価。greedy_fcfs の占有時間を決める最重要定数
@@ -278,6 +283,9 @@ def main():
     ap.add_argument('--environment-seed', type=int, default=1)
     ap.add_argument('--rtf', type=float, default=2.0)
     ap.add_argument('--comms-update-period-s', type=float, default=0.005)
+    ap.add_argument('--link-eval-radius-m', type=float, default=100.0,
+                    help='この距離を超えるリンクは評価しない (0 = 無効)。'
+                         '閾値の到達距離 (~65m) より十分大きく取ること')
     a = ap.parse_args()
 
     scenario = build_scenario(a)

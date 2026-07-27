@@ -62,6 +62,19 @@ namespace tx_controller
          *                  (遮蔽・シャドウイング・フェージング) を評価しない
          *                  「決定論モード」(LUT事前計算=神託が使用)。
          * @param obstacles 遮蔽体リスト (nullptr 可)。
+         * @param eval_radius_m  この距離を超えるペアは評価をスキップし、
+         *   AntennaMetrics の既定値 (best_rssi = -999) を返す。0 以下 = 無効
+         *   (= 全ペア評価 = 後方互換)。
+         *
+         *   連続交通流では待機中の車も含めて全 tick で全 RSU 分を評価するため、
+         *   台数 × RSU 数に比例して計算量が増える (都市部2車線 over 条件で
+         *   対象車 40 台 × RSU 4 台 = 160 リンク/tick)。RTF のボトルネックは
+         *   物理ステップごとの全リンク チャネル評価 (指向性補間 + 遮蔽 OBB) だと
+         *   判明しているので、閾値に届き得ない遠方ペアを先に落とす。
+         *
+         *   半径は「その距離では確実に接続閾値を割る」値に取ること。
+         *   observe_all_pairs (oracle) ではスキップしたペアのレポートが
+         *   -999 になるため、半径が近すぎると情報上界が壊れる。
          */
         std::vector<std::vector<AntennaMetrics>> CalculateMetrics(
             const std::vector<AntennaInfo>& vehicle_antennas,
@@ -69,7 +82,8 @@ namespace tx_controller
             const Eigen::Vector3d& vehicle_pos,
             const Eigen::Matrix3d& vehicle_rotmat,
             double sim_time = -1.0,
-            const std::vector<comms_sim::ObstacleBox>* obstacles = nullptr)
+            const std::vector<comms_sim::ObstacleBox>* obstacles = nullptr,
+            double eval_radius_m = 0.0)
         {
             std::vector<std::vector<AntennaMetrics>> all_metrics(vehicle_antennas.size());
 
@@ -77,14 +91,25 @@ namespace tx_controller
                 const auto &ant = vehicle_antennas[i];
                 Eigen::Vector3d ant_pos_world = vehicle_pos + vehicle_rotmat * ant.offset;
                 Eigen::Vector3d ant_rpy = ant.relative_rpy;
-                
+
                 std::vector<AntennaMetrics> bs_metrics(base_stations.size());
-                
+
                 for (size_t bs_idx = 0; bs_idx < base_stations.size(); ++bs_idx) {
                     const auto &bs = base_stations[bs_idx];
                     Eigen::Vector3d bs_antenna_pos = bs.position + bs.rotmat * bs.antenna_offset;
                     Eigen::Vector3d bs_ant_rpy = bs.antenna_relative_rpy;
-                    
+
+                    // コリドーゲーティング: 圏外確定のペアは指向性補間も
+                    // チャネル評価もせず既定値 (best_rssi = -999) のまま残す
+                    if (eval_radius_m > 0.0 &&
+                        (ant_pos_world - bs_antenna_pos).squaredNorm()
+                            > eval_radius_m * eval_radius_m) {
+                        bs_metrics[bs_idx].bs_pos = bs_antenna_pos;
+                        bs_metrics[bs_idx].distance =
+                            (ant_pos_world - bs_antenna_pos).norm();
+                        continue;
+                    }
+
                     Eigen::Matrix3d ant_rotmat = vehicle_rotmat * tx_controller::utils::rpy_to_rotmat(ant_rpy.x(), ant_rpy.y(), ant_rpy.z());
                     // bs.rotmat は生成時点で pose_rpy + antenna_relative_rpy を合成済み（TxControllerPlugin参照）。
                     // ここで relative_rpy を再度掛けると二重適用になるため、そのまま使う。

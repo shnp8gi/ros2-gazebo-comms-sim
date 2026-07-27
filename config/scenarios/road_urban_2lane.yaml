@@ -23,6 +23,7 @@ scenario:
       ros__parameters:
         tx_power: -7.0
         comms_update_period_s: 0.005
+        link_eval_radius_m: 100.0
         rate_model: {type: shannon, bandwidth_hz: 100000000.0, noise_floor_dbm: -95.0, efficiency: 1.0,
           snr_min_db: 26.5, snr_cap_db: 50.0}
         channel:
