@@ -111,6 +111,9 @@ def build_scenario(a):
                     'control_plane': 'kkf_mpc',
                     'schedule_topic': '/comms/ho_schedule',
                     'ff_max_pairs': 1,
+                    # assoc_hold (802.15.3e 準拠・HOなし) のリンク監視回復待機時間 [s]。
+                    # 単一値だが sweep の cases で掃引可能
+                    'assoc_recover_timeout_s': a.assoc_recover_timeout_s,
                     'export_rssi_profile': True,
                     'kkf_use_prior': False,
                     'kkf_assigner': 'hungarian',
@@ -286,6 +289,8 @@ def main():
     ap.add_argument('--link-eval-radius-m', type=float, default=100.0,
                     help='この距離を超えるリンクは評価しない (0 = 無効)。'
                          '閾値の到達距離 (~65m) より十分大きく取ること')
+    ap.add_argument('--assoc-recover-timeout-s', type=float, default=1.0,
+                    help='assoc_hold のリンク監視回復待機時間 [s] (掃引可)')
     a = ap.parse_args()
 
     scenario = build_scenario(a)

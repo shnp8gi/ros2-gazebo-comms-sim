@@ -13,11 +13,12 @@ scenario:
   config_overrides:
     link_controller_node:
       ros__parameters: {scheduling_policy: external_schedule, control_plane: kkf_mpc, schedule_topic: /comms/ho_schedule,
-        ff_max_pairs: 1, export_rssi_profile: true, kkf_use_prior: false, kkf_assigner: hungarian, kkf_switch_bonus_db: 3.0,
-        kkf_replan_period_s: 0.2, kkf_horizon_s: 4.0, kkf_plan_dt_s: 0.2, kkf_kappa: 1.0, kkf_idle_lcb_db: -110.0,
-        kkf_basis: rbf, kkf_rbf_num_bases: 20, kkf_rbf_width_m: 0.0, kkf_sigma_nu_db: 4.0, kkf_corr_length_s_m: 20.0,
-        kkf_corr_length_t_s: 5.0, kkf_varmap_enabled: true, kkf_varmap_grid_m: 2.0, kkf_varmap_prior_var_db2: 0.0,
-        kkf_state_dir: '', kkf_state_save: false, kkf_q_forget: 0.05, kkf_state_gamma: 0.997, kkf_tracker_enabled: false,
+        ff_max_pairs: 1, assoc_recover_timeout_s: 1.0, export_rssi_profile: true, kkf_use_prior: false,
+        kkf_assigner: hungarian, kkf_switch_bonus_db: 3.0, kkf_replan_period_s: 0.2, kkf_horizon_s: 4.0,
+        kkf_plan_dt_s: 0.2, kkf_kappa: 1.0, kkf_idle_lcb_db: -110.0, kkf_basis: rbf, kkf_rbf_num_bases: 20,
+        kkf_rbf_width_m: 0.0, kkf_sigma_nu_db: 4.0, kkf_corr_length_s_m: 20.0, kkf_corr_length_t_s: 5.0,
+        kkf_varmap_enabled: true, kkf_varmap_grid_m: 2.0, kkf_varmap_prior_var_db2: 0.0, kkf_state_dir: '',
+        kkf_state_save: false, kkf_q_forget: 0.05, kkf_state_gamma: 0.997, kkf_tracker_enabled: false,
         tskf_process_noise_q: 25.0, tskf_prior_mean_dbm: -120.0, tskf_prior_var: 400.0}
     comms_simulator_node:
       ros__parameters:

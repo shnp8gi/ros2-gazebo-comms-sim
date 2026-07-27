@@ -336,6 +336,11 @@ namespace tx_controller
             this->heatmap_resolution_m = link_ctrl_params["heatmap_resolution_m"].as<double>(0.2);
             this->min_hold_distance_m = link_ctrl_params["min_hold_distance_m"].as<double>(0.0);
             this->ff_max_pairs = link_ctrl_params["ff_max_pairs"].as<int>(-1);
+            // assoc_hold (802.15.3e 準拠の受動接続): リンク監視の回復待機時間 [s]。
+            // 保持中アソシの RSSI が閾値を割ってからこの時間内に回復すれば同じ RSU で
+            // 再開 (再アソシ無し)、超えたら断を宣言し次の圏内 RSU へ再アソシ。
+            // 掃引可能 (単一値でも複数条件でも sweep が上書きする)
+            this->assoc_recover_timeout_s = link_ctrl_params["assoc_recover_timeout_s"].as<double>(1.0);
 
             this->comms_env.Configure(this->config_file_path);
             this->blockage_env.Configure(config);
@@ -801,6 +806,50 @@ namespace tx_controller
                 }
             }
 
+            // assoc_hold (802.15.3e 準拠の受動接続、HOなし): 最初に接続閾値を超えた
+            // 空き RSU にアソシし、閾値以上の間は保持 (より良い RSU へ能動的に移らない)。
+            // 閾値割れ (遮蔽等) は即断とせず回復待機に入り、assoc_recover_timeout_s 以内に
+            // 回復すれば同じ RSU で再開、超えたら断を宣言し次の圏内 RSU へ再アソシする。
+            // greedy_fcfs との違いは「保持中アソシを能動的に手放さない」点で、遮蔽区間を
+            // 回避せずアウテージとして食う (=HOしないことの代償が指標に出る)。
+            if (this->scheduling_policy == "assoc_hold") {
+                double rmin = this->comms_env.GetRssiMin();
+                auto& reg = BsOccupancyRegistry::Instance();
+                int n_bs = static_cast<int>(this->base_stations.size());
+                for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
+                    auto& ant = this->vehicle_antennas[i];
+                    int cur = ant.assigned_bs_idx;
+                    if (cur >= 0 && cur < n_bs) {
+                        if (all_ant_bs_metrics[i][cur].best_rssi >= rmin) {
+                            ant.outage_start_time = -1.0;   // 健全: 保持、回復待機解除
+                        } else {
+                            // 閾値割れ: 回復待機。T_recover 以内は同じ RSU を保持
+                            if (ant.outage_start_time < 0.0)
+                                ant.outage_start_time = current_time_s;
+                            if (current_time_s - ant.outage_start_time
+                                    > this->assoc_recover_timeout_s) {
+                                ant.assigned_bs_idx = -1;   // タイムアウト: 断→再アソシ
+                                ant.outage_start_time = -1.0;
+                            }
+                            // else: cur を据え置き (アウテージ計上)
+                        }
+                    }
+                    // 未接続 (初回 or タイムアウト後): 最初に閾値を超えた空き RSU に受動アソシ。
+                    // 最良ではなく先頭 (index 順) から採るため能動選択にならない
+                    if (ant.assigned_bs_idx < 0) {
+                        for (int b = 0; b < n_bs; ++b) {
+                            if (!reg.Available(b, this->model_name)) continue;
+                            if (all_ant_bs_metrics[i][b].best_rssi >= rmin) {
+                                ant.assigned_bs_idx = b;
+                                ant.outage_start_time = -1.0;
+                                break;
+                            }
+                        }
+                    }
+                    if (ant.assigned_bs_idx >= 0) this->active_antenna_idx = static_cast<int>(i);
+                }
+            }
+
             // Extract best metrics list for data calculation
             std::vector<AntennaMetrics> ant_metrics_list(this->vehicle_antennas.size());
             for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
@@ -844,7 +893,8 @@ namespace tx_controller
                 bool has_grant;
                 if (this->scheduling_policy == "feedforward_optimal" ||
                     this->scheduling_policy == "simple_no_handover" ||
-                    this->scheduling_policy == "greedy_fcfs") {
+                    this->scheduling_policy == "greedy_fcfs" ||
+                    this->scheduling_policy == "assoc_hold") {
                     has_grant = ant.assigned_bs_idx >= 0;
                 } else if (this->scheduling_policy == "external_schedule" ||
                            this->scheduling_policy == "kkf_predictive") {
@@ -1066,6 +1116,7 @@ namespace tx_controller
         double comms_update_period_s = 0.0;
         double link_eval_radius_m = 0.0;
         double last_comms_time_s = -1.0;
+        double assoc_recover_timeout_s = 1.0;  // assoc_hold: リンク監視の回復待機時間 [s]
 
         // 測定レポート出力 (データプレーンI/O)
         bool report_enabled = true;

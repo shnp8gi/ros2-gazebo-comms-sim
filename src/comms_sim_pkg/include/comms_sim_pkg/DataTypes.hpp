@@ -39,6 +39,7 @@ namespace tx_controller
         double last_rssi = -999.0;
         int assigned_bs_idx = -1;  // マルチペア: 割り当てられた基地局インデックス (-1 = 未割当)
         bool measure_only = false; // 測定専用ペアネット (リンク確立するがデータ会計なし)
+        double outage_start_time = -1.0; // assoc_hold: 現アソシの閾値割れ開始時刻 (-1 = 健全)
 
         struct LogRecord {
             double time_s = 0.0;
