@@ -242,19 +242,28 @@ RSU を近づけたことで **奥車線は「遮蔽される」だけでなく�
 
 ```yaml
 traffic:
-  window_s: [0.0, 120.0]        # この時間窓に区間へ進入する車のみ生成
-  corridor: [-60.0, 60.0]       # 通信が意味を持つ区間 [m]
-  margin_m: 40.0
-  warmup_s: 10.0                # 集計から除外する助走時間 (新規)
-  target_ratio: 0.30            # 交通全体に占める通信対象の割合 (新規)
+  window_s: [0.0, 60.0]         # この時間窓に区間へ到着する車を生成
+  corridor: [-55.0, 55.0]       # 通信が意味を持つ区間 [m] (RSU列 ±40m)
+  margin_m: 30.0
+  warmup_s: 5.0                 # 集計から除外する助走時間
+  prefill: auto                 # t=0 で既にコリドーが埋まった定常状態から始める
+  interleave_arrivals: true     # エンティティ列を到着時刻順に並べる (下記のバイアス除去)
+  target_ratio: 0.30            # 交通全体に占める通信対象の割合
+  target_template:              # 対象車のアンテナ諸元 (生成器が書き、traffic_gen は引き写すだけ)
+    model: Car
+    antenna_offset: [0.0, 0.0, 1.35]
+    relative_yaw_by_direction: { "1": 0.785398, "-1": -0.785398 }
   vehicle_mix:                  # 都市部幹線の車種構成【要実測校正】
-    - { model: Sedan, ratio: 0.80, height_m: 1.5, loss_db:  8.0, can_be_target: true  }
-    - { model: Truck, ratio: 0.15, height_m: 3.8, loss_db: 26.0, can_be_target: false }
-    - { model: Bus,   ratio: 0.05, height_m: 3.2, loss_db: 22.0, can_be_target: false }
+    - { model: SedanBlocker,   ratio: 0.80, can_be_target: true  }   # 1.5m /  8dB
+    - { model: MinivanBlocker, ratio: 0.00, can_be_target: true  }   # 1.9m / 12dB (既定0)
+    - { model: TruckBlocker,   ratio: 0.15, can_be_target: false }   # 3.8m / 26dB
+    - { model: BusBlocker,     ratio: 0.05, can_be_target: false }   # 3.2m / 22dB
   lanes:
-    - { y:  1.75, direction: +1, speed_mps: 16.7, headway_s: {dist: lognormal, mean: 5.0, sigma: 0.6, min: 1.5} }
-    - { y: -1.75, direction: -1, speed_mps: 16.7, headway_s: {dist: lognormal, mean: 5.0, sigma: 0.6, min: 1.5} }
+    - { y:  1.75, direction: +1, speed_mps: 16.7, headway_s: {dist: lognormal, mean: 5.0, sigma: 0.6, min: 1.0} }
+    - { y: -1.75, direction: -1, speed_mps: 16.7, headway_s: {dist: lognormal, mean: 5.0, sigma: 0.6, min: 1.0} }
 ```
+
+*(実装済み。真実は `config/scenarios/road_urban_2lane.yaml`)*
 
 - **通信対象は乗用車のみ** (確定)。`can_be_target: true` は Sedan だけとし、バス・トラックは
   常に一般車 (遮蔽体) として振る舞う。
@@ -295,37 +304,35 @@ traffic:
 
 ### 2.3 ⚠ 需要と供給のバランスが現行と逆転する
 
-RSU 4 台に対し、通信窓 (実効コリドー ≈ 60 m) 内に同時に存在する対象車の期待値は
-
-```
-N_concurrent ≈ (対象車到着率 λ_t) × (滞在時間 60/v)
-             = (2車線 / headway 5s × 0.30) × (60 / 16.7)
-             = 0.12 /s × 3.6 s ≈ 0.43 台
-```
-
-→ **RSU 4 台に対して対象車が 0.4 台** = 供給過多。現行 road_10car の「需要超過 (10台 vs 3RSU)」
-とは真逆になり、公平性・飢餓の議論は成立しなくなる。研究の主張は
-**「NLOS 区間の回避と HO タイミング」** に移る (それ自体は本シナリオの狙いと一致)。
-
-需要超過も見たい場合のつまみ (どれかを効かせないと RSU が遊ぶ):
-
-| つまみ | 例 | N_concurrent |
-|---|---|---|
-| 混雑 (低速化) | v = 5 m/s, headway 2.5 s | ≈ 2.9 台 |
-| 対象車比率↑ | target_ratio = 0.8, headway 2.5 s | ≈ 2.3 台 |
-| 車線数↑ (2+2) | 4車線 × headway 5s × 0.3 | ≈ 0.9 台 |
-| コリドー拡大 | RSU 間隔を 10 → 20 m | 比例増 |
+現実的な都市交通 (自由流・headway 5 s・対象車 30%) では、RSU 4 台に対しコリドー内の
+同時対象車が 1 台を切る = **供給過多**。現行 road_10car の「需要超過 (10台 vs 3RSU)」とは
+真逆になり、公平性・飢餓の議論が成立しなくなる。
 
 → **`load` を独立した掃引軸とする (確定)**。3 条件を次のように定義する:
 
-| load | 車速 | headway (両車線) | target_ratio | N_concurrent | 意味 |
-|---|---|---|---|---|---|
-| `under` | 16.7 m/s | 5.0 s | 0.30 | ≈ 0.4 | 供給過多。自由流。RSU が遊ぶ |
-| `matched` | 11.1 m/s (40km/h) | 3.0 s | 0.50 | ≈ 1.8 | 需給均衡 |
-| `over` | 5.0 m/s | 2.5 s | 0.60 | ≈ 5.8 | 需要超過。混雑。現行 road_10car に相当 |
+| load | 車速 | headway (両車線) | target_ratio | 意味 |
+|---|---|---|---|---|
+| `under` | 16.7 m/s (60km/h) | 5.0 s | 0.30 | 供給過多。自由流。RSU が遊ぶ |
+| `matched` | 11.1 m/s (40km/h) | 3.0 s | 0.50 | 需給均衡 |
+| `over` | 5.0 m/s (18km/h) | 2.5 s | 0.60 | 需要超過。混雑。**主張の本命** |
 
-`greedy_fcfs` の独占が問題になるのは `matched` / `over` であり、**`over` が主張の本命**。
+**実測値** (`traffic_gen` で 20 シード平均、window 60 s・コリドー 110 m):
+
+| load | 生成される対象車 | 生成される一般車 | 全車 | **t=0 のコリドー内対象車** | RSU 4 台に対して |
+|---|---|---|---|---|---|
+| `under` | 8.6 | 19.1 | 27.7 | **0.7** | 供給過多 (1/6) |
+| `matched` | 24.6 | 22.9 | 47.5 | **3.5** | ほぼ均衡 |
+| `over` | 40.1 | 26.3 | 66.5 | **12.0** | **3 倍の需要超過** |
+
+`over` は当初の解析見積り (5.8 台) より強い需要超過になった (見積りが実効コリドーを
+60 m と仮定していたのに対し、実際は 110 m あるため)。**RSU 4 台に対して 12 台**は
+先着占有の独占が明確に出る水準であり、`greedy_fcfs` の下界としては十分厳しい。
+
 `under` は「独占が起きない領域では提案手法の利得も消える」ことを示す対照条件として持つ。
+
+> **性能への含意**: `over` では対象車が **40 台**生成される。全車が全 tick で 4 RSU 分の
+> リンクを評価すると 160 リンク/tick (現行 road_10car の 30 の 5.3 倍) になり、
+> **コリドーゲーティング (§7 B3) が必須**であることが実測で裏づけられた。
 
 ---
 

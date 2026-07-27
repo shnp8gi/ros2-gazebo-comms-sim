@@ -217,6 +217,9 @@ def build_scenario(a):
             'window_s': [0.0, a.window_s],
             'warmup_s': a.warmup_s,
             'prefill': 'auto',       # auto = (コリドー長 + margin) / speed
+            # 先着順ポリシー (greedy_fcfs) の「先着」は gz-sim のエンティティ
+            # 実行順で決まるため、車線ごとに積むと常に近車線が勝つ (仕様 §2.1)
+            'interleave_arrivals': True,
             'corridor': [round(c0, 1), round(c1, 1)],
             'margin_m': 30.0,
             'max_vehicles': 400,

@@ -74,6 +74,7 @@ scenario:
     window_s: [0.0, 60.0]
     warmup_s: 5.0
     prefill: auto
+    interleave_arrivals: true
     corridor: [-55.0, 55.0]
     margin_m: 30.0
     max_vehicles: 400

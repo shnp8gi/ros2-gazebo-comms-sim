@@ -115,16 +115,23 @@ def generate_sim_params(scenario, overrides=None):
         if 'enabled' in entity:
             entity_config['enabled'] = entity['enabled']
 
-        # 遮蔽体: アンテナを持たず、通信ではなく幾何遮蔽としてのみ振る舞う
-        if entity.get('role') == 'blocker':
-            blockage = dict(model_info.get('blockage', {}))
-            blockage.update(entity.get('blockage', {}))  # エンティティ側で上書き可
+        # 遮蔽ジオメトリの登録は role から独立させる。
+        #   role: blocker → 遮蔽体としてのみ振る舞う (アンテナを持たない)
+        #   role: tx      → 通信もするが、他車のリンクに対しては遮蔽体でもある
+        # 対象車が交通に混在する構成 (都市部2車線仕様 §2.1) では、対象車を
+        # 遮蔽体として登録しないと同一車線の遮蔽が系統的に欠落して楽観側に偏る。
+        # 自分自身のリンクに対する遮蔽は BlockageEnvironment 側で除外する。
+        blockage = dict(model_info.get('blockage', {}))
+        blockage.update(entity.get('blockage', {}))  # エンティティ側で上書き可
+        if blockage and entity.get('role') in ('blocker', 'tx'):
             blockers[entity.get('name')] = {
                 'size': [float(v) for v in blockage.get('size', [1.0, 1.0, 2.0])],
                 'loss_db': float(blockage.get('loss_db', 20.0)),
                 **({'center_offset': [float(v) for v in blockage['center_offset']]}
                    if 'center_offset' in blockage else {}),
             }
+
+        if entity.get('role') == 'blocker':
             if 'loop' in entity:
                 entity_config['loop'] = bool(entity['loop'])
             blocker_entities[entity.get('name')] = entity_config
@@ -250,6 +257,10 @@ def generate_sim_params(scenario, overrides=None):
 
     for key in [k for k, v in spawn_entities.items() if _is_disabled(v)]:
         del spawn_entities[key]
+    # 無効化した車両は遮蔽体としても消す (role: tx が blockers にも載るため)
+    for v in vehicles:
+        if _is_disabled(v):
+            blockers.pop(v.get('name'), None)
     vehicles = [v for v in vehicles if not _is_disabled(v)]
     for key in [k for k, v in blocker_entities.items() if _is_disabled(v)]:
         del blocker_entities[key]
@@ -265,6 +276,9 @@ def generate_sim_params(scenario, overrides=None):
         base_config['vehicles'] = vehicles
     if blocker_entities:
         base_config['blocker_entities'] = blocker_entities
+    # 遮蔽ジオメトリは role: tx 由来のものも含むため、blocker_entities が
+    # 空でも (対象車だけが遮蔽体の構成でも) 独立に書き出す
+    if blockers:
         base_config['blockers'] = blockers
         
     # Temporary fix for sim_launch.py if it expects old suv
