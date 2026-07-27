@@ -27,20 +27,11 @@ project_root = os.path.dirname(script_dir)
 if script_dir not in sys.path:
     sys.path.insert(0, script_dir)
 
-try:
-    import lib.sweep_config as sweep_config
-    NUM_RUNS = getattr(sweep_config, 'NUM_RUNS', 1)
-    if hasattr(sweep_config, 'GENERIC_VARIABLES') and sweep_config.GENERIC_VARIABLES:
-        task_count = 1
-        for gv in sweep_config.GENERIC_VARIABLES:
-            task_count *= len(gv.get('states', gv.get('values', [])))
-    else:
-        Y_POSITIONS = getattr(sweep_config, 'Y_POSITIONS', [1.0])
-        ANGLES_DEG = getattr(sweep_config, 'ANGLES_DEG', [0.0])
-        task_count = len(Y_POSITIONS) * len(ANGLES_DEG)
-    TOTAL_TASKS = task_count * NUM_RUNS
-except Exception:
-    TOTAL_TASKS = 760
+# 総タスク数は「今走っている sweep が状態ファイルに書いた total_tasks」を唯一の
+# 真実とする。実行前 (状態ファイルなし) は総数を推定せず「未実行」扱いにする。
+# 以前はレガシー lib/sweep_config の静的既定 (Y_POSITIONS×ANGLES や 760) を
+# フォールバックにしていたが、シナリオ非追従で誤解を招くため撤去した。
+TOTAL_TASKS = 0  # 0 = 不明 (状態ファイルが total_tasks を持つまで表示しない)
 
 try:
     import lib.system_monitor as sysmon
@@ -70,6 +61,7 @@ class SweepState:
     running_tasks: Dict[int, TaskProgress] = field(default_factory=dict)
     task_durations: List[float] = field(default_factory=list)
     sweep_dir_name: str = ""
+    scenario_name: str = ""
     is_missing: bool = False
     completed_runs_fallback: int = 0
     latest_csv_fallback: Optional[str] = None
@@ -249,6 +241,7 @@ class JsonStateRepository(IStateRepository):
         state.last_updated = self._parse_dt(data.get("last_updated"))
         state.task_durations = data.get("task_durations", [])
         state.sweep_dir_name = data.get("sweep_dir_name", "")
+        state.scenario_name = data.get("scenario_name", "")
 
         raw_tasks = data.get("running_tasks", {})
         max_worker_mtime = None
@@ -375,11 +368,12 @@ class ConsoleRenderer:
         
         state = analysis.state
         if state.is_missing:
-            print(f"\n  [!] 進捗ログが見つかりません。")
-            print(f"      CSV から推定: {state.completed_runs_fallback} run_id 完了 / 総タスク {state.total_tasks}")
+            print(f"\n  💤 未実行 — sweep はまだ開始されていません (進捗状態ファイルなし)。")
+            if state.completed_runs_fallback:
+                print(f"      参考: 直近CSVに {state.completed_runs_fallback} run_id 分の結果あり")
             if state.latest_csv_fallback:
                 print(f"      最新CSV: {os.path.basename(state.latest_csv_fallback)}")
-            print("\n  sweep_sim.py を最新版に更新すると詳細な進捗が表示されます。")
+            print("\n  sweep を開始すると総タスク数と進捗がここに表示されます。")
             print("=" * 75)
             return
 
@@ -419,10 +413,15 @@ class ConsoleRenderer:
 
     def _render_progress(self, analysis: AnalysisResult):
         state = analysis.state
-        bar = self._make_bar(analysis.progress_pct, width=40)
-        print(f"\n  📊 進捗: {state.completed:4d} / {state.total_tasks} タスク  ({analysis.progress_pct:.1f}%)")
-        print(f"  [{bar}]")
-        print(f"  残り: {analysis.remaining_tasks} タスク")
+        if state.scenario_name:
+            print(f"\n  🗺️ シナリオ: {state.scenario_name}")
+        if state.total_tasks > 0:
+            bar = self._make_bar(analysis.progress_pct, width=40)
+            print(f"\n  📊 進捗: {state.completed:4d} / {state.total_tasks} タスク  ({analysis.progress_pct:.1f}%)")
+            print(f"  [{bar}]")
+            print(f"  残り: {analysis.remaining_tasks} タスク")
+        else:
+            print(f"\n  📊 進捗: {state.completed} タスク完了 (総数不明)")
         
         if analysis.is_lagging:
             print(f"  ⚠️ [遅延検知] プログレスの更新が滞っています ({int(analysis.delay_sec)}秒間更新なし)")

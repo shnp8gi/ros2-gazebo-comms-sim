@@ -473,6 +473,7 @@ def cmd_learn(args):
     """
     if not IN_CONTAINER:
         return delegate_to_container(sys.argv[1:])
+    import json
     import shutil
     import numpy as np
 
@@ -520,6 +521,38 @@ def cmd_learn(args):
         with open(curve_path, 'w') as f:
             f.write("run,bs,p_trace,sigma_nu_contrast,alpha_rms_delta_db\n")
 
+    # --- 進捗状態ファイル (sweep_progress.py が読む) を learn 側で所有する ---
+    # 内側の sweep_sim は 1-run で反復起動されるため、各 run が total_tasks=1 で
+    # 上書きすると全体進捗が壊れる。SWEEP_SIM_SUPPRESS_STATE=1 で内側の書き出しを
+    # 止め、ここで「runs 本中 m 本完了 / 現在 run m 実行中」を書く。
+    state_file = os.path.join(TOOLS_DIR, 'log', '.latest_sweep_state.json')
+    os.makedirs(os.path.dirname(state_file), exist_ok=True)
+    learn_start_iso = datetime.datetime.now().isoformat()
+    run_durations = []
+    scenario_name = os.path.splitext(os.path.basename(args.scenario))[0]
+
+    def _write_learn_state(completed, running):
+        st = {
+            "start_time": learn_start_iso,
+            "last_updated": datetime.datetime.now().isoformat(),
+            "total_tasks": args.runs,
+            "concurrency": 1,
+            "completed": completed,
+            "running_tasks": running,
+            "task_durations": run_durations,
+            "sweep_dir_name": "",
+            "scenario_name": f"{scenario_name} (learn)",
+        }
+        try:
+            tmp = state_file + ".tmp"
+            with open(tmp, 'w', encoding='utf-8') as sf:
+                json.dump(st, sf, indent=2)
+            os.replace(tmp, state_file)
+        except Exception as e:
+            print(f"[learn] 進捗状態の書き出しに失敗: {e}")
+
+    child_env = dict(os.environ, SWEEP_SIM_SUPPRESS_STATE="1")
+
     for m in range(start_run, args.runs + 1):
         sweep = {'sweep': {
             'name': f"{name}_run{m}",
@@ -542,14 +575,36 @@ def cmd_learn(args):
         with open(sweep_path, 'w') as f:
             yaml.dump(sweep, f, sort_keys=False, allow_unicode=True)
 
+        base_seed_m = sweep['sweep']['execution']['base_seed']
         print(f"\n[learn] ===== run {m}/{args.runs} "
-              f"(base_seed {sweep['sweep']['execution']['base_seed']}) =====")
-        rc = subprocess.call(
+              f"(base_seed {base_seed_m}) =====")
+
+        run_started = datetime.datetime.now()
+        running_task = {str(m): {
+            "task_no": m,
+            "params_str": f"kkf_learn run {m}/{args.runs} (base_seed {base_seed_m})",
+            "started_at": run_started.isoformat(),
+            "worker_id": None,
+        }}
+        _write_learn_state(m - 1, running_task)
+
+        proc = subprocess.Popen(
             ['bash', '-c', f"cd /workspace && PYTHONDONTWRITEBYTECODE=1 "
-                           f"python3 tools/sweep_sim.py --sweep-config {sweep_path}"])
+                           f"python3 tools/sweep_sim.py --sweep-config {sweep_path}"],
+            env=child_env)
+        # 5秒ごとに last_updated を打ち直し、監視側の遅延/ゾンビ誤検知を防ぐ
+        while True:
+            try:
+                rc = proc.wait(timeout=5)
+                break
+            except subprocess.TimeoutExpired:
+                _write_learn_state(m - 1, running_task)
         if rc != 0:
+            _write_learn_state(m - 1, {})
             sys.exit(f"[learn] run {m} が失敗 (exit {rc})。状態は {state_dir} に "
                      f"保存済み — 原因解消後 --resume で継続可能")
+        run_durations.append((datetime.datetime.now() - run_started).total_seconds())
+        _write_learn_state(m, {})
 
         for r in state_metrics():
             pa = prev_alpha.get(r['bs'])
