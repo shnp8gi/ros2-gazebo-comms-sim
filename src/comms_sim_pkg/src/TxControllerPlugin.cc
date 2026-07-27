@@ -62,6 +62,15 @@ namespace tx_controller
             return inst;
         }
 
+        /// bs が owner にとって利用可能か (空き or 自分が占有中) を副作用なく確認する。
+        /// greedy_fcfs が「空きBSへのフォールバック」判定に使う (Sync は占有を伴い
+        /// 探索途中で自分の既得BSを解放してしまうため、選択前の照会には使えない)。
+        bool Available(int bs, const std::string& owner) {
+            std::lock_guard<std::mutex> lock(this->mtx);
+            auto it = this->owner_by_bs.find(bs);
+            return it == this->owner_by_bs.end() || it->second == owner;
+        }
+
         /// owner の占有を desired_bs のみに同期する (他の占有は解放)。
         /// desired_bs<0 は全解放。占有に成功(既得含む)したら true。
         bool Sync(const std::string& owner, int desired_bs) {
@@ -730,6 +739,37 @@ namespace tx_controller
                 this->logger.AddEventRecord(ev);
             }
 
+            // greedy_fcfs (先着順・空きBS貪欲): LUTも予測も持たない真の下限。
+            // レジストリ上で「空いている(他車未占有)」BSのうち現在RSSIが最良の
+            // ものを掴む。現BSがまだ閾値以上かつ保持中なら維持し (反応的、
+            // proactive HOなし)、閾値を割ったら別の空きBSへ繋ぎ直す。
+            // 車間調停なし・実測RSSIのみ = trend(調停あり)/lut(静的最適)の下に位置する。
+            // gz-sim は各物理ステップで全プラグインを単一スレッド逐次実行するため、
+            // 「先着」= エンティティ実行順で決定的に定まる。
+            if (this->scheduling_policy == "greedy_fcfs") {
+                double rmin = this->comms_env.GetRssiMin();
+                auto& reg = BsOccupancyRegistry::Instance();
+                int n_bs = static_cast<int>(this->base_stations.size());
+                for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
+                    auto& ant = this->vehicle_antennas[i];
+                    int cur = ant.assigned_bs_idx;
+                    bool keep = (cur >= 0 && cur < n_bs
+                                 && all_ant_bs_metrics[i][cur].best_rssi >= rmin
+                                 && reg.Available(cur, this->model_name));
+                    if (!keep) {
+                        int best_bs = -1;
+                        double best_rssi = -1e9;
+                        for (int b = 0; b < n_bs; ++b) {
+                            if (!reg.Available(b, this->model_name)) continue;  // 他車占有
+                            double r = all_ant_bs_metrics[i][b].best_rssi;
+                            if (r >= rmin && r > best_rssi) { best_rssi = r; best_bs = b; }
+                        }
+                        ant.assigned_bs_idx = best_bs;  // -1 = 全て占有/圏外なら未接続
+                    }
+                    if (ant.assigned_bs_idx >= 0) this->active_antenna_idx = static_cast<int>(i);
+                }
+            }
+
             // Extract best metrics list for data calculation
             std::vector<AntennaMetrics> ant_metrics_list(this->vehicle_antennas.size());
             for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
@@ -772,7 +812,8 @@ namespace tx_controller
                 auto &ant = this->vehicle_antennas[i];
                 bool has_grant;
                 if (this->scheduling_policy == "feedforward_optimal" ||
-                    this->scheduling_policy == "simple_no_handover") {
+                    this->scheduling_policy == "simple_no_handover" ||
+                    this->scheduling_policy == "greedy_fcfs") {
                     has_grant = ant.assigned_bs_idx >= 0;
                 } else if (this->scheduling_policy == "external_schedule" ||
                            this->scheduling_policy == "kkf_predictive") {
