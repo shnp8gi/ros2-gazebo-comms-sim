@@ -54,9 +54,22 @@ namespace tx_controller
         bool Empty() const { return this->entries.empty(); }
 
         /// 毎ステップ呼び出し: 遮蔽体の現在 pose を反映した ObstacleBox リストを更新
-        void Refresh(gz::sim::EntityComponentManager& _ecm) {
+        ///
+        /// @param exclude_name 除外するモデル名 (既定 "" = 除外なし)。
+        ///   対象車自身も遮蔽体として登録される構成 (role: tx + blockage 属性、
+        ///   都市部2車線仕様 §2.1) では、自車の OBB が自分のリンクを必ず遮って
+        ///   しまう。呼び出し側 (TxControllerPlugin) が自分のモデル名を渡すことで
+        ///   これを防ぐ。
+        ///
+        ///   除外を「障害物リストの構築」の責務としているのは、IBlockageModel や
+        ///   ChannelModel に「リンクの所有者」を教えずに済ませるため
+        ///   (両者は幾何しか知らないべきで、シグネチャも変えなくてよい)。
+        ///   毎 tick のリストコピーも発生しない。
+        void Refresh(gz::sim::EntityComponentManager& _ecm,
+                     const std::string& exclude_name = "") {
             this->obstacles.clear();
             for (auto& entry : this->entries) {
+                if (!exclude_name.empty() && entry.box.name == exclude_name) continue;
                 if (entry.entity == gz::sim::kNullEntity) {
                     entry.entity = _ecm.EntityByComponents(
                         gz::sim::components::Name(entry.box.name),

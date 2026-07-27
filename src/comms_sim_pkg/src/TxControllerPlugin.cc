@@ -719,7 +719,10 @@ namespace tx_controller
             Eigen::Matrix3d vehicle_rotmat = utils::rpy_to_rotmat(ori.x(), ori.y(), ori.z());
 
             // 2. Compute comms metrics for all antennas (動的チャネル: 遮蔽・シャドウ・フェージング)
-            this->blockage_env.Refresh(_ecm);
+            // 自車も遮蔽体として登録され得る (role: tx + blockage 属性) ため、
+            // 自分の OBB は障害物リストから除外する。除外しないと自分の箱で
+            // 自分のリンクが常時 NLOS になる
+            this->blockage_env.Refresh(_ecm, this->model_name);
             std::vector<std::vector<AntennaMetrics>> all_ant_bs_metrics = this->comms_env.CalculateMetrics(
                 this->vehicle_antennas, this->base_stations, pos, vehicle_rotmat,
                 current_time_s, &this->blockage_env.Obstacles());

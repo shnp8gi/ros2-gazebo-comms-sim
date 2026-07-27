@@ -11,6 +11,7 @@
 
 #include "comms_sim_pkg/channel/ShadowingModel.hpp"
 #include "comms_sim_pkg/RateModel.hpp"
+#include "comms_sim_pkg/channel/BlockageModel.hpp"
 
 using comms_sim::FrozenFieldShadowingModel;
 using comms_sim::GudmundsonShadowingModel;
@@ -128,6 +129,69 @@ int main() {
         check(m.RateGbps(-62.0) == 0.0, "MCS: 閾値未満が 0 でない");
         check(std::abs(m.RateGbps(-60.0) - 2.5813) < 1e-9, "MCS: -60dBm の段が異なる");
         check(std::abs(m.RateGbps(-39.0) - 13.1413) < 1e-9, "MCS: 飽和値が異なる");
+    }
+
+    // 8) 都市部2車線の遮蔽幾何 (仕様 §1.2) と自己遮蔽の除外 (§7 B2)
+    //
+    // Python 側 tools/lib/road_geometry.py の視線高さ表と同じ結論になることを
+    // C++ の 3D OBB 交差で確認する (言語をまたいだ整合性チェック)。
+    {
+        comms_sim::BinaryObbBlockageModel model(60.0);
+
+        // 断面: RSU y=6.0 h=2.5 / 対象車は奥車線 y=-1.75 アンテナ高 1.35
+        const double kDx = 10.0;
+        const Eigen::Vector3d rsu(0.0, 6.0, 2.5);
+        const Eigen::Vector3d car(kDx, -1.75, 1.35);
+        // 視線が近車線 (y=1.75) を横切る x
+        const double kCrossX = kDx * (1.0 - (1.75 + 1.75) / 7.75);
+
+        auto box = [](const std::string& name, double cx, double cy,
+                      double sx, double sy, double sz, double loss) {
+            comms_sim::ObstacleBox b;
+            b.name = name;
+            b.half_extents = Eigen::Vector3d(sx / 2.0, sy / 2.0, sz / 2.0);
+            // モデル原点は接地面中心、OBB 中心は原点 + [0,0,sz/2] の慣例
+            b.center = Eigen::Vector3d(cx, cy, sz / 2.0);
+            b.rotation = Eigen::Matrix3d::Identity();
+            b.loss_db = loss;
+            return b;
+        };
+
+        const auto self_box = box("self", kDx, -1.75, 4.5, 1.8, 1.5, 8.0);
+        const auto sedan = box("sedan", kCrossX, 1.75, 4.5, 1.8, 1.5, 8.0);
+        const auto minivan = box("minivan", kCrossX, 1.75, 4.8, 1.8, 1.9, 12.0);
+        const auto bus = box("bus", kCrossX, 1.75, 11.0, 2.5, 3.2, 22.0);
+        const auto truck = box("truck", kCrossX, 1.75, 12.0, 2.5, 3.8, 26.0);
+
+        // 自己遮蔽: 自分の OBB が残っていると視線の始点が箱の内側なので必ず NLOS。
+        // BlockageEnvironment::Refresh(_ecm, model_name) がこれを除外する
+        check(!model.Evaluate(car, rsu, {self_box}).is_los,
+              "自車 OBB を残すと NLOS にならない (前提が崩れている)");
+        check(model.Evaluate(car, rsu, {}).is_los,
+              "自車 OBB を除けば LOS になるはず");
+
+        // 車高別の遮蔽 (Python 側の表と一致すること)
+        check(model.Evaluate(car, rsu, {sedan}).is_los,
+              "乗用車 1.5m が視線を遮っている (Python 側の表と不一致)");
+        check(!model.Evaluate(car, rsu, {minivan}).is_los,
+              "ミニバン 1.9m が視線を遮っていない");
+        check(!model.Evaluate(car, rsu, {bus}).is_los,
+              "バス 3.2m が視線を遮っていない");
+        check(!model.Evaluate(car, rsu, {truck}).is_los,
+              "トラック 3.8m が視線を遮っていない");
+
+        // 損失の加算とクリップ
+        auto both = model.Evaluate(car, rsu, {bus, truck});
+        check(std::abs(both.excess_loss_db - 48.0) < 1e-9,
+              "複数遮蔽体の損失が加算されていない");
+        check(both.blocker_names.size() == 2, "遮蔽体名が両方記録されていない");
+
+        // RSU 高を 4.0m にするとミニバンも通す (仕様 §1.2 の推奨)
+        const Eigen::Vector3d rsu_high(0.0, 6.0, 4.0);
+        check(model.Evaluate(car, rsu_high, {minivan}).is_los,
+              "RSU 高 4.0m でミニバンが通らない");
+        check(!model.Evaluate(car, rsu_high, {bus}).is_los,
+              "RSU 高 4.0m でバスが通ってしまう");
     }
 
     if (failures > 0) {

@@ -235,7 +235,21 @@ traffic:
 
 ---
 
-## P3. 遮蔽の正しさ (B2) — 2 h
+## P3. 遮蔽の正しさ (B2) — **完了 (2026-07-27)**
+
+`BlockageEnvironment::Refresh(_ecm, exclude_name = "")` を追加し、
+`TxControllerPlugin` が自分の `model_name` を渡す。既定引数のため既存呼び出しは不変。
+
+検証は `tools/tests/channel_ext_test.cc` に項目 8 を追加した。**Python 側
+`road_geometry.py` の視線高さ表と、C++ の 3D OBB 交差が同じ結論になることを
+言語をまたいで固定**している (乗用車 1.5m は通す / ミニバン 1.9m・バス・トラックは遮る /
+RSU 高 4.0m ならミニバンも通しバスは遮る)。自己遮蔽については
+「自車 OBB を残すと必ず NLOS になる」ことも明示的にテストし、防いでいる失敗モードを記録した。
+
+<details>
+<summary>当初計画 (参考)</summary>
+
+### 当初見積り 2 h
 
 ### 変更: `BlockageEnvironment::Refresh` に除外名を追加
 
@@ -272,6 +286,8 @@ this->blockage_env.Refresh(_ecm, this->model_name);
   (自己遮蔽していれば常時 NLOS になるので一目で分かる)。
 
 **完了条件**: C++ テスト緑。1 run の NLOS 率が 100% でない。
+
+</details>
 
 ---
 
