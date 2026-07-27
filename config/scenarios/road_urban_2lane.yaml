@@ -1,0 +1,136 @@
+# 都市部2車線シナリオ (仕様 docs/urban_2lane_scenario_spec.md)。
+# tools/gen_urban_scenario.py により生成 — 手編集より再生成を推奨:
+#   python3 tools/gen_urban_scenario.py --out config/scenarios/road_urban_2lane.yaml
+# 角度規約: RSU yaw = -90°+δ_rsu (下流へ) / 車 relative yaw = ±δ_veh (走行方向で反転)
+#   δ_rsu < 0 (上流へ振る) = 下り車を担当 / δ_rsu > 0 = 上り車を担当
+# traffic: は run 毎に tools/lib/traffic_gen.py が対象車(tx)と一般車(blocker)へ展開する
+scenario:
+  name: road_urban_2lane
+  description: 都市部 片側1車線×1車線・対象車と一般車の混在交通 (target_ratio で分離)。RSU 4台 10.0m間隔 y=6.00 (歩道外側端)、傾き ±45.0° (alternate)
+    / 車 ±45.0°。δ_rsu+δ_veh=90° (相互ボアサイト成立)。tools/gen_urban_scenario.py により生成
+  base_config: src/comms_sim_pkg/config/sim_params.yaml
+  simulation_overrides: {headless: true, real_time_factor: 2.0, logging_level: 3, physics_max_step_size: 0.001}
+  config_overrides:
+    link_controller_node:
+      ros__parameters: {scheduling_policy: external_schedule, control_plane: kkf_mpc, schedule_topic: /comms/ho_schedule,
+        ff_max_pairs: 1, export_rssi_profile: true, kkf_use_prior: false, kkf_assigner: hungarian, kkf_switch_bonus_db: 3.0,
+        kkf_replan_period_s: 0.2, kkf_horizon_s: 4.0, kkf_plan_dt_s: 0.2, kkf_kappa: 1.0, kkf_idle_lcb_db: -110.0,
+        kkf_basis: rbf, kkf_rbf_num_bases: 20, kkf_rbf_width_m: 0.0, kkf_sigma_nu_db: 4.0, kkf_corr_length_s_m: 20.0,
+        kkf_corr_length_t_s: 5.0, kkf_varmap_enabled: true, kkf_varmap_grid_m: 2.0, kkf_varmap_prior_var_db2: 0.0,
+        kkf_state_dir: '', kkf_state_save: false, kkf_q_forget: 0.05, kkf_state_gamma: 0.997, kkf_tracker_enabled: false,
+        tskf_process_noise_q: 25.0, tskf_prior_mean_dbm: -120.0, tskf_prior_var: 400.0}
+    comms_simulator_node:
+      ros__parameters:
+        tx_power: -7.0
+        comms_update_period_s: 0.005
+        rate_model: {type: shannon, bandwidth_hz: 100000000.0, noise_floor_dbm: -95.0, efficiency: 1.0,
+          snr_min_db: 26.5, snr_cap_db: 50.0}
+        channel:
+          seed: 42
+          blockage: {enabled: true, max_total_loss_db: 60.0}
+          shadowing: {enabled: true, type: frozen, sigma_db: 4.0, corr_length_m: 6.0, environment_seed: 1,
+            grid_m: 1.5, axis: x, u_min: -75.0, u_max: 75.0}
+          fading: {enabled: false}
+        measurement_report: {enabled: true, period_s: 0.05, noise_std_db: 2.0, observe_all_pairs: false,
+          seed: 123}
+  model_catalog:
+    antenna:
+      sdf_path: models://antenna
+      description: 沿道RSUアンテナ (歩道外側端のポール)
+      default_antenna_offset: [0.0, 0.0, 2.5]
+    Car:
+      sdf_path: models://GhostBox
+      description: 配信対象の乗用車 (車高1.5m)
+      default_antenna_offset: [0.0, 0.0, 1.35]
+      blockage:
+        size: [4.5, 1.8, 1.5]
+        loss_db: 8.0
+    SedanBlocker:
+      sdf_path: models://GhostBox
+      description: 乗用車 (車高1.5m、視線下=遮蔽せず)
+      blockage:
+        size: [4.5, 1.8, 1.5]
+        loss_db: 8.0
+    MinivanBlocker:
+      sdf_path: models://GhostBox
+      description: ミニバン・SUV (車高1.9m、視線を遮る境界クラス)
+      blockage:
+        size: [4.8, 1.8, 1.9]
+        loss_db: 12.0
+    TruckBlocker:
+      sdf_path: models://GhostBox
+      description: トラック (車高3.8m)
+      blockage:
+        size: [12.0, 2.5, 3.8]
+        loss_db: 26.0
+    BusBlocker:
+      sdf_path: models://GhostBox
+      description: バス (車高3.2m)
+      blockage:
+        size: [11.0, 2.5, 3.2]
+        loss_db: 22.0
+  traffic:
+    seed: 0
+    window_s: [0.0, 60.0]
+    warmup_s: 5.0
+    prefill: auto
+    corridor: [-55.0, 55.0]
+    margin_m: 30.0
+    max_vehicles: 400
+    target_ratio: 0.3
+    target_template:
+      model: Car
+      antenna_offset: [0.0, 0.0, 1.35]
+      relative_yaw_by_direction: {'1': 0.785398, '-1': -0.785398}
+    tx_entry_jitter_s: 0.0
+    vehicle_mix:
+    - {model: SedanBlocker, ratio: 0.8, can_be_target: true}
+    - {model: MinivanBlocker, ratio: 0.0, can_be_target: true}
+    - {model: TruckBlocker, ratio: 0.15, can_be_target: false}
+    - {model: BusBlocker, ratio: 0.05, can_be_target: false}
+    lanes:
+    - y: 1.75
+      direction: 1
+      speed_mps: 16.7
+      headway_s: {dist: lognormal, mean: 5.0, sigma: 0.6, min: 1.0}
+    - y: -1.75
+      direction: -1
+      speed_mps: 16.7
+      headway_s: {dist: lognormal, mean: 5.0, sigma: 0.6, min: 1.0}
+  entities:
+  - name: rsu_0
+    model: antenna
+    role: rx
+    static: true
+    pose: [-15.0, 6.0, 0.0, 0.0, 0.0, -2.356194]
+    antennas:
+    - name: rsu_0
+      offset: [0.0, 0.0, 2.5]
+      relative_rpy: [0.0, 0.0, 0.0]
+  - name: rsu_1
+    model: antenna
+    role: rx
+    static: true
+    pose: [-5.0, 6.0, 0.0, 0.0, 0.0, -0.785398]
+    antennas:
+    - name: rsu_1
+      offset: [0.0, 0.0, 2.5]
+      relative_rpy: [0.0, 0.0, 0.0]
+  - name: rsu_2
+    model: antenna
+    role: rx
+    static: true
+    pose: [5.0, 6.0, 0.0, 0.0, 0.0, -2.356194]
+    antennas:
+    - name: rsu_2
+      offset: [0.0, 0.0, 2.5]
+      relative_rpy: [0.0, 0.0, 0.0]
+  - name: rsu_3
+    model: antenna
+    role: rx
+    static: true
+    pose: [15.0, 6.0, 0.0, 0.0, 0.0, -0.785398]
+    antennas:
+    - name: rsu_3
+      offset: [0.0, 0.0, 2.5]
+      relative_rpy: [0.0, 0.0, 0.0]
