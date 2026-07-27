@@ -93,6 +93,127 @@ namespace tx_controller
         std::map<int, std::string> owner_by_bs;
     };
 
+    /**
+     * GeoAssignmentRegistry
+     * ---------------------
+     * geo_optimal arm の中央調停 (プロセス内 singleton)。
+     *
+     * 各車のプラグインが「理論RSSI (距離減衰 + 両端指向性のみ。遮蔽・シャドウを
+     * 見ない) の効用ベクトル」を毎 tick 投函し、P2P排他制約下で総効用最大の
+     * 割当を返す。事前計算 LUT は使わない — 車速域では位置が毎 tick 得られ、
+     * 理論RSSI は閉形式で即計算できるため、オンライン計算で足りる。
+     *
+     * 最適化: RSU 数は小さい (4) ので、RSU 集合のビットマスク DP で
+     * **厳密な最大重みマッチング**を解く。O(車数 × 2^RSU数 × RSU数)。
+     * ハンガリアン法より実装が単純で、同じ最適解を与える。
+     *
+     * 時間軸: 各 tick を独立に解く瞬時最適 (先読みなし)。T_est (2ms) が RSU 通過
+     * 時間 (~0.6s) より十分小さいため、切替コストを織り込んだ系列最適との差は小さい。
+     *
+     * gz-sim は各物理ステップで全プラグインを単一スレッド逐次実行するため、
+     * 解は「エポックが進んだ最初の問い合わせ」で一度だけ計算され、同 tick の
+     * 残りの車はその解を読む。投函値は最大 1 tick (5ms = 8cm 相当) 古いが、
+     * 全車が同じスナップショットを見るため割当の整合性は保たれる。
+     */
+    class GeoAssignmentRegistry {
+    public:
+        static GeoAssignmentRegistry& Instance() {
+            static GeoAssignmentRegistry inst;
+            return inst;
+        }
+
+        /// 効用を投函し、自車に割り当てられた BS を返す (-1 = 割当なし)。
+        /// utilities[b] = BS b の理論RSSI [dBm]。圏外/不適格は -1e9 未満にすること。
+        int Resolve(const std::string& owner, double t,
+                    const std::vector<double>& utilities) {
+            std::lock_guard<std::mutex> lock(this->mtx);
+            this->posts[owner] = {t, utilities};
+
+            if (t > this->epoch_t + 1e-9) {   // 新しい tick: 解き直す
+                this->epoch_t = t;
+                this->Solve(t);
+            }
+            auto it = this->assignment.find(owner);
+            return it == this->assignment.end() ? -1 : it->second;
+        }
+
+    private:
+        struct Post {
+            double t = -1.0;
+            std::vector<double> utilities;
+        };
+
+        /// ビットマスク DP による厳密な最大重みマッチング。
+        /// 投函が古い車 (コリドーを出た等) は候補から外す。
+        void Solve(double now) {
+            const double kStale = 0.5;      // これ以上古い投函は無効 [s]
+            const double kMinUtil = -1e8;   // これ未満は割当不可
+
+            std::vector<const std::string*> names;
+            std::vector<const std::vector<double>*> utils;
+            std::size_t n_bs = 0;
+            for (const auto& kv : this->posts) {     // std::map = 名前順 = 決定論
+                if (now - kv.second.t > kStale) continue;
+                names.push_back(&kv.first);
+                utils.push_back(&kv.second.utilities);
+                n_bs = std::max(n_bs, kv.second.utilities.size());
+            }
+            this->assignment.clear();
+            if (names.empty() || n_bs == 0) return;
+
+            const int B = static_cast<int>(n_bs);
+            const int full = 1 << B;
+            const int V = static_cast<int>(names.size());
+            const double kNeg = -1e18;
+
+            // dp[k][mask] = 先頭 k 台までで mask の RSU を使ったときの最大総効用
+            std::vector<std::vector<double>> dp(V + 1, std::vector<double>(full, kNeg));
+            std::vector<std::vector<int>> choice(V, std::vector<int>(full, -2));
+            dp[0][0] = 0.0;
+            for (int k = 0; k < V; ++k) {
+                const auto& u = *utils[k];
+                for (int mask = 0; mask < full; ++mask) {
+                    if (dp[k][mask] <= kNeg) continue;
+                    // この車を割り当てない
+                    if (dp[k][mask] > dp[k + 1][mask]) {
+                        dp[k + 1][mask] = dp[k][mask];
+                        choice[k][mask] = -1;
+                    }
+                    // BS b に割り当てる
+                    for (int b = 0; b < B && b < static_cast<int>(u.size()); ++b) {
+                        if (mask & (1 << b)) continue;
+                        if (u[b] < kMinUtil) continue;
+                        int nm = mask | (1 << b);
+                        double val = dp[k][mask] + u[b];
+                        if (val > dp[k + 1][nm]) {
+                            dp[k + 1][nm] = val;
+                            choice[k][nm] = b;
+                        }
+                    }
+                }
+            }
+            int best_mask = 0;
+            double best_val = kNeg;
+            for (int mask = 0; mask < full; ++mask) {
+                if (dp[V][mask] > best_val) { best_val = dp[V][mask]; best_mask = mask; }
+            }
+            // 復元
+            int mask = best_mask;
+            for (int k = V - 1; k >= 0; --k) {
+                int c = choice[k][mask];
+                if (c >= 0) {
+                    this->assignment[*names[k]] = c;
+                    mask &= ~(1 << c);
+                }
+            }
+        }
+
+        std::mutex mtx;
+        std::map<std::string, Post> posts;
+        std::map<std::string, int> assignment;
+        double epoch_t = -1.0;
+    };
+
     class TxControllerPlugin :
         public gz::sim::System,
         public gz::sim::ISystemConfigure,
@@ -850,6 +971,47 @@ namespace tx_controller
                 }
             }
 
+            // geo_optimal (幾何最適・オンライン): 遮蔽を考慮しない理論RSSI
+            // (距離減衰 + 両端指向性のみ) を毎 tick 計算し、中央調停が P2P排他下で
+            // 総効用最大の割当を返す。情報制約 = 「全車の位置・姿勢とアンテナ
+            // パターンは既知、伝搬の確率成分 (遮蔽・シャドウ) は未知」。
+            // 事前計算 LUT は使わない (車速域ではオンライン計算で足りる)。
+            if (this->scheduling_policy == "geo_optimal") {
+                double rmin = this->comms_env.GetRssiMin();
+                int n_bs = static_cast<int>(this->base_stations.size());
+                // sim_time < 0 = 決定論モード (遮蔽・シャドウ・フェージングを評価しない)
+                auto geo = this->comms_env.CalculateMetrics(
+                    this->vehicle_antennas, this->base_stations, pos, vehicle_rotmat,
+                    -1.0, nullptr, this->link_eval_radius_m);
+
+                // BS ごとに最良アンテナを代表に取り、効用ベクトルを組む。
+                // 効用は「接続閾値からのマージン (rssi - rmin) [dB]」= 常に非負。
+                // 生の RSSI (dBm, 負値) を使うと総和最大化が「誰も割り当てない
+                // (合計 0)」を選ぶ縮退解に陥るため。マージンなら接続数を最大化し、
+                // 同数の中では RSSI 順で最良の組合せになる (順序は RSSI と同一)。
+                // レート基準にしたい場合は RateGbps に差し替えるだけでよい。
+                std::vector<double> util(n_bs, -1e9);
+                std::vector<int> util_ant(n_bs, 0);
+                for (int b = 0; b < n_bs; ++b) {
+                    for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
+                        double r = geo[i][b].best_rssi;
+                        if (r >= rmin && (r - rmin) > util[b]) {
+                            util[b] = r - rmin;
+                            util_ant[b] = static_cast<int>(i);
+                        }
+                    }
+                }
+                int bs = GeoAssignmentRegistry::Instance().Resolve(
+                    this->model_name, current_time_s, util);
+
+                for (auto& ant : this->vehicle_antennas) ant.assigned_bs_idx = -1;
+                if (bs >= 0 && bs < n_bs) {
+                    int ai = util_ant[bs];
+                    this->vehicle_antennas[ai].assigned_bs_idx = bs;
+                    this->active_antenna_idx = ai;
+                }
+            }
+
             // Extract best metrics list for data calculation
             std::vector<AntennaMetrics> ant_metrics_list(this->vehicle_antennas.size());
             for (size_t i = 0; i < this->vehicle_antennas.size(); ++i) {
@@ -894,7 +1056,8 @@ namespace tx_controller
                 if (this->scheduling_policy == "feedforward_optimal" ||
                     this->scheduling_policy == "simple_no_handover" ||
                     this->scheduling_policy == "greedy_fcfs" ||
-                    this->scheduling_policy == "assoc_hold") {
+                    this->scheduling_policy == "assoc_hold" ||
+                    this->scheduling_policy == "geo_optimal") {
                     has_grant = ant.assigned_bs_idx >= 0;
                 } else if (this->scheduling_policy == "external_schedule" ||
                            this->scheduling_policy == "kkf_predictive") {
