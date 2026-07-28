@@ -125,6 +125,22 @@ def main():
                     failures.append(f"bs{b} {vid}: lcb_multi と lcb が不一致 ({d:.2e})")
         print("  lcb_multi と逐次 lcb の一致を確認 (4RSU × 2方向 × 8ステージ)")
 
+        # --- 5b) 方向集合は交通実現でなく環境が決める (状態キーの安定性) ---
+        # 対象車は確率生成なので run によっては片方向しか出ない。車両から
+        # 推定していると run ごとに状態キーが変わり、走行間で状態を読めず
+        # 学習が一切蓄積しなくなる (実際に 10 走行を無駄にした失敗モード)
+        cfg_uni = make_config(tmpdir, False, kkf_directions=[-1, 1])
+        if cfg_uni.directions != [-1, 1]:
+            failures.append(f"kkf_directions の明示が効いていない: {cfg_uni.directions}")
+        p_uni = node.make_predictor(cfg_uni, node.RoadCoordinate(cfg_uni.road_points))
+        if not p_uni.split or p_uni._state_key((0, 1)) != '0_p':
+            failures.append("片方向の交通でも宣言どおり方向別キーになっていない")
+        cfg_bi = make_config(tmpdir, True, kkf_directions=[-1, 1])
+        p_bi = node.make_predictor(cfg_bi, node.RoadCoordinate(cfg_bi.road_points))
+        if p_uni._state_key((0, 1)) != p_bi._state_key((0, 1)):
+            failures.append("交通実現によって状態キーが変わる (学習が蓄積しない)")
+        print("  状態キーの安定性: 片方向/双方向どちらの交通でも同一キー")
+
         # --- 6) 状態ファイルが方向別に分かれる ---
         sd = os.path.join(tmpdir, 'rem_state')
         cfg_s = make_config(tmpdir, True, kkf_state_dir=sd, kkf_state_save=True)

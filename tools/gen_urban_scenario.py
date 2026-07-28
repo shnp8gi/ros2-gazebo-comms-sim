@@ -128,6 +128,11 @@ def build_scenario(a):
                     'kkf_lookahead_discount': 1.0,
                     # 連続交通流ではコリドーを出た車が計画に残り続けるため必須
                     'kkf_stale_report_s': 1.0,
+                    # REM を分ける方向の集合 (道路の車線構成から決まる環境の性質)。
+                    # 対象車は確率生成なので run によっては片方向しか出ないことが
+                    # あり、車両から推定すると run ごとに状態キーが変わって学習が
+                    # 蓄積しない。ここで明示して固定する
+                    'kkf_directions': sorted({lane['direction'] for lane in lanes}),
                     'kkf_horizon_s': 4.0,
                     'kkf_plan_dt_s': a.kkf_plan_dt_s,
                     'kkf_kappa': 1.0,

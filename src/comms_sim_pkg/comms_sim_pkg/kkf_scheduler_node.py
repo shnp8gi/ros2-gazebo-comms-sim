@@ -94,9 +94,19 @@ class SchedulerConfig:
             if len(wps) >= 2:
                 d = 1 if float(wps[-1][0]) >= float(wps[0][0]) else -1
             self.vehicle_dirs[v.get('name')] = d
-        # 出現する方向の集合。単一方向のシナリオ (road_10car 等) では要素1つとなり、
-        # 従来と同一の「BSごとに1つの地図」構成に自動的に縮退する
-        self.directions = sorted(set(self.vehicle_dirs.values())) or [1]
+        # 地図を分ける方向の集合。**環境の性質であって run の交通実現ではない**。
+        # kkf_directions が明示されていればそれを使う (シナリオ生成器が道路の
+        # 車線構成から書く)。無ければ車両から推定し、単一方向のシナリオ
+        # (road_10car 等) では要素1つ = 従来と同一構成に縮退する。
+        #
+        # 明示指定が要る理由: 対象車を交通流から確率生成すると、run によっては
+        # 片方向の対象車しか出ないことがある。推定に頼ると run ごとに地図の
+        # キーが変わり、走行間で状態を読めず学習が一切蓄積しない
+        declared = link.get('kkf_directions')
+        if declared:
+            self.directions = sorted({1 if int(d) >= 0 else -1 for d in declared})
+        else:
+            self.directions = sorted(set(self.vehicle_dirs.values())) or [1]
 
         # 路線形状: 全車の走行範囲を覆う x 軸方向の直線。弧長 s は常に +x 向きに
         # 増加するため、方向 -1 の車は v̂ < 0 として一貫して扱える。
