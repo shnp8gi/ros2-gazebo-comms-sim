@@ -62,6 +62,52 @@ def per_vehicle_totals(summaries, group_vars):
         connected_time_s=('connected_time_s', 'sum')).reset_index()
 
 
+def path_metrics(data, group_vars, margin_m=20.0):
+    """コリドー通過1回 (パス) を単位とする指標。
+
+    交通流から対象車を確率生成する評価では、車ごとの累積配信量は「その車が
+    いつ現れたか」に支配される。評価窓の終わり際に現れた車は必ず少量になり、
+    それが min_car を決めてしまうため、手法の性質ではなく交通の巡り合わせを
+    測ることになる (実測: 全手法で min_car が同値になった)。
+
+    ここでは **RSU 列を端から端まで通過し切ったパスだけ**を数え、通過1回
+    あたりの配信量で正規化する。部分的にしか映っていない車は除外される。
+
+      path_mean_MB   完全通過1回あたりの平均配信量
+      path_min_MB    同 最小 (真の最悪車。途中出現の車に汚染されない)
+      path_zero_pct  配信量がほぼ 0 だった通過の割合 [%] (飢餓の直接指標)
+      n_paths        完全通過の数 (条件間で揃っているかの健全性チェック)
+
+    完全通過の定義: 車の x 範囲が [min(bs_x) − margin, max(bs_x) + margin] を
+    覆うこと。進行方向によらず同一の判定になる。
+    """
+    need = {'vehicle_name', 'tx_x', 'bs_x', 'total_data_MB'}
+    if data is None or data.empty or not need.issubset(data.columns):
+        return pd.DataFrame(columns=group_vars + ['run', 'path_mean_MB',
+                                                  'path_min_MB', 'path_zero_pct',
+                                                  'n_paths'])
+    bs_lo = float(data['bs_x'].min()) - margin_m
+    bs_hi = float(data['bs_x'].max()) + margin_m
+
+    keys = group_vars + ['run']
+    per = data.groupby(keys + ['vehicle_name']).agg(
+        x_lo=('tx_x', 'min'), x_hi=('tx_x', 'max'),
+        mb_lo=('total_data_MB', 'min'), mb_hi=('total_data_MB', 'max')).reset_index()
+    per['delivered_MB'] = per['mb_hi'] - per['mb_lo']
+    per['complete'] = (per['x_lo'] <= bs_lo) & (per['x_hi'] >= bs_hi)
+    done = per[per['complete']]
+    if done.empty:
+        return pd.DataFrame(columns=keys + ['path_mean_MB', 'path_min_MB',
+                                            'path_zero_pct', 'n_paths'])
+    out = done.groupby(keys).agg(
+        path_mean_MB=('delivered_MB', 'mean'),
+        path_min_MB=('delivered_MB', 'min'),
+        n_paths=('delivered_MB', 'size')).reset_index()
+    zero = done.assign(z=(done['delivered_MB'] < 1.0).astype(float)) \
+        .groupby(keys)['z'].mean().mul(100.0).rename('path_zero_pct').reset_index()
+    return out.merge(zero, on=keys, how='left')
+
+
 def nlos_grant_pct(data, group_vars):
     """grant中tickのNLOS率 [%] を (条件, run) 粒度で。"""
     g = data[data['has_link_grant'] == 1]
@@ -139,6 +185,9 @@ def runs_table(tables, group_vars):
     data = tables.get('data')
     if data is not None and not data.empty:
         base = base.merge(nlos_grant_pct(data, group_vars), on=keys, how='left')
+        pm = path_metrics(data, group_vars)
+        if not pm.empty:
+            base = base.merge(pm, on=keys, how='left')
     events = tables.get('events')
     ho = serving_ho_count(events, group_vars)
     if not ho.empty:
@@ -147,7 +196,8 @@ def runs_table(tables, group_vars):
 
 
 DEFAULT_METRICS = ['total_data_MB', 'connected_time_s', 'min_car_data_MB',
-                   'jain_index', 'nlos_grant_pct', 'ho_count']
+                   'jain_index', 'nlos_grant_pct', 'ho_count',
+                   'path_mean_MB', 'path_min_MB', 'path_zero_pct', 'n_paths']
 
 
 def aggregate(runs_df, group_vars, metrics=None):

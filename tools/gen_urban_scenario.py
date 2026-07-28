@@ -125,7 +125,11 @@ def build_scenario(a):
                     # 先読み: K=1 で瞬時最適 (先読みなし)、K>1 で窓の出入りを見る。
                     # arm (kkf_k0 / kkf_mpc) は sweep がこの値を上書きして作る
                     'kkf_lookahead_stages': a.kkf_lookahead_stages,
-                    'kkf_lookahead_discount': 1.0,
+                    # 割引 γ。実行するのは k=0 の割当だけなので、一様平均
+                    # (γ=1) だと現在の価値が 1/K に希釈され「今まさに最良の
+                    # ペア」が選ばれなくなる (実測: 一様平均は全手法に劣った)。
+                    # γ=0.7 で k=0 に 31%、上位3ステージに 68% の重みが乗る
+                    'kkf_lookahead_discount': a.kkf_lookahead_discount,
                     # 連続交通流ではコリドーを出た車が計画に残り続けるため必須
                     'kkf_stale_report_s': 1.0,
                     # REM を分ける方向の集合 (道路の車線構成から決まる環境の性質)。
@@ -322,6 +326,8 @@ def main():
                     help='先読み段数 K (1 = 瞬時最適)。arm ごとに sweep が上書き')
     ap.add_argument('--kkf-plan-dt-s', type=float, default=0.1,
                     help='先読みのステージ幅 [s] (K×これ = ホライズン長)')
+    ap.add_argument('--kkf-lookahead-discount', type=float, default=0.7,
+                    help='先読みの割引 γ (1.0=一様平均は現在価値を希釈し有害)')
     a = ap.parse_args()
 
     scenario = build_scenario(a)

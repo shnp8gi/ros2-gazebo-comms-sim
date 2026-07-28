@@ -167,7 +167,8 @@ defaults = argparse.Namespace(
     target_ratio=0.30, window_s=60.0, warmup_s=5.0, tx_power=-7.0,
     snr_min_db=26.5, environment_seed=1, rtf=2.0, comms_update_period_s=0.005,
     link_eval_radius_m=100.0, assoc_recover_timeout_s=1.0,
-    kkf_replan_period_s=0.05, kkf_lookahead_stages=1, kkf_plan_dt_s=0.1)
+    kkf_replan_period_s=0.05, kkf_lookahead_stages=1, kkf_plan_dt_s=0.1,
+    kkf_lookahead_discount=0.7)
 
 sc = build_scenario(defaults)['scenario']
 rsus = sc['entities']

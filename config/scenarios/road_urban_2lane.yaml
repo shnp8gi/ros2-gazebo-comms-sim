@@ -24,7 +24,7 @@ scenario:
         kkf_switch_bonus_db: 3.0
         kkf_replan_period_s: 0.05
         kkf_lookahead_stages: 1
-        kkf_lookahead_discount: 1.0
+        kkf_lookahead_discount: 0.7
         kkf_stale_report_s: 1.0
         kkf_directions: [-1, 1]
         kkf_road_x_range: [-115.0, 115.0]
