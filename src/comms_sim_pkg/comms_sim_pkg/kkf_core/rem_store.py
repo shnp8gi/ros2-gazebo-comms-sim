@@ -29,7 +29,10 @@ class RemStore:
         self.state_dir = str(state_dir)
 
     def path(self, bs_id):
-        return os.path.join(self.state_dir, f"bs{int(bs_id)}.npz")
+        """状態ファイルのパス。bs_id は int でも文字列キーでもよい
+        (方向別地図では "0_p" / "0_m" のような複合キーを使う。単一方向では
+        従来どおり "0" となり、既存の学習済み状態がそのまま読める)。"""
+        return os.path.join(self.state_dir, f"bs{bs_id}.npz")
 
     def exists(self, bs_id):
         return os.path.isfile(self.path(bs_id))

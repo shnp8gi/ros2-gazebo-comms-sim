@@ -117,8 +117,9 @@ def main():
             failures.append(f"run_count 継承が不正: {pred2.run_count}")
 
         # 忘却: P が load 時に膨らむ
-        p_saved = pred.maps[1].P
-        if not (np.diag(pred2.maps[1].P) > np.diag(p_saved) + 0.049).all():
+        # 地図キーは (BS index, 進行方向)。本テストの車は全て +x 方向なので dir=1
+        p_saved = pred.maps[(1, 1)].P
+        if not (np.diag(pred2.maps[(1, 1)].P) > np.diag(p_saved) + 0.049).all():
             failures.append("q_forget が load 時に適用されていない")
 
         # --- 3) σ_ν²(s): 遮蔽帯の残差が予測分散に現れる ---
@@ -134,8 +135,8 @@ def main():
                 pred3.ingest('car_1', t + run * 100.0, [s], [(0, 1, z)])
                 t += 0.05
                 s = 16.67 * t
-        var_in = pred3.varmaps[1].query(110.0)
-        var_out = pred3.varmaps[1].query(60.0)
+        var_in = pred3.varmaps[(1, 1)].query(110.0)
+        var_out = pred3.varmaps[(1, 1)].query(60.0)
         print(f"  σ_ν²: 遮蔽帯 {var_in:.1f} dB² / 帯外 {var_out:.1f} dB²")
         if var_in < 3.0 * max(var_out, 1.0):
             failures.append(f"σ_ν² が遮蔽帯を学習していない ({var_in:.1f} vs {var_out:.1f})")

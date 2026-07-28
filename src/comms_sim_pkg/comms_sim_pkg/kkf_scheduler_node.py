@@ -83,14 +83,35 @@ class SchedulerConfig:
                 'antenna_offsets': [np.array(a['offset'], dtype=float)
                                     for a in v.get('antennas', [])],
             })
-        # 路線形状は全車共通 (同一路線の順次通過を前提)。進入位置が車両ごとに
-        # 異なるため、弧長座標が全車の走行範囲を覆うよう最長経路の車両を採用する
-        def _path_len(v):
+        # 車両ごとの進行方向 (+1 = +x / -1 = -x)。waypoints の x 変位の符号で決まる。
+        # 双方向道路では、同じ位置でも進行方向によってアンテナの向きも RSU までの
+        # 横距離も異なる (車線が方向で決まるため) ので、REM を方向別に分ける
+        # 鍵になる (本節の direction-split)
+        self.vehicle_dirs = {}
+        for v in cfg.get('vehicles', []):
             wps = v.get('waypoints', [])
-            return sum(math.dist(wps[i][:3], wps[i + 1][:3])
-                       for i in range(len(wps) - 1)) if len(wps) >= 2 else 0.0
-        road_src = max(cfg.get('vehicles', [{}]), key=_path_len, default={})
-        self.road_points = [[wp[0], wp[1], wp[2]] for wp in road_src.get('waypoints', [])]
+            d = 1
+            if len(wps) >= 2:
+                d = 1 if float(wps[-1][0]) >= float(wps[0][0]) else -1
+            self.vehicle_dirs[v.get('name')] = d
+        # 出現する方向の集合。単一方向のシナリオ (road_10car 等) では要素1つとなり、
+        # 従来と同一の「BSごとに1つの地図」構成に自動的に縮退する
+        self.directions = sorted(set(self.vehicle_dirs.values())) or [1]
+
+        # 路線形状: 全車の走行範囲を覆う x 軸方向の直線。弧長 s は常に +x 向きに
+        # 増加するため、方向 -1 の車は v̂ < 0 として一貫して扱える。
+        # (従来は「最長経路の車両の waypoints」を使っていたが、双方向では
+        #  片方向の経路しか道路にならず逆方向車の外挿が壊れる)
+        xs, ys, zs = [], [], []
+        for v in cfg.get('vehicles', []):
+            for wp in v.get('waypoints', []):
+                xs.append(float(wp[0])); ys.append(float(wp[1])); zs.append(float(wp[2]))
+        if xs:
+            y0 = sum(ys) / len(ys)
+            z0 = sum(zs) / len(zs)
+            self.road_points = [[min(xs), y0, z0], [max(xs), y0, z0]]
+        else:
+            self.road_points = []
 
         self.bs_positions = []
         for _, bs in sorted(cfg.get('spawn_entities', {}).items()):
@@ -123,6 +144,20 @@ class SchedulerConfig:
         # --- L3 割当方式 (本番仕様 §6) ---
         self.assigner = link.get('kkf_assigner', 'priority_dp')
         self.switch_bonus_db = float(link.get('kkf_switch_bonus_db', 3.0))
+        # 先読み (hungarian のみ): ペア (車 i, RSU j) の効用を、その組を保持した
+        # ままホライズン上を進んだ場合の LCB の重み付き平均とする。
+        #   U[i][j] = Σ_k γ^k · LCB(i, j, s_i + v̂_i·kΔ, t + kΔ) / Σ_k γ^k
+        # K=1 (既定) は「今この瞬間の最適」= 先読みなし。K>1 で「窓を抜けつつある
+        # ペアより、これから窓に入るペアを選ぶ」挙動になる。
+        # KKF の価値のうち「先読み」の寄与を空間補間・リスクと分離して測るための
+        # つまみであり、K=1 と K>1 の 2 arm を同一コードで構成できる
+        self.lookahead_stages = max(1, int(link.get('kkf_lookahead_stages', 1)))
+        self.lookahead_discount = float(link.get('kkf_lookahead_discount', 1.0))
+        # レポートがこの時間途絶えた車は計画対象から外す [s]。連続交通流では
+        # コリドーを出た車が延々と計画対象に残り、計算量と割当の両方を汚す
+        # (退出は「レポートが来なくなる」ことでしか観測できない)。
+        # 0 以下 = 無効 = 従来動作 (固定車両数のシナリオ向け)
+        self.stale_report_s = float(link.get('kkf_stale_report_s', 1.0))
 
         # --- 第1層の基底 (本番仕様 §5.1) ---
         # "auto" = 従来動作 (prior あり→Constant / なし→LogDistance)、"rbf" = RBF基底
@@ -322,22 +357,34 @@ class KkfMapPredictor:
 
     永続化 (kkf_state_dir / kkf_state_save): (α, P, S2, W) を RSU ごとに
     保存・復元し、忘却は load 時に適用する (本番仕様 §5.3)。
+
+    方向別地図 (direction-split): 双方向道路では、同じ弧長 s でも進行方向で
+    アンテナの向きと RSU までの横距離が変わる (方向が車線を決めるため) ので、
+    地図を (RSU, 方向) ごとに持つ。単一方向のシナリオでは方向集合の要素が
+    1 つになり、従来と同一の「RSU ごとに 1 地図」構成へ自動的に縮退する
+    (road_10car の学習済み状態もそのまま読める)。
     """
 
     def __init__(self, cfg: SchedulerConfig, road: RoadCoordinate, priors=None):
         self.cfg = cfg
         self.priors = priors
         self.frozen = cfg.kkf_freeze
+        self.dirs = list(cfg.directions)
+        self.split = len(self.dirs) > 1     # 方向別に分けるか
 
         s_max = cfg.rbf_s_max if cfg.rbf_s_max > cfg.rbf_s_min else road.total_length()
-        if cfg.basis_type == 'rbf':
-            bases = [RbfBasis(cfg.rbf_s_min, s_max, cfg.rbf_num_bases,
-                              cfg.rbf_width_m) for _ in cfg.bs_positions]
-        elif priors:
-            bases = [ConstantBasis() for _ in cfg.bs_positions]
-        else:
-            bases = [LogDistanceBasis(road, p) for p in cfg.bs_positions]
-        self.maps = [KrigedKalmanFilter(b, cfg.kkf_params) for b in bases]
+        self.keys = [(b, d) for b in range(len(cfg.bs_positions)) for d in self.dirs]
+
+        def _make_basis(b):
+            if cfg.basis_type == 'rbf':
+                return RbfBasis(cfg.rbf_s_min, s_max, cfg.rbf_num_bases, cfg.rbf_width_m)
+            if priors:
+                return ConstantBasis()
+            return LogDistanceBasis(road, cfg.bs_positions[b])
+
+        self.bases = {k: _make_basis(k[0]) for k in self.keys}
+        self.maps = {k: KrigedKalmanFilter(self.bases[k], cfg.kkf_params)
+                     for k in self.keys}
 
         # σ_ν²(s): 位置依存の偶然的分散 (遮蔽リスクマップ)
         self.varmaps = None
@@ -345,45 +392,57 @@ class KkfMapPredictor:
             vm_params = VarianceMapParams(
                 s_min=cfg.rbf_s_min, s_max=s_max, grid_m=cfg.varmap_grid_m,
                 prior_var_db2=cfg.varmap_prior_var_db2)
-            self.varmaps = [AleatoricVarianceMap(vm_params)
-                            for _ in cfg.bs_positions]
+            self.varmaps = {k: AleatoricVarianceMap(vm_params) for k in self.keys}
 
         # 第2層: RSUごとに独立の遮蔽トラッカー (そのRSUの残差マップの影を追跡)。
         # 本番構成では無効 (σ_ν²マップが代替) だが比較用に残す
-        self.trackers = [BlockageTracker(cfg.tracker_params)
-                         for _ in cfg.bs_positions] if cfg.tracker_enabled else None
+        self.trackers = ({k: BlockageTracker(cfg.tracker_params) for k in self.keys}
+                         if cfg.tracker_enabled else None)
 
         # 走行間永続化: load はここ (忘却込み)、save は save_state()
         self.store = RemStore(cfg.state_dir) if cfg.state_dir else None
         self.run_count = 0
         if self.store:
             loaded = 0
-            for b, kkf in enumerate(self.maps):
-                st = self.store.load(b, expected_basis_hash=basis_hash(bases[b].config()),
+            for k in self.keys:
+                st = self.store.load(self._state_key(k),
+                                     expected_basis_hash=basis_hash(self.bases[k].config()),
                                      q_forget=cfg.q_forget, gamma=cfg.state_gamma)
                 if st is None:
                     continue
-                kkf.alpha = st['alpha']
-                kkf.P = st['P']
+                self.maps[k].alpha = st['alpha']
+                self.maps[k].P = st['P']
                 if self.varmaps:
-                    self.varmaps[b].load_state(st['S2'], st['W'])
+                    self.varmaps[k].load_state(st['S2'], st['W'])
                 self.run_count = max(self.run_count, int(st['meta'].get('run_count', 0)))
                 loaded += 1
             print(f"[kkf_scheduler] REM state loaded: {loaded}/{len(self.maps)} maps "
                   f"(run_count={self.run_count}, dir={cfg.state_dir})", flush=True)
 
+    def _state_key(self, key):
+        """永続化ファイル名のキー。単一方向なら従来と同じ '<bs>' (状態ファイル互換)。"""
+        b, d = key
+        return f"{b}" if not self.split else f"{b}_{'p' if d > 0 else 'm'}"
+
+    def _key(self, vid, bs):
+        """(車, RSU) → 地図キー。単一方向シナリオでは方向を無視する。"""
+        d = self.cfg.vehicle_dirs.get(vid, self.dirs[0]) if self.split else self.dirs[0]
+        return (bs, d)
+
     def save_state(self, t):
         """定期スナップショット (アトミック上書き)。学習相の run 間受け渡しに使う。"""
         if not self.store:
             return
-        for b, kkf in enumerate(self.maps):
+        for k in self.keys:
+            kkf = self.maps[k]
             if self.varmaps:
-                s2, w = self.varmaps[b].S2, self.varmaps[b].W
+                s2, w = self.varmaps[k].S2, self.varmaps[k].W
             else:
                 s2, w = np.zeros(1), np.zeros(1)
-            self.store.save(b, kkf.alpha, kkf.P, s2, w, {
+            self.store.save(self._state_key(k), kkf.alpha, kkf.P, s2, w, {
                 'basis_hash': basis_hash(kkf.basis.config()),
-                'bs_id': b,
+                'bs_id': k[0],
+                'direction': k[1],
                 'run_count': self.run_count + 1,
                 'last_t': float(t),
             })
@@ -398,62 +457,106 @@ class KkfMapPredictor:
         """entries: [(ant, bs, rssi_dbm)] を地図更新・トラッカー観測に振り分ける。"""
         if self.frozen:
             return  # kkf_freeze: 評価用に状態を凍結 (予測のみ)
-        per_bs = [[] for _ in self.maps]
+        per_key = {}
         for ant, bs, rssi in entries:
             s_obs = antenna_s[ant]
             z = rssi
             if self.priors:
                 z = rssi - self._prior_mean(vid, ant, bs, s_obs)  # 偏差のみ学習
+            key = self._key(vid, bs)
             # 式(10): 予測遮蔽帯内の観測は先回りで観測雑音を減格 (σ²_NLOS)。
             # 本番構成 (トラッカー無効) では固定 R_meas = σ_ν² を観測ノイズに
             # 流用しない (平均場学習を殺さない、本番仕様 §5.2)
             noise_var = self.cfg.meas_noise_var
-            if self.trackers and self.trackers[bs].is_blocked(s_obs, t):
+            if self.trackers and self.trackers[key].is_blocked(s_obs, t):
                 noise_var = self.cfg.nlos_noise_var
-            per_bs[bs].append(Observation(s=s_obs, t=t, z=z, noise_var=noise_var))
-        for b, obs in enumerate(per_bs):
-            fresh_residuals = self.maps[b].update(t, obs)
+            per_key.setdefault(key, []).append(
+                Observation(s=s_obs, t=t, z=z, noise_var=noise_var))
+        for key, obs in per_key.items():
+            fresh_residuals = self.maps[key].update(t, obs)
             if self.varmaps:
-                self.varmaps[b].update_batch(fresh_residuals)
+                self.varmaps[key].update_batch(fresh_residuals)
             if self.trackers:
-                self.trackers[b].ingest(t, fresh_residuals)
+                self.trackers[key].ingest(t, fresh_residuals)
 
     def lcb(self, vid, ant, bs, s_future, t_future, kappa):
-        mean, var = self.maps[bs].predict_at(s_future, t_future)
+        key = self._key(vid, bs)
+        mean, var = self.maps[key].predict_at(s_future, t_future)
         if self.priors:
             mean += self._prior_mean(vid, ant, bs, s_future)
         # σ_ν²(s) は予測分散にのみ加算 (本番仕様 §5.2)
         if self.varmaps:
-            var += self.varmaps[bs].query(s_future)
+            var += self.varmaps[key].query(s_future)
         value = mean - kappa * math.sqrt(var)
         # 式(11) 第3項: 遮蔽帯の通過が予測される区間・時刻にはペナルティを加算
-        if self.trackers and self.trackers[bs].is_blocked(s_future, t_future):
+        if self.trackers and self.trackers[key].is_blocked(s_future, t_future):
             value -= self.cfg.blockage_penalty_db
         return value
 
     def lcb_batch(self, vid, ant, bs, s_arr, t_arr, kappa):
         """ステージ一括の LCB (再計画の計算量ボトルネック解消用)。"""
-        means, variances = self.maps[bs].predict_batch(s_arr, t_arr)
+        key = self._key(vid, bs)
+        means, variances = self.maps[key].predict_batch(s_arr, t_arr)
         if self.priors and vid in self.priors:
             means = means + self.priors[vid].mean_batch(ant, bs, s_arr)
         if self.varmaps:
-            variances = variances + self.varmaps[bs].query_batch(s_arr)
+            variances = variances + self.varmaps[key].query_batch(s_arr)
         values = means - kappa * np.sqrt(variances)
         if self.trackers:
-            trk = self.trackers[bs]
+            trk = self.trackers[key]
             for i, (s, t) in enumerate(zip(s_arr, t_arr)):
                 if trk.is_blocked(s, t):
                     values[i] -= self.cfg.blockage_penalty_db
         return values
 
+    def lcb_multi(self, queries, bs, kappa):
+        """複数 (車, アンテナ) × 複数ステージの LCB を地図ごとに一括評価する。
+
+        queries: [(vid, ant, s_arr, t_arr)]。戻り値は同順の [values(ステージ数)]。
+
+        再計画は「全車 × 全 RSU × 全ステージ」の評価が要り、1 点ずつ predict_at を
+        呼ぶと 64×64 のクリギング解を毎回解き直して律速する (実測 13.7 倍差)。
+        同一地図に属するクエリ点をまとめて predict_batch に渡すことで、
+        解を 1 回に償却する。数値は逐次呼び出しと同一 (差 ~1e-15 dB)。
+        """
+        groups = {}
+        for i, (vid, ant, s_arr, t_arr) in enumerate(queries):
+            groups.setdefault(self._key(vid, bs), []).append(i)
+
+        out = [None] * len(queries)
+        for key, idxs in groups.items():
+            lens = [len(queries[i][2]) for i in idxs]
+            s_cat = np.concatenate([np.asarray(queries[i][2], dtype=float) for i in idxs])
+            t_cat = np.concatenate([np.asarray(queries[i][3], dtype=float) for i in idxs])
+            means, variances = self.maps[key].predict_batch(s_cat, t_cat)
+            if self.varmaps:
+                variances = variances + self.varmaps[key].query_batch(s_cat)
+            values = means - kappa * np.sqrt(variances)
+            if self.trackers:
+                trk = self.trackers[key]
+                for j, (s, t) in enumerate(zip(s_cat, t_cat)):
+                    if trk.is_blocked(s, t):
+                        values[j] -= self.cfg.blockage_penalty_db
+            off = 0
+            for i, n in zip(idxs, lens):
+                v = values[off:off + n]
+                if self.priors and queries[i][0] in self.priors:
+                    v = v + self.priors[queries[i][0]].mean_batch(
+                        queries[i][1], bs, queries[i][2])
+                out[i] = v
+                off += n
+        return out
+
     def status(self):
         parts = [f"prior={'on' if self.priors else 'off'}"]
+        if self.split:
+            parts.append(f"dirs={self.dirs}")
         if self.trackers:
             n_tracks = sum(sum(1 for tr in trk.tracks if tr.is_confirmed())
-                           for trk in self.trackers)
+                           for trk in self.trackers.values())
             parts.append(f"tracks={n_tracks}")
         if self.varmaps:
-            contrasts = ",".join(f"{vm.contrast():.1f}" for vm in self.varmaps)
+            contrasts = ",".join(f"{self.varmaps[k].contrast():.1f}" for k in self.keys)
             parts.append(f"σν²contrast=[{contrasts}]")
         if self.store:
             parts.append(f"run_count={self.run_count}"
@@ -464,14 +567,26 @@ class KkfMapPredictor:
         """検証用: 確定トラックの (BS index, 中心弧長s, 速度) を返す。"""
         out = []
         if self.trackers:
-            for b, trk in enumerate(self.trackers):
+            for (b, _d), trk in self.trackers.items():
                 for tr in trk.tracks:
                     if tr.is_confirmed():
                         out.append((b, tr.predict_center(t), tr.velocity))
         return out
 
 
-class TimeSeriesKfPredictor:
+class _LcbMultiMixin:
+    """lcb_batch しか持たない予測器に一括インターフェースを与える既定実装。
+
+    KkfMapPredictor は地図単位でまとめ直す専用実装 (13.7 倍高速) を持つが、
+    他の arm は 1 クエリが辞書引き・スカラー KF 程度なので逐次で十分。
+    """
+
+    def lcb_multi(self, queries, bs, kappa):
+        return [self.lcb_batch(vid, ant, bs, s_arr, t_arr, kappa)
+                for vid, ant, s_arr, t_arr in queries]
+
+
+class TimeSeriesKfPredictor(_LcbMultiMixin):
     """先行研究ベースライン: (車両, アンテナ, BS) ごとのRSSI時系列スカラーKF外挿。
 
     空間構造を持たないため、前方の未観測区間の遮蔽・利得変化は原理的に
@@ -529,7 +644,7 @@ class TimeSeriesKfPredictor:
                 f" fallback={'trend' if self.priors else 'prior'}")
 
 
-class TrendPredictor:
+class TrendPredictor(_LcbMultiMixin):
     """arm: trend (下界)。決定論成分 (距離減衰 + 両端指向性) の完全知識のみ。
 
     実測レポートを一切使わない (ingest は破棄)。σ=0 のため κ は効かない。
@@ -563,7 +678,7 @@ class TrendPredictor:
         return "trend (deterministic profile only)"
 
 
-class OraclePredictor:
+class OraclePredictor(_LcbMultiMixin):
     """arm: oracle (情報上界)。全対の現在真値を保持し、予測せず瞬時値で選ぶ。
 
     observe_all_pairs: true + noise_std_db: 0 のレポート設定が前提
@@ -693,10 +808,17 @@ class MpcScheduler:
     def _replan_hungarian(self, t):
         """リスク調整効用 μ−κσ のハンガリアン割当 (本番仕様 §6)。
 
-        各再計画時刻の k=0 行列のみを解く (瞬時大域最適)。予測の価値は
-        LCB の μ (学習済み平均場) と σ (σ_ν² リスクマップ) を通じて入る。
+        効用はペアを保持したままホライズン上を進んだ場合の LCB の重み付き平均:
+            U[i][j] = Σ_k γ^k · LCB(i, j, s_i + v̂_i·kΔ, t + kΔ) / Σ_k γ^k
+        kkf_lookahead_stages K=1 (既定) なら「今この瞬間の最適」= 先読みなしで、
+        K>1 なら「窓を抜けつつあるペアより、これから窓に入るペアを選ぶ」。
+        予測の価値を空間補間・リスク・先読みに分解するためのつまみ。
+
         ping-pong 抑制は現割当 BS への switch_bonus_db (ヒステリシス)。
         余剰の車は自然に idle (min_utility = kkf_idle_lcb_db)。
+
+        LCB は地図ごとに一括評価する (lcb_multi)。1 点ずつ predict_at を呼ぶと
+        クリギング解を毎回解き直して律速するため (実測 13.7 倍差)。
         """
         wall0 = time.monotonic()
         cfg = self.cfg
@@ -704,22 +826,41 @@ class MpcScheduler:
         for v in cfg.vehicles:
             vs = self.vstates[v['name']]
             ant_s = vs.antenna_s_at(t)
-            if ant_s is not None:
-                active.append((v['name'], vs, ant_s))
+            if ant_s is None:
+                continue                      # 未進入 (レポート未受信)
+            if (cfg.stale_report_s > 0.0
+                    and t - vs.last_report_t > cfg.stale_report_s):
+                continue                      # 退出済み (レポート途絶)
+            active.append((v['name'], vs, ant_s))
         if not active:
             return
 
         n_veh, n_bs = len(active), self.num_bs
-        utility = np.empty((n_veh, n_bs))
-        best_ant = np.zeros((n_veh, n_bs), dtype=int)
+        K = cfg.lookahead_stages
+        w = cfg.lookahead_discount ** np.arange(K)
+        w = w / w.sum()
+        dt_grid = np.arange(K) * cfg.plan_dt_s
+        t_grid = t + dt_grid
+
+        # (車, アンテナ) ごとのホライズン上の位置・時刻。等速外挿は方向の符号を
+        # v̂ が持つため、上り・下り車の双方でそのまま正しい
+        queries = []      # [(vid, ant, s_arr, t_arr)]
+        q_index = []      # queries[q] が (車 i, アンテナ a) であることの対応
         for i, (vid, vs, ant_s) in enumerate(active):
-            for b in range(n_bs):
-                # 車両の各アンテナのうち最良のものでそのBSを代表させる
-                vals = [self.predictor.lcb(vid, a, b, ant_s[a], t, cfg.kappa)
-                        for a in range(len(ant_s))]
-                a_best = int(np.argmax(vals))
-                utility[i, b] = vals[a_best]
-                best_ant[i, b] = a_best
+            for a, s0 in enumerate(ant_s):
+                queries.append((vid, a, s0 + vs.v_hat * dt_grid, t_grid))
+                q_index.append((i, a))
+
+        utility = np.full((n_veh, n_bs), -np.inf)
+        best_ant = np.zeros((n_veh, n_bs), dtype=int)
+        for b in range(n_bs):
+            vals = self.predictor.lcb_multi(queries, b, cfg.kappa)
+            for q, (i, a) in enumerate(q_index):
+                u = float(np.dot(w, vals[q]))     # ホライズン重み付き平均
+                if u > utility[i, b]:             # 車の各アンテナのうち最良を代表に
+                    utility[i, b] = u
+                    best_ant[i, b] = a
+        for i, (vid, _vs, _ant_s) in enumerate(active):
             cur = self.current_pair.get(vid)
             if cur is not None and cur[1] < n_bs:
                 utility[i, cur[1]] += cfg.switch_bonus_db
