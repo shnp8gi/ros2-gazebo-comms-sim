@@ -502,7 +502,9 @@ def cmd_learn(args):
     def state_metrics():
         rows = []
         for f in sorted(glob.glob(os.path.join(state_dir, 'bs*.npz'))):
-            bs = int(os.path.basename(f)[2:-4])
+            # 地図キーは "0" (単一方向) または "0_p"/"0_m" (方向別) の文字列。
+            # 学習曲線では地図を識別できればよいので整数化しない
+            bs = os.path.basename(f)[2:-4]
             with np.load(f) as d:
                 alpha, P, S2, W = d['alpha'], d['P'], d['S2'], d['W']
             ok = W >= 0.5

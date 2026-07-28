@@ -1098,8 +1098,17 @@ def main_logic():
             _scen_path = global_sweep_data['scenario']
         if os.path.exists(_scen_path):
             expected_config_path = "tools/sweep_build/expected_config.yaml"
-            write_sim_params(generate_sim_params(load_scenario(_scen_path)),
-                             expected_config_path)
+            _scen = load_scenario(_scen_path)
+            _expected = generate_sim_params(_scen)
+            # 対象車を交通流から生成するシナリオでは、車両集合が run ごとに
+            # 変わるため完全性検証が成立しない (期待リストを固定できない)。
+            # vehicles を落として検証対象から外す。落とさないとベースconfigの
+            # 既定車両 (新幹線) が残り、毎 run 誤検証 → 無駄リトライで
+            # 実行時間が3倍になる
+            _sc = _scen.get('scenario', _scen)
+            if float((_sc.get('traffic') or {}).get('target_ratio', 0.0)) > 0.0:
+                _expected.pop('vehicles', None)
+            write_sim_params(_expected, expected_config_path)
     except Exception as e:
         print(f"[Sweep Sim] Warning: failed to build expected config: {e}")
         expected_config_path = sweep_config.CONFIG_PATH
