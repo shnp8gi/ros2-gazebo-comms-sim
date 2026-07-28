@@ -118,9 +118,18 @@ def build_scenario(a):
                     'kkf_use_prior': False,
                     'kkf_assigner': 'hungarian',
                     'kkf_switch_bonus_db': 3.0,
-                    'kkf_replan_period_s': 0.2,
+                    # 再計画はレポート周期 (0.05s) に合わせる。接続窓が ~1s しか
+                    # ないため 0.2s では窓の 2 割を取りこぼす。推定 (KF更新+
+                    # クリギング) はレポート毎に走るので周期とは独立
+                    'kkf_replan_period_s': a.kkf_replan_period_s,
+                    # 先読み: K=1 で瞬時最適 (先読みなし)、K>1 で窓の出入りを見る。
+                    # arm (kkf_k0 / kkf_mpc) は sweep がこの値を上書きして作る
+                    'kkf_lookahead_stages': a.kkf_lookahead_stages,
+                    'kkf_lookahead_discount': 1.0,
+                    # 連続交通流ではコリドーを出た車が計画に残り続けるため必須
+                    'kkf_stale_report_s': 1.0,
                     'kkf_horizon_s': 4.0,
-                    'kkf_plan_dt_s': 0.2,
+                    'kkf_plan_dt_s': a.kkf_plan_dt_s,
                     'kkf_kappa': 1.0,
                     'kkf_idle_lcb_db': -110.0,
                     'kkf_basis': 'rbf',
@@ -291,6 +300,12 @@ def main():
                          '閾値の到達距離 (~65m) より十分大きく取ること')
     ap.add_argument('--assoc-recover-timeout-s', type=float, default=1.0,
                     help='assoc_hold のリンク監視回復待機時間 [s] (掃引可)')
+    ap.add_argument('--kkf-replan-period-s', type=float, default=0.05,
+                    help='KKF 再計画周期 [s] (レポート周期に合わせるのが上限)')
+    ap.add_argument('--kkf-lookahead-stages', type=int, default=1,
+                    help='先読み段数 K (1 = 瞬時最適)。arm ごとに sweep が上書き')
+    ap.add_argument('--kkf-plan-dt-s', type=float, default=0.1,
+                    help='先読みのステージ幅 [s] (K×これ = ホライズン長)')
     a = ap.parse_args()
 
     scenario = build_scenario(a)
