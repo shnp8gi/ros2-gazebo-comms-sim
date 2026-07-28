@@ -27,12 +27,15 @@ scenario:
         kkf_lookahead_discount: 1.0
         kkf_stale_report_s: 1.0
         kkf_directions: [-1, 1]
+        kkf_road_x_range: [-115.0, 115.0]
+        kkf_rbf_s_min: 0.0
+        kkf_rbf_s_max: 230.0
         kkf_horizon_s: 4.0
         kkf_plan_dt_s: 0.1
         kkf_kappa: 1.0
         kkf_idle_lcb_db: -110.0
         kkf_basis: rbf
-        kkf_rbf_num_bases: 20
+        kkf_rbf_num_bases: 40
         kkf_rbf_width_m: 0.0
         kkf_sigma_nu_db: 4.0
         kkf_corr_length_s_m: 20.0

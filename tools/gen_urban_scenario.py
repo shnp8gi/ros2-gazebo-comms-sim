@@ -133,12 +133,23 @@ def build_scenario(a):
                     # あり、車両から推定すると run ごとに状態キーが変わって学習が
                     # 蓄積しない。ここで明示して固定する
                     'kkf_directions': sorted({lane['direction'] for lane in lanes}),
+                    # REM の座標系 (環境の性質)。通信が成立し得る範囲 =
+                    # RSU 列 ± 評価半径。交通の待機位置まで含めると run ごとに
+                    # 伸縮し、地図が走行間で意味を持たなくなる
+                    'kkf_road_x_range': [round(rsu_xs[0] - a.link_eval_radius_m, 1),
+                                         round(rsu_xs[-1] + a.link_eval_radius_m, 1)],
+                    'kkf_rbf_s_min': 0.0,
+                    'kkf_rbf_s_max': round(rsu_xs[-1] - rsu_xs[0]
+                                           + 2 * a.link_eval_radius_m, 1),
                     'kkf_horizon_s': 4.0,
                     'kkf_plan_dt_s': a.kkf_plan_dt_s,
                     'kkf_kappa': 1.0,
                     'kkf_idle_lcb_db': -110.0,
                     'kkf_basis': 'rbf',
-                    'kkf_rbf_num_bases': 20,
+                    # 基底解像度: 道路 230m に対し 40 基底 = 5.9m 間隔。
+                    # 接続窓 (~17m) に約 3 基底が乗り、指向性ピークを表現できる
+                    # (20 基底では 12m 間隔となり窓を 1 基底で潰してしまう)
+                    'kkf_rbf_num_bases': 40,
                     'kkf_rbf_width_m': 0.0,
                     'kkf_sigma_nu_db': 4.0,
                     'kkf_corr_length_s_m': 20.0,

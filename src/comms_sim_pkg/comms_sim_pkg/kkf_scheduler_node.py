@@ -108,20 +108,33 @@ class SchedulerConfig:
         else:
             self.directions = sorted(set(self.vehicle_dirs.values())) or [1]
 
-        # 路線形状: 全車の走行範囲を覆う x 軸方向の直線。弧長 s は常に +x 向きに
-        # 増加するため、方向 -1 の車は v̂ < 0 として一貫して扱える。
-        # (従来は「最長経路の車両の waypoints」を使っていたが、双方向では
-        #  片方向の経路しか道路にならず逆方向車の外挿が壊れる)
-        xs, ys, zs = [], [], []
-        for v in cfg.get('vehicles', []):
-            for wp in v.get('waypoints', []):
-                xs.append(float(wp[0])); ys.append(float(wp[1])); zs.append(float(wp[2]))
-        if xs:
-            y0 = sum(ys) / len(ys)
-            z0 = sum(zs) / len(zs)
-            self.road_points = [[min(xs), y0, z0], [max(xs), y0, z0]]
+        # 路線形状: x 軸方向の直線。弧長 s は常に +x 向きに増加するため、
+        # 方向 -1 の車は v̂ < 0 として一貫して扱える。
+        #
+        # **座標系は環境の性質であって run の交通実現ではない**。kkf_road_x_range
+        # が明示されていればそれを使う (生成器が RSU 列と評価半径から書く)。
+        #
+        # 明示指定が要る理由: 対象車を交通流から確率生成すると、車両の x 範囲が
+        # run ごとに変わる。そこから道路を作ると (a) 同じ物理位置が run ごとに
+        # 違う弧長になり学習した地図が無意味になる、(b) 基底の定義域が変わって
+        # 状態が読めない、(c) 待機位置まで含めて 1.5km に伸び、20 基底では
+        # 1 基底 75m となって接続窓 (~17m) を表現できない、という三重の破綻になる。
+        # 未指定なら従来どおり車両から推定する (固定車両数のシナリオは不変)。
+        rng_x = link.get('kkf_road_x_range')
+        if rng_x and len(rng_x) == 2:
+            self.road_points = [[float(rng_x[0]), 0.0, 0.0],
+                                [float(rng_x[1]), 0.0, 0.0]]
         else:
-            self.road_points = []
+            xs, ys, zs = [], [], []
+            for v in cfg.get('vehicles', []):
+                for wp in v.get('waypoints', []):
+                    xs.append(float(wp[0])); ys.append(float(wp[1])); zs.append(float(wp[2]))
+            if xs:
+                y0 = sum(ys) / len(ys)
+                z0 = sum(zs) / len(zs)
+                self.road_points = [[min(xs), y0, z0], [max(xs), y0, z0]]
+            else:
+                self.road_points = []
 
         self.bs_positions = []
         for _, bs in sorted(cfg.get('spawn_entities', {}).items()):

@@ -141,6 +141,26 @@ def main():
             failures.append("交通実現によって状態キーが変わる (学習が蓄積しない)")
         print("  状態キーの安定性: 片方向/双方向どちらの交通でも同一キー")
 
+        # --- 5c) 座標系も環境が決める (地図の意味と基底定義域の安定性) ---
+        # 車両の x 範囲から道路を作ると、交通実現ごとに同じ物理位置が違う弧長に
+        # なり、地図が走行間で意味を持たない。基底の定義域も変わって状態が
+        # 読めなくなる (実測: 道路長 1441〜1844m とばらつき、ハッシュが毎回別物)
+        from kkf_core import basis_hash, RbfBasis  # noqa: E402
+        hashes, lengths = set(), set()
+        for extra_x in (0.0, 500.0, 1200.0):   # staging 位置の違いを模した外れ値
+            c = make_config(tmpdir, True, kkf_road_x_range=[-115.0, 115.0],
+                            kkf_rbf_s_min=0.0, kkf_rbf_s_max=230.0)
+            # 車両を遠方に置いても道路は宣言どおり
+            c.vehicles[0]['antenna_offsets'] = c.vehicles[0]['antenna_offsets']
+            rd = node.RoadCoordinate(c.road_points)
+            lengths.add(round(rd.total_length(), 3))
+            smax = c.rbf_s_max if c.rbf_s_max > c.rbf_s_min else rd.total_length()
+            hashes.add(basis_hash(RbfBasis(c.rbf_s_min, smax,
+                                           c.rbf_num_bases, c.rbf_width_m).config()))
+        if len(lengths) != 1 or len(hashes) != 1:
+            failures.append(f"座標系が run で変わる: 長さ{lengths} ハッシュ{len(hashes)}種")
+        print(f"  座標系の安定性: 道路長 {lengths.pop()}m, 基底ハッシュ 1種で固定")
+
         # --- 6) 状態ファイルが方向別に分かれる ---
         sd = os.path.join(tmpdir, 'rem_state')
         cfg_s = make_config(tmpdir, True, kkf_state_dir=sd, kkf_state_save=True)
