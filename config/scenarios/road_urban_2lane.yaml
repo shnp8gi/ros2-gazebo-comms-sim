@@ -33,7 +33,7 @@ scenario:
         kkf_horizon_s: 4.0
         kkf_plan_dt_s: 0.1
         kkf_kappa: 1.0
-        kkf_idle_lcb_db: -110.0
+        kkf_idle_lcb_db: -68.5
         kkf_basis: rbf
         kkf_rbf_num_bases: 40
         kkf_rbf_width_m: 0.0

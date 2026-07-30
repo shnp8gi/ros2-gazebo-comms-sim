@@ -106,7 +106,10 @@ def main():
         if abs(v_dn - (-55.0)) < 10.0:
             failures.append(f"下り方向に学習が漏れている: {v_dn:.1f}")
 
-        # --- 5) lcb_multi (一括) と lcb (逐次) の数値一致 ---
+        # --- 5) lcb_multi (一括) と lcb (逐次) の数値一致。
+        #        lcb_multi は (LCB, 平均) を返す — 接続可能性は平均で判定し、
+        #        σ は順位付けにのみ使うため (門番に LCB を使うと繋がる機会を
+        #        見送る。競合下で配信ゼロ車 18% を招いた実測あり) ---
         K = 8
         t0 = 10.0
         t_grid = t0 + np.arange(K) * 0.05
@@ -118,12 +121,20 @@ def main():
         for b in range(4):
             multi = pred.lcb_multi(queries, b, 1.0)
             for q, (vid, ant, s_arr, ta) in enumerate(queries):
-                seq = np.array([pred.lcb(vid, ant, b, s, tt, 1.0)
-                                for s, tt in zip(s_arr, ta)])
-                d = np.abs(multi[q] - seq).max()
-                if d > 1e-9:
-                    failures.append(f"bs{b} {vid}: lcb_multi と lcb が不一致 ({d:.2e})")
-        print("  lcb_multi と逐次 lcb の一致を確認 (4RSU × 2方向 × 8ステージ)")
+                lcb_v, mu_v = multi[q]
+                seq_lcb = np.array([pred.lcb(vid, ant, b, s, tt, 1.0)
+                                    for s, tt in zip(s_arr, ta)])
+                seq_mu = np.array([pred.lcb(vid, ant, b, s, tt, 0.0)
+                                   for s, tt in zip(s_arr, ta)])
+                d1 = np.abs(lcb_v - seq_lcb).max()
+                d2 = np.abs(mu_v - seq_mu).max()
+                if d1 > 1e-9:
+                    failures.append(f"bs{b} {vid}: LCB が逐次と不一致 ({d1:.2e})")
+                if d2 > 1e-9:
+                    failures.append(f"bs{b} {vid}: 平均が逐次(κ=0)と不一致 ({d2:.2e})")
+                if not (mu_v >= lcb_v - 1e-9).all():
+                    failures.append(f"bs{b} {vid}: 平均が LCB を下回った (κ>0 で不整合)")
+        print("  lcb_multi の (LCB, 平均) が逐次と一致し、平均 >= LCB を確認")
 
         # --- 5b) 方向集合は交通実現でなく環境が決める (状態キーの安定性) ---
         # 対象車は確率生成なので run によっては片方向しか出ない。車両から

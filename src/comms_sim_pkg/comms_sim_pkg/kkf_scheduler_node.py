@@ -55,7 +55,7 @@ from comms_sim_pkg.kkf_core import (
     Observation, KrigedKalmanFilter, solve_handover_plan, TrackerParams,
     BlockageTracker, ScalarKfParams, ScalarRssiKF, A3Params, A3Controller,
     VarianceMapParams, AleatoricVarianceMap, RemStore, basis_hash,
-    solve_assignment,
+    solve_assignment, FORBIDDEN_UTILITY,
 )
 from comms_sim_pkg.kkf_core.geometry import rpy_to_rotmat
 
@@ -533,9 +533,16 @@ class KkfMapPredictor:
         return values
 
     def lcb_multi(self, queries, bs, kappa):
-        """複数 (車, アンテナ) × 複数ステージの LCB を地図ごとに一括評価する。
+        """複数 (車, アンテナ) × 複数ステージの (LCB, 平均) を一括評価する。
 
-        queries: [(vid, ant, s_arr, t_arr)]。戻り値は同順の [values(ステージ数)]。
+        queries: [(vid, ant, s_arr, t_arr)]。
+        戻り値: 同順の [(lcb(ステージ数), mean(ステージ数))]。
+
+        **LCB と平均を分けて返す理由**: 割当の優先順位付けにはリスク調整効用
+        (LCB = μ − κσ) が正しいが、「そもそも繋がるか」の判定に LCB を使うと
+        σ_ν² が大きい場所で過度に保守的になり、繋がる機会を見送ってしまう
+        (実測: 競合下で配信ゼロの車が 18% 発生した)。接続可能性は平均 μ で
+        判定し、σ は「どの RSU を誰に渡すか」の順位付けにのみ使う。
 
         再計画は「全車 × 全 RSU × 全ステージ」の評価が要り、1 点ずつ predict_at を
         呼ぶと 64×64 のクリギング解を毎回解き直して律速する (実測 13.7 倍差)。
@@ -563,10 +570,13 @@ class KkfMapPredictor:
             off = 0
             for i, n in zip(idxs, lens):
                 v = values[off:off + n]
+                mu = means[off:off + n]
                 if self.priors and queries[i][0] in self.priors:
-                    v = v + self.priors[queries[i][0]].mean_batch(
+                    add = self.priors[queries[i][0]].mean_batch(
                         queries[i][1], bs, queries[i][2])
-                out[i] = v
+                    v = v + add
+                    mu = mu + add
+                out[i] = (v, mu)
                 off += n
         return out
 
@@ -605,8 +615,13 @@ class _LcbMultiMixin:
     """
 
     def lcb_multi(self, queries, bs, kappa):
-        return [self.lcb_batch(vid, ant, bs, s_arr, t_arr, kappa)
-                for vid, ant, s_arr, t_arr in queries]
+        """(lcb, mean) を返す。σ を持たない予測器では両者が一致する。"""
+        out = []
+        for vid, ant, s_arr, t_arr in queries:
+            v = self.lcb_batch(vid, ant, bs, s_arr, t_arr, kappa)
+            mu = self.lcb_batch(vid, ant, bs, s_arr, t_arr, 0.0)
+            out.append((v, mu))
+        return out
 
 
 class TimeSeriesKfPredictor(_LcbMultiMixin):
@@ -874,21 +889,31 @@ class MpcScheduler:
                 queries.append((vid, a, s0 + vs.v_hat * dt_grid, t_grid))
                 q_index.append((i, a))
 
+        # utility = 割当の優先順位 (リスク調整効用 LCB)、
+        # feasible_mu = 接続可能性の判定に使う平均 μ。両者を分けるのが要点で、
+        # LCB で門番をするとリスクの高い場所で繋がる機会を見送る (§lcb_multi)
         utility = np.full((n_veh, n_bs), -np.inf)
+        feasible_mu = np.full((n_veh, n_bs), -np.inf)
         best_ant = np.zeros((n_veh, n_bs), dtype=int)
         for b in range(n_bs):
             vals = self.predictor.lcb_multi(queries, b, cfg.kappa)
             for q, (i, a) in enumerate(q_index):
-                u = float(np.dot(w, vals[q]))     # ホライズン重み付き平均
+                lcb_q, mu_q = vals[q]
+                u = float(np.dot(w, lcb_q))       # ホライズン重み付き平均
                 if u > utility[i, b]:             # 車の各アンテナのうち最良を代表に
                     utility[i, b] = u
+                    feasible_mu[i, b] = float(np.dot(w, mu_q))
                     best_ant[i, b] = a
         for i, (vid, _vs, _ant_s) in enumerate(active):
             cur = self.current_pair.get(vid)
             if cur is not None and cur[1] < n_bs:
                 utility[i, cur[1]] += cfg.switch_bonus_db
 
-        pairs, _ = solve_assignment(utility, min_utility=cfg.idle_lcb_db)
+        # 接続見込みのないペア (平均 μ が接続閾値未満) は割当対象から外す。
+        # 掴んでも 1 バイトも送れず、需要超過では他車を締め出すだけなので。
+        # 判定は μ で行い、σ は上の utility (順位付け) にのみ効かせる
+        utility = np.where(feasible_mu >= cfg.idle_lcb_db, utility, FORBIDDEN_UTILITY)
+        pairs, _ = solve_assignment(utility)
 
         sched = msgs.HoSchedule(
             t_issued=t, valid_until=t + max(1.0, 2.5 * cfg.replan_period_s))

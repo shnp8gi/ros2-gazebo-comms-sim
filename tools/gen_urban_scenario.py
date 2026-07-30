@@ -148,7 +148,14 @@ def build_scenario(a):
                     'kkf_horizon_s': 4.0,
                     'kkf_plan_dt_s': a.kkf_plan_dt_s,
                     'kkf_kappa': 1.0,
-                    'kkf_idle_lcb_db': -110.0,
+                    # アイドル判定 = 接続閾値そのもの。LCB が接続閾値に届かない
+                    # ペアは掴んでも 1 バイトも送れないので RSU を空けておく。
+                    # 従来の -110 dBm は緩すぎ、繋がらないまま RSU を占有し続けて
+                    # いた (実測: grant 9.7s のうち接続は 2.0s = 効率 20%。
+                    # assoc_hold は 85%)。需要超過では他車を締め出す純粋な害。
+                    # margin > 0 でより保守的にできる (掃引可)
+                    'kkf_idle_lcb_db': round(-95.0 + a.snr_min_db
+                                             + a.kkf_idle_margin_db, 2),
                     'kkf_basis': 'rbf',
                     # 基底解像度: 道路 230m に対し 40 基底 = 5.9m 間隔。
                     # 接続窓 (~17m) に約 3 基底が乗り、指向性ピークを表現できる
@@ -328,6 +335,8 @@ def main():
                     help='先読みのステージ幅 [s] (K×これ = ホライズン長)')
     ap.add_argument('--kkf-lookahead-discount', type=float, default=0.7,
                     help='先読みの割引 γ (1.0=一様平均は現在価値を希釈し有害)')
+    ap.add_argument('--kkf-idle-margin-db', type=float, default=0.0,
+                    help='アイドル判定を接続閾値からどれだけ上に取るか [dB]')
     a = ap.parse_args()
 
     scenario = build_scenario(a)
