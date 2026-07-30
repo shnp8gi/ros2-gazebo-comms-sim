@@ -223,13 +223,28 @@ def expand_traffic(scenario, seed=None):
             'waypoints': [[x_start, y, 0.0, v], [x_end, y, 0.0, v]],
         }
         if is_target:
-            rel = template.get('relative_yaw_by_direction', {})
-            rel_yaw = rel.get(str(direction), rel.get(direction, 0.0))
-            entity['antennas'] = [{
-                'name': f"{name}_ant",
-                'offset': [float(o) for o in template['antenna_offset']],
-                'relative_rpy': [0.0, 0.0, float(rel_yaw)],
-            }]
+            # アンテナ諸元はシナリオ生成側が書いた target_template を引き写すだけ
+            # (traffic_gen は幾何を知らない)。
+            #   antennas: [{suffix, relative_yaw_by_direction}] があればそれを使い、
+            #   無ければ従来の単一アンテナ (relative_yaw_by_direction) にフォールバック。
+            # 前向き 1 本だけだと「接近中の RSU」しか捉えられず、通過後の RSU が
+            # 使えない。後ろ向きを足すと窓が 13m → 53m に広がる (RSU 2 基構成の実測)
+            specs = template.get('antennas')
+            if not specs:
+                specs = [{'suffix': 'ant',
+                          'relative_yaw_by_direction':
+                              template.get('relative_yaw_by_direction', {})}]
+            ants = []
+            for spec in specs:
+                rel = spec.get('relative_yaw_by_direction', {})
+                rel_yaw = rel.get(str(direction), rel.get(direction, 0.0))
+                ants.append({
+                    'name': f"{name}_{spec.get('suffix', 'ant')}",
+                    'offset': [float(o) for o in
+                               spec.get('offset', template['antenna_offset'])],
+                    'relative_rpy': [0.0, 0.0, float(rel_yaw)],
+                })
+            entity['antennas'] = ants
         entities.append(entity)
         existing.add(name)
         added += 1

@@ -6,7 +6,7 @@
 # traffic: は run 毎に tools/lib/traffic_gen.py が対象車(tx)と一般車(blocker)へ展開する
 scenario:
   name: road_urban_2lane
-  description: 都市部 片側1車線×1車線・対象車と一般車の混在交通 (target_ratio で分離)。RSU 4台 10.0m間隔 y=6.00 (歩道外側端)、傾き ±70.0° (alternate)
+  description: 都市部 片側1車線×1車線・対象車と一般車の混在交通 (target_ratio で分離)。RSU 2台 10.0m間隔 y=6.00 (歩道外側端)、傾き ±70.0° (alternate)
     / 車 ±20.0°。δ_rsu+δ_veh=90° (相互ボアサイト成立)。tools/gen_urban_scenario.py により生成
   base_config: src/comms_sim_pkg/config/sim_params.yaml
   simulation_overrides: {headless: true, real_time_factor: 2.0, logging_level: 3, physics_max_step_size: 0.001}
@@ -27,9 +27,9 @@ scenario:
         kkf_lookahead_discount: 0.7
         kkf_stale_report_s: 1.0
         kkf_directions: [-1, 1]
-        kkf_road_x_range: [-115.0, 115.0]
+        kkf_road_x_range: [-105.0, 105.0]
         kkf_rbf_s_min: 0.0
-        kkf_rbf_s_max: 230.0
+        kkf_rbf_s_max: 210.0
         kkf_horizon_s: 4.0
         kkf_plan_dt_s: 0.1
         kkf_kappa: 1.0
@@ -62,7 +62,7 @@ scenario:
           seed: 42
           blockage: {enabled: true, max_total_loss_db: 60.0}
           shadowing: {enabled: true, type: frozen, sigma_db: 4.0, corr_length_m: 6.0, environment_seed: 1,
-            grid_m: 1.5, axis: x, u_min: -75.0, u_max: 75.0}
+            grid_m: 1.5, axis: x, u_min: -65.0, u_max: 65.0}
           fading: {enabled: false}
         measurement_report: {enabled: true, period_s: 0.05, noise_std_db: 2.0, observe_all_pairs: false,
           seed: 123}
@@ -108,14 +108,21 @@ scenario:
     warmup_s: 5.0
     prefill: auto
     interleave_arrivals: true
-    corridor: [-55.0, 55.0]
+    corridor: [-45.0, 45.0]
     margin_m: 30.0
     max_vehicles: 400
     target_ratio: 0.3
     target_template:
       model: Car
       antenna_offset: [0.0, 0.0, 1.35]
-      relative_yaw_by_direction: {'1': 0.349066, '-1': -0.349066}
+      relative_yaw_by_direction: &id001 {'1': 0.349066, '-1': -0.349066}
+      antennas:
+      - suffix: front
+        offset: [0.0, 0.0, 1.35]
+        relative_yaw_by_direction: *id001
+      - suffix: rear
+        offset: [0.0, 0.0, 1.35]
+        relative_yaw_by_direction: {'1': 2.792527, '-1': -2.792527}
     tx_entry_jitter_s: 0.0
     vehicle_mix:
     - {model: SedanBlocker, ratio: 0.8, can_be_target: true}
@@ -136,7 +143,7 @@ scenario:
     model: antenna
     role: rx
     static: true
-    pose: [-15.0, 6.0, 0.0, 0.0, 0.0, -2.792527]
+    pose: [-5.0, 6.0, 0.0, 0.0, 0.0, -2.792527]
     antennas:
     - name: rsu_0
       offset: [0.0, 0.0, 2.5]
@@ -145,26 +152,8 @@ scenario:
     model: antenna
     role: rx
     static: true
-    pose: [-5.0, 6.0, 0.0, 0.0, 0.0, -0.349066]
+    pose: [5.0, 6.0, 0.0, 0.0, 0.0, -0.349066]
     antennas:
     - name: rsu_1
-      offset: [0.0, 0.0, 2.5]
-      relative_rpy: [0.0, 0.0, 0.0]
-  - name: rsu_2
-    model: antenna
-    role: rx
-    static: true
-    pose: [5.0, 6.0, 0.0, 0.0, 0.0, -2.792527]
-    antennas:
-    - name: rsu_2
-      offset: [0.0, 0.0, 2.5]
-      relative_rpy: [0.0, 0.0, 0.0]
-  - name: rsu_3
-    model: antenna
-    role: rx
-    static: true
-    pose: [15.0, 6.0, 0.0, 0.0, 0.0, -0.349066]
-    antennas:
-    - name: rsu_3
       offset: [0.0, 0.0, 2.5]
       relative_rpy: [0.0, 0.0, 0.0]

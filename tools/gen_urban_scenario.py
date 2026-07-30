@@ -18,6 +18,7 @@ gen_road_scenario.py は road_10car の再現性契約を持つため **変更�
   python3 tools/gen_urban_scenario.py --out config/scenarios/road_urban_2lane.yaml
 """
 import argparse
+import math
 import os
 import sys
 
@@ -41,8 +42,16 @@ def build_scenario(a):
                 if a.veh_tilt_deg == 'auto' else float(a.veh_tilt_deg))
 
     # --- RSU 列 ---
-    rsu_xs = rsu_positions(a.num_rsu, a.rsu_spacing)
+    # dual では 1 ポール位置に 2 面 (上流用 −δ / 下流用 +δ) を載せる。ポール数
+    # = 設置コストは num_rsu のままで、論理的な RSU (ペアネットの相手) は 2 倍。
+    # alternate だと各 RSU が片方向にしか対向せず担当領域も重ならないため、
+    # 任意時刻に車が選べる RSU が 0〜1 個になり割当問題が成立しなかった
+    pole_xs = rsu_positions(a.num_rsu, a.rsu_spacing)
     tilts = rsu_tilts_deg(a.num_rsu, a.rsu_tilt_deg, a.rsu_tilt_pattern)
+    if a.rsu_tilt_pattern == 'dual':
+        rsu_xs = [x for x in pole_xs for _ in (0, 1)]     # 各ポールを2回
+    else:
+        rsu_xs = pole_xs
 
     entities = []
     for i, (x, tilt) in enumerate(zip(rsu_xs, tilts)):
@@ -59,8 +68,8 @@ def build_scenario(a):
         })
 
     # --- 交通が意味を持つ区間 ---
-    c0 = rsu_xs[0] - a.corridor_margin_m
-    c1 = rsu_xs[-1] + a.corridor_margin_m
+    c0 = pole_xs[0] - a.corridor_margin_m
+    c1 = pole_xs[-1] + a.corridor_margin_m
 
     # 走行間固定シャドウ場はコリドー + 余裕をカバーすれば足りる
     # (待機中の車はゲートされ通信しないため、場を staging 区間まで広げない)
@@ -77,13 +86,34 @@ def build_scenario(a):
                                     'sigma': 0.6, 'min': 1.0}})
 
     # 対象車のアンテナ諸元。traffic_gen は幾何を知らず、これを引き写すだけ (§2.1)
-    target_template = {
-        'model': 'Car',
-        'antenna_offset': [0.0, 0.0, float(a.ant_h)],
+    #
+    # 2 本構成 (既定): 前向き (+δ_veh) と後ろ向き (180° − δ_veh)。前向きだけだと
+    # 「接近中の RSU」しか捉えられず、通過後の RSU が使えない。後ろ向きを足すと
+    # 接続窓が 13.2m → 52.5m に広がる (RSU 2 基構成の解析値)。
+    # 車両あたりのペアネットは 1 本なので、2 本は同時接続ではなく
+    # 「どちらの向きで繋ぐか」の選択肢を与える (割当の自由度)。
+    ant_specs = [{
+        'suffix': 'front',
+        'offset': [0.0, 0.0, float(a.ant_h)],
         'relative_yaw_by_direction': {
             '1': round(veh_relative_yaw_rad(1, veh_tilt), 6),
             '-1': round(veh_relative_yaw_rad(-1, veh_tilt), 6),
         },
+    }]
+    if a.veh_antennas >= 2:
+        ant_specs.append({
+            'suffix': 'rear',
+            'offset': [0.0, 0.0, float(a.ant_h)],
+            'relative_yaw_by_direction': {
+                '1': round(math.pi - veh_relative_yaw_rad(1, veh_tilt), 6),
+                '-1': round(-(math.pi - veh_relative_yaw_rad(1, veh_tilt)), 6),
+            },
+        })
+    target_template = {
+        'model': 'Car',
+        'antenna_offset': [0.0, 0.0, float(a.ant_h)],   # 後方互換 (1本時の既定)
+        'relative_yaw_by_direction': ant_specs[0]['relative_yaw_by_direction'],
+        'antennas': ant_specs,
     }
 
     scenario = {'scenario': {
@@ -140,10 +170,10 @@ def build_scenario(a):
                     # REM の座標系 (環境の性質)。通信が成立し得る範囲 =
                     # RSU 列 ± 評価半径。交通の待機位置まで含めると run ごとに
                     # 伸縮し、地図が走行間で意味を持たなくなる
-                    'kkf_road_x_range': [round(rsu_xs[0] - a.link_eval_radius_m, 1),
-                                         round(rsu_xs[-1] + a.link_eval_radius_m, 1)],
+                    'kkf_road_x_range': [round(pole_xs[0] - a.link_eval_radius_m, 1),
+                                         round(pole_xs[-1] + a.link_eval_radius_m, 1)],
                     'kkf_rbf_s_min': 0.0,
-                    'kkf_rbf_s_max': round(rsu_xs[-1] - rsu_xs[0]
+                    'kkf_rbf_s_max': round(pole_xs[-1] - pole_xs[0]
                                            + 2 * a.link_eval_radius_m, 1),
                     'kkf_horizon_s': 4.0,
                     'kkf_plan_dt_s': a.kkf_plan_dt_s,
@@ -304,7 +334,9 @@ def main():
     ap.add_argument('--rsu-spacing', type=float, default=10.0)
     ap.add_argument('--rsu-tilt-deg', type=float, default=45.0)
     ap.add_argument('--rsu-tilt-pattern', default='alternate',
-                    choices=['alternate', 'grouped'])
+                    choices=['alternate', 'grouped', 'dual'],
+                    help='dual = 1ポールに上流/下流の2面 (設置数は同じで '
+                         '論理RSUが2倍。担当領域が重なり割当問題が成立する)')
     ap.add_argument('--veh-tilt-deg', default='auto',
                     help='auto = 90 − rsu_tilt (相互ボアサイト対向)')
     ap.add_argument('--ant-h', type=float, default=1.35, help='車載アンテナ高 [m]【実測】')
@@ -335,6 +367,9 @@ def main():
                     help='先読みのステージ幅 [s] (K×これ = ホライズン長)')
     ap.add_argument('--kkf-lookahead-discount', type=float, default=0.7,
                     help='先読みの割引 γ (1.0=一様平均は現在価値を希釈し有害)')
+    ap.add_argument('--veh-antennas', type=int, default=2, choices=[1, 2],
+                    help='対象車のアンテナ本数 (2 = 前向き+後ろ向き。'
+                         '1本だと通過後の RSU が使えず窓が約1/4になる)')
     ap.add_argument('--kkf-idle-margin-db', type=float, default=0.0,
                     help='アイドル判定を接続閾値からどれだけ上に取るか [dB]')
     a = ap.parse_args()

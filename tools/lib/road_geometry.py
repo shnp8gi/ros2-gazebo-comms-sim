@@ -57,7 +57,18 @@ def rsu_tilts_deg(num_rsu, tilt_deg, pattern='alternate'):
 
       alternate: [−δ, +δ, −δ, +δ, ...]  上流窓・下流窓を交互に配置
       grouped:   [−δ, −δ, +δ, +δ, ...]  区間前半で上流窓、後半で下流窓
+      dual:      各ポール位置に [−δ, +δ] の 2 面を載せる (返り値の長さは 2×num_rsu)。
+                 ポール数=設置コストは変わらないまま、どの位置でも両方向に
+                 複数の選択肢が生まれる。alternate では各 RSU が片方向にしか
+                 対向せず担当領域も重ならないため、任意時刻に車が選べる RSU が
+                 0〜1 個になり「割当問題」が成立しなかった (実測: 同時 grant
+                 1.09/4 基、接続可能な車が 2 台以上の時刻は 12%)
     """
+    if pattern == 'dual':
+        out = []
+        for _ in range(num_rsu):
+            out += [-tilt_deg, tilt_deg]
+        return out
     if pattern == 'alternate':
         return [(-tilt_deg if i % 2 == 0 else tilt_deg) for i in range(num_rsu)]
     if pattern == 'grouped':
