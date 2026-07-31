@@ -635,6 +635,16 @@ def cmd_learn(args):
                 'link_controller_node.ros__parameters.kkf_state_dir':
                     f"/workspace/{state_dir}",
                 'link_controller_node.ros__parameters.kkf_state_save': True,
+                # 学習相は全ペアを観測する。grant 中のペアしか観測しない規格
+                # 忠実な設定では、地図を作るために grant が要り、grant する
+                # ために地図が要る、という鶏と卵になる (実測: 事前値を悲観側に
+                # 直した途端、11走行で観測ゼロ・接続0秒)。
+                # 加えて「grant した場所しか学習しない」= 良いと思っていた所
+                # しか学習しない選択バイアスも避けられる。評価相は規格忠実な
+                # grant 限定観測に戻すので、地図の作り方の話に閉じている
+                **({'comms_simulator_node.ros__parameters.'
+                    'measurement_report.observe_all_pairs': True}
+                   if not args.grant_only_observations else {}),
             }}}}],
             'execution': {
                 'output_name': f"{name}/runs/run_{m}",
@@ -763,6 +773,9 @@ def main():
                    help='m 走行ごとに rem_state をスナップショット (0=無効)')
     p.add_argument('--timeout', type=int, default=900)
     p.add_argument('--resume', action='store_true')
+    p.add_argument('--grant-only-observations', action='store_true',
+                   help='学習相も grant 中のペアだけを観測する (規格忠実だが、'
+                        '地図が冷たいと grant されず学習が始まらない)')
 
     p = sub.add_parser('analyze', help='parquet統合 + runs/agg/paired 集計')
     p.add_argument('eval_dir')
