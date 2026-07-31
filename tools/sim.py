@@ -518,6 +518,14 @@ def cmd_learn(args):
                          'contrast': contrast})
         return rows
 
+    def state_run_count():
+        """地図に記録された取り込み済み走行数 (地図間で一致するはず)。"""
+        counts = set()
+        for f in glob.glob(os.path.join(state_dir, 'bs*.npz')):
+            with np.load(f) as d:
+                counts.add(int(json.loads(str(d['meta'])).get('run_count', -1)))
+        return max(counts) if counts else 0
+
     prev_alpha = {r['bs']: r['alpha'] for r in state_metrics()}
     if start_run == 1:
         with open(curve_path, 'w') as f:
@@ -553,7 +561,16 @@ def cmd_learn(args):
         except Exception as e:
             print(f"[learn] 進捗状態の書き出しに失敗: {e}")
 
-    child_env = dict(os.environ, SWEEP_SIM_SUPPRESS_STATE="1")
+    # 走行を REM へのトランザクションとして扱う。sweep_sim の内部再試行は切り、
+    # 失敗したら地図を走行前に巻き戻してから再試行する。
+    # (タイムアウトやクラッシュで死んだ試行も、死ぬ前に観測を取り込んでしまう。
+    #  同一シードの部分走行が重複計上されると、カルマンフィルタが前提とする
+    #  観測の独立性が壊れ、分散を過小評価する。実測で完了5走行に対し
+    #  run_count=8 になった)
+    child_env = dict(os.environ, SWEEP_SIM_SUPPRESS_STATE="1",
+                     SWEEP_SIM_MAX_ATTEMPTS="1")
+    bak_dir = os.path.join(learn_dir, '.rem_state_bak')
+    max_attempts = 3
 
     for m in range(start_run, args.runs + 1):
         sweep = {'sweep': {
@@ -582,6 +599,9 @@ def cmd_learn(args):
               f"(base_seed {base_seed_m}) =====")
 
         run_started = datetime.datetime.now()
+        rc_before = state_run_count()
+        shutil.rmtree(bak_dir, ignore_errors=True)
+        shutil.copytree(state_dir, bak_dir)
         running_task = {str(m): {
             "task_no": m,
             "params_str": f"kkf_learn run {m}/{args.runs} (base_seed {base_seed_m})",
@@ -590,21 +610,34 @@ def cmd_learn(args):
         }}
         _write_learn_state(m - 1, running_task)
 
-        proc = subprocess.Popen(
-            ['bash', '-c', f"cd /workspace && PYTHONDONTWRITEBYTECODE=1 "
-                           f"python3 tools/sweep_sim.py --sweep-config {sweep_path}"],
-            env=child_env)
-        # 5秒ごとに last_updated を打ち直し、監視側の遅延/ゾンビ誤検知を防ぐ
-        while True:
-            try:
-                rc = proc.wait(timeout=5)
+        for attempt in range(1, max_attempts + 1):
+            proc = subprocess.Popen(
+                ['bash', '-c', f"cd /workspace && PYTHONDONTWRITEBYTECODE=1 "
+                               f"python3 tools/sweep_sim.py --sweep-config {sweep_path}"],
+                env=child_env)
+            # 5秒ごとに last_updated を打ち直し、監視側の遅延/ゾンビ誤検知を防ぐ
+            while True:
+                try:
+                    rc = proc.wait(timeout=5)
+                    break
+                except subprocess.TimeoutExpired:
+                    _write_learn_state(m - 1, running_task)
+            got = state_run_count() - rc_before
+            if rc == 0 and got == 1:
                 break
-            except subprocess.TimeoutExpired:
-                _write_learn_state(m - 1, running_task)
-        if rc != 0:
-            _write_learn_state(m - 1, {})
-            sys.exit(f"[learn] run {m} が失敗 (exit {rc})。状態は {state_dir} に "
-                     f"保存済み — 原因解消後 --resume で継続可能")
+            why = (f"exit {rc}" if rc != 0
+                   else f"取り込み数が {got} (1 のはず)")
+            print(f"[learn] run {m} 試行 {attempt}/{max_attempts} 失敗 ({why})。"
+                  f"地図を走行前に巻き戻して再試行")
+            shutil.rmtree(state_dir, ignore_errors=True)
+            shutil.copytree(bak_dir, state_dir)
+            if attempt == max_attempts:
+                _write_learn_state(m - 1, {})
+                shutil.rmtree(bak_dir, ignore_errors=True)
+                sys.exit(f"[learn] run {m} が {max_attempts} 回とも失敗 ({why})。"
+                         f"地図は run {m - 1} 時点に巻き戻し済み — "
+                         f"原因解消後 --resume で継続可能")
+        shutil.rmtree(bak_dir, ignore_errors=True)
         run_durations.append((datetime.datetime.now() - run_started).total_seconds())
         _write_learn_state(m, {})
 

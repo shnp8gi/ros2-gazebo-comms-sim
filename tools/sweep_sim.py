@@ -582,7 +582,9 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
     # significantly below the target RTF. Terminating via a dynamic expected time is too aggressive.
     task_timeout = timeout
 
-    max_retries = 3
+    # 学習相のように「失敗した試行が外部状態 (REM) を汚す」場合は、内部再試行を
+    # 切って呼び出し側に巻き戻しごと任せる (SWEEP_SIM_MAX_ATTEMPTS=1)
+    max_retries = max(1, int(os.environ.get('SWEEP_SIM_MAX_ATTEMPTS', '3')))
     for attempt in range(max_retries):
         if shutdown_requested:
             return False
