@@ -194,6 +194,11 @@ class SchedulerConfig:
         # "auto" = 従来動作 (prior あり→Constant / なし→LogDistance)、"rbf" = RBF基底
         self.basis_type = link.get('kkf_basis', 'auto')
         self.rbf_num_bases = int(link.get('kkf_rbf_num_bases', 20))
+        # 平均場の事前値 [dBm]。地図は「この値からのずれ」を学習する。
+        # 0 のままだと未観測の位置で μ=0 dBm (= 極めて強い信号) と評価され、
+        # 悲観的であるべき LCB が逆に楽観的になる (実測: 道路の約12%で
+        # データが無いのに接続閾値超え)。既定 0.0 は従来互換
+        self.mean_prior_dbm = float(link.get('kkf_mean_prior_dbm', 0.0))
         self.rbf_width_m = float(link.get('kkf_rbf_width_m', 0.0))
         self.rbf_s_min = float(link.get('kkf_rbf_s_min', 0.0))
         self.rbf_s_max = float(link.get('kkf_rbf_s_max', 0.0))  # 0 = 道路全長
@@ -487,10 +492,18 @@ class KkfMapPredictor:
             })
 
     def _prior_mean(self, vid, ant, bs, s):
+        """平均場の事前値 = 定数事前値 + (あれば) 理論プロファイル。"""
+        mu0 = self.cfg.mean_prior_dbm
         if not self.priors or vid not in self.priors:
-            return 0.0
+            return mu0
         m = self.priors[vid].mean(ant, bs, s)
-        return 0.0 if m is None else m
+        return mu0 if m is None else mu0 + m
+
+    def _prior_mean_batch(self, vid, ant, bs, s_arr):
+        mu0 = self.cfg.mean_prior_dbm
+        if not self.priors or vid not in self.priors:
+            return np.full(len(s_arr), mu0)
+        return mu0 + self.priors[vid].mean_batch(ant, bs, s_arr)
 
     def ingest(self, vid, t, antenna_s, entries):
         """entries: [(ant, bs, rssi_dbm)] を地図更新・トラッカー観測に振り分ける。"""
@@ -499,9 +512,8 @@ class KkfMapPredictor:
         per_key = {}
         for ant, bs, rssi in entries:
             s_obs = antenna_s[ant]
-            z = rssi
-            if self.priors:
-                z = rssi - self._prior_mean(vid, ant, bs, s_obs)  # 偏差のみ学習
+            # 地図は事前値からの偏差のみ学習する
+            z = rssi - self._prior_mean(vid, ant, bs, s_obs)
             key = self._key(vid, bs, ant)
             # 式(10): 予測遮蔽帯内の観測は先回りで観測雑音を減格 (σ²_NLOS)。
             # 本番構成 (トラッカー無効) では固定 R_meas = σ_ν² を観測ノイズに
@@ -521,8 +533,7 @@ class KkfMapPredictor:
     def lcb(self, vid, ant, bs, s_future, t_future, kappa):
         key = self._key(vid, bs, ant)
         mean, var = self.maps[key].predict_at(s_future, t_future)
-        if self.priors:
-            mean += self._prior_mean(vid, ant, bs, s_future)
+        mean += self._prior_mean(vid, ant, bs, s_future)
         # σ_ν²(s) は予測分散にのみ加算 (本番仕様 §5.2)
         if self.varmaps:
             var += self.varmaps[key].query(s_future)
@@ -536,8 +547,7 @@ class KkfMapPredictor:
         """ステージ一括の LCB (再計画の計算量ボトルネック解消用)。"""
         key = self._key(vid, bs, ant)
         means, variances = self.maps[key].predict_batch(s_arr, t_arr)
-        if self.priors and vid in self.priors:
-            means = means + self.priors[vid].mean_batch(ant, bs, s_arr)
+        means = means + self._prior_mean_batch(vid, ant, bs, s_arr)
         if self.varmaps:
             variances = variances + self.varmaps[key].query_batch(s_arr)
         values = means - kappa * np.sqrt(variances)
@@ -585,13 +595,11 @@ class KkfMapPredictor:
                         values[j] -= self.cfg.blockage_penalty_db
             off = 0
             for i, n in zip(idxs, lens):
-                v = values[off:off + n]
-                mu = means[off:off + n]
-                if self.priors and queries[i][0] in self.priors:
-                    add = self.priors[queries[i][0]].mean_batch(
-                        queries[i][1], bs, queries[i][2])
-                    v = v + add
-                    mu = mu + add
+                add = self._prior_mean_batch(
+                    queries[i][0], queries[i][1], bs,
+                    np.asarray(queries[i][2], dtype=float))
+                v = values[off:off + n] + add
+                mu = means[off:off + n] + add
                 out[i] = (v, mu)
                 off += n
         return out

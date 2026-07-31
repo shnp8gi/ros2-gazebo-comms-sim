@@ -205,6 +205,32 @@ def main():
         if p2a._state_key((0, 1, 1)) != '0_p_a1':
             failures.append(f"アンテナ別の状態キーが不正: {p2a._state_key((0, 1, 1))}")
 
+        # --- 5e) 未観測の位置では悲観的であること ---
+        # 平均場の事前値が 0 dBm だと、観測が無い位置で μ=0 dBm (= 極めて強い
+        # 信号) と評価され、悲観的であるべき LCB が逆に楽観的になる。排他接続
+        # では幻の grant が実在する車を締め出すので純粋な害
+        cfg_p = make_config(tmpdir, True, kkf_directions=[-1, 1],
+                            kkf_mean_prior_dbm=-110.0)
+        p_p = node.make_predictor(cfg_p, node.RoadCoordinate(cfg_p.road_points))
+        s_un = node.RoadCoordinate(cfg_p.road_points).project(
+            np.array([80.0, 1.75, 0.0]))       # 誰も観測していない位置
+        v_un = p_p.lcb('up_1', 0, 1, s_un, 1e4, 1.0)
+        print(f'  未観測での LCB: {v_un:.1f} dBm (事前値 -110 dBm)')
+        if v_un > -100.0:
+            failures.append(f"未観測なのに楽観的すぎる LCB: {v_un:.1f} dBm")
+        # 観測を入れればちゃんとそこまで持ち上がる (事前値が学習を殺さない)
+        rd_p = node.RoadCoordinate(cfg_p.road_points)
+        rng_p = np.random.default_rng(11)
+        for step in range(400):
+            tt = step * 0.05
+            ss = rd_p.project(np.array([-90.0 + 16.7 * tt, 1.75, 0.0]))
+            p_p.ingest('up_1', tt, [ss], [(0, 1, -55.0 + rng_p.normal(0, 1.0))])
+        v_ob = p_p.lcb('up_1', 0, 1, rd_p.project(np.array([0.0, 1.75, 0.0])),
+                       1e4, 0.0)
+        print(f'  観測後の μ: {v_ob:.1f} dBm (真値 -55 dBm)')
+        if abs(v_ob + 55.0) > 6.0:
+            failures.append(f"事前値が学習を殺している: {v_ob:.1f} dBm (真値 -55)")
+
         # --- 6) 状態ファイルが方向別に分かれる ---
         sd = os.path.join(tmpdir, 'rem_state')
         cfg_s = make_config(tmpdir, True, kkf_state_dir=sd, kkf_state_save=True)
