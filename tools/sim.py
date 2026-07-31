@@ -38,13 +38,42 @@ CONTAINER_COMMANDS = {'analyze', 'plot', 'report', 'verify', 'clean'}
 
 
 def delegate_to_container(argv):
-    """ホストで叩かれた分析系コマンドをコンテナ内の自分へ委譲する。"""
+    """ホストで叩かれたコマンドをコンテナ内の自分へ委譲する。
+
+    docker exec はシグナルを中へ伝えない。ホスト側を止めてもコンテナ内の
+    本体と孫 (sweep_sim / gz sim) が生き残り、排他ロックを握ったまま次の
+    実行を止めてしまう (実測で複数回発生)。委譲コマンドに一意の目印を
+    埋め込み、ホストが止められたらその目印でコンテナ内へ TERM を送る。
+    """
+    import signal
+    import uuid
     rel = [a.replace(REPO_ROOT + os.sep, '') if a.startswith(REPO_ROOT) else a
            for a in argv]
-    cmd = ['docker', 'compose', 'exec', '-T', 'sim', 'bash', '-c',
-           'cd /workspace && PYTHONDONTWRITEBYTECODE=1 python3 tools/sim.py '
-           + ' '.join(rel)]
-    return subprocess.call(cmd, cwd=REPO_ROOT)
+    token = f"SIMTOKEN_{uuid.uuid4().hex[:12]}"
+    inner = (f'cd /workspace && PYTHONDONTWRITEBYTECODE=1 exec '
+             f'python3 tools/sim.py --run-token {token} ' + ' '.join(rel))
+    proc = subprocess.Popen(['docker', 'compose', 'exec', '-T', 'sim',
+                             'bash', '-c', inner], cwd=REPO_ROOT)
+
+    def _stop(signum, _frame):
+        print(f"\n[sim] シグナル {signum} を受信。コンテナ内の実行を停止します",
+              flush=True)
+        # 目印で本体を撃つ。本体は自分の子プロセスグループを畳んでから終わる
+        for sig in ('TERM', 'KILL'):
+            subprocess.call(['docker', 'compose', 'exec', '-T', 'sim',
+                             'bash', '-c', f'pkill -{sig} -f {token}'],
+                            cwd=REPO_ROOT,
+                            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+            try:
+                proc.wait(timeout=25 if sig == 'TERM' else 5)
+                break
+            except subprocess.TimeoutExpired:
+                continue
+        sys.exit(130)
+
+    for _s in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(_s, _stop)
+    return proc.wait()
 
 
 def resolve_eval_dir(path):
@@ -475,6 +504,7 @@ def cmd_learn(args):
         return delegate_to_container(sys.argv[1:])
     import json
     import shutil
+    import signal
     import numpy as np
 
     name = args.name
@@ -571,6 +601,30 @@ def cmd_learn(args):
                      SWEEP_SIM_MAX_ATTEMPTS="1")
     bak_dir = os.path.join(learn_dir, '.rem_state_bak')
     max_attempts = 3
+    live = {'proc': None}
+
+    def _kill_child(sig=signal.SIGTERM):
+        pr = live.get('proc')
+        if pr is None or pr.poll() is not None:
+            return
+        try:
+            os.killpg(os.getpgid(pr.pid), sig)
+        except (ProcessLookupError, PermissionError):
+            pass
+
+    def _on_signal(signum, _frame):
+        print(f"\n[learn] シグナル {signum} を受信。実行中の走行を停止します")
+        _kill_child(signal.SIGTERM)
+        pr = live.get('proc')
+        if pr is not None:
+            try:
+                pr.wait(timeout=20)
+            except subprocess.TimeoutExpired:
+                _kill_child(signal.SIGKILL)
+        sys.exit(130)
+
+    for _s in (signal.SIGINT, signal.SIGTERM):
+        signal.signal(_s, _on_signal)
 
     for m in range(start_run, args.runs + 1):
         sweep = {'sweep': {
@@ -611,10 +665,14 @@ def cmd_learn(args):
         _write_learn_state(m - 1, running_task)
 
         for attempt in range(1, max_attempts + 1):
+            # 子は独自のプロセスグループに置く。学習を止めたとき sweep_sim と
+            # その配下 (gz sim 等) が生き残ると、排他ロックを握ったままになり
+            # 次の学習が起動できない (実測で2回発生)
             proc = subprocess.Popen(
                 ['bash', '-c', f"cd /workspace && PYTHONDONTWRITEBYTECODE=1 "
                                f"python3 tools/sweep_sim.py --sweep-config {sweep_path}"],
-                env=child_env)
+                env=child_env, start_new_session=True)
+            live['proc'] = proc
             # 5秒ごとに last_updated を打ち直し、監視側の遅延/ゾンビ誤検知を防ぐ
             while True:
                 try:
@@ -680,6 +738,9 @@ def cmd_learn(args):
 def main():
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[1],
                                      prog='sim.py')
+    # コンテナへ委譲したとき、ホスト側からこの実行だけを特定して止めるための
+    # 目印。環境変数では pkill -f (argv 照合) に引っかからないので引数で渡す
+    parser.add_argument('--run-token', default='', help=argparse.SUPPRESS)
     sub = parser.add_subparsers(dest='command', required=True)
 
     p = sub.add_parser('run', help='スイープ実行')
