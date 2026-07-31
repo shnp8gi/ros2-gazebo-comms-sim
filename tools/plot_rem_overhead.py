@@ -70,8 +70,11 @@ def main():
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('state_dir')
     ap.add_argument('--out', default=None)
-    ap.add_argument('--lanes', nargs='*', default=['1.75:p', '-1.75:m'],
-                    help='<車線y>:<キー接尾辞> の並び (車線数は任意)')
+    ap.add_argument('--lanes', nargs='*', default=None,
+                    help='<車線y>:<キー接尾辞> の並び (車線数は任意)。'
+                         '省略時は状態ファイルのキーから自動で決める')
+    ap.add_argument('--antenna', type=int, default=None,
+                    help='車載アンテナ別に地図がある場合に描く1本 (既定: 各位置で最良)')
     ap.add_argument('--lane-width', type=float, default=3.5)
     ap.add_argument('--s-min', type=float, default=0.0)
     ap.add_argument('--s-max', type=float, default=230.0)
@@ -95,9 +98,25 @@ def main():
     if not states:
         sys.exit(f"状態ファイルがありません: {a.state_dir}")
     lanes = []
-    for spec in a.lanes:
-        y_s, suf = spec.split(':')
-        lanes.append((float(y_s), suf))
+    if a.lanes:
+        for spec in a.lanes:
+            y_s, suf = spec.split(':')
+            lanes.append((float(y_s), suf))
+    else:
+        # 実在キーから車線を組み立てる。方向 p/m を近/遠車線に割り当て、
+        # アンテナ別キーがあれば --antenna で1本選ぶ (既定は全アンテナを束ね、
+        # 各位置で最良のものを担当 RSU の判定に使う)
+        sufs = sorted({k.split('_', 1)[1] for k in states if '_' in k})
+        if not sufs:
+            lanes = [(0.0, '')]
+        else:
+            for d, y in (('p', 1.75), ('m', -1.75)):
+                sel = [s_ for s_ in sufs if s_.split('_')[0] == d]
+                if a.antenna is not None:
+                    sel = [s_ for s_ in sel if s_.endswith(f'a{a.antenna}')] or sel
+                for s_ in sel:
+                    lanes.append((y, s_))
+        print(f"車線を自動決定: {[f'{y:+.2f}:{s_}' for y, s_ in lanes]}")
 
     n_bases = len(next(iter(states.values()))['alpha'])
     s = np.linspace(a.s_min, a.s_max, 700)
@@ -107,10 +126,18 @@ def main():
 
     # 車線ごとの場を集める
     per_lane = {}
+    same_y = {}
+    for y, suf in lanes:
+        same_y.setdefault(y, []).append(suf)
     for y, suf in lanes:
         got = lane_fields(states, suf, s, Phi, a.s_min, a.s_max, a.w_min)
-        if got is not None:
-            per_lane[(y, suf)] = got
+        if got is None:
+            continue
+        # 同じ車線に複数キー (アンテナ別) があれば車線幅を分割して並べる
+        sibs = same_y[y]
+        k = sibs.index(suf)
+        h = a.lane_width / len(sibs)
+        per_lane[(y - a.lane_width / 2 + h * (k + 0.5), suf)] = got + (h,)
     if not per_lane:
         sys.exit("指定した接尾辞に対応する地図がありません: "
                  f"{[suf for _, suf in lanes]} / 実在キー {sorted(states)}")
@@ -133,7 +160,7 @@ def main():
                    color='#eeeeee', zorder=0)
         ax.axhline(0.0, color='#999999', ls='--', lw=1.0, zorder=1)  # 中央線
 
-        for (y, suf), (mus, risks, ws, ids) in per_lane.items():
+        for (y, suf), (mus, risks, ws, ids, lh) in per_lane.items():
             # 観測が無い所と、どの RSU も接続閾値に届かない所は塗らない
             mu_masked = np.where(ws >= a.w_min, mus, -np.inf)
             obs = (ws.max(axis=0) >= a.w_min) & (mu_masked.max(axis=0) >= a.mu_min)
@@ -142,20 +169,18 @@ def main():
                 col = np.array([cmap_rsu(ids[b] % 10) for b in best])
                 col[~obs] = (1, 1, 1, 0)
                 img = col.reshape(1, -1, 4)
-                ax.imshow(img, extent=[x[0], x[-1],
-                                       y - a.lane_width / 2, y + a.lane_width / 2],
+                ax.imshow(img, extent=[x[0], x[-1], y - lh / 2, y + lh / 2],
                           aspect='auto', origin='lower', zorder=2,
                           interpolation='nearest')
             else:
                 r = np.nanmax(np.where(ws >= a.w_min, risks, np.nan), axis=0)
                 r = np.where(obs, r, np.nan)
                 ax.imshow(r.reshape(1, -1), extent=[x[0], x[-1],
-                                                    y - a.lane_width / 2,
-                                                    y + a.lane_width / 2],
+                                                    y - lh / 2, y + lh / 2],
                           aspect='auto', origin='lower', cmap='inferno',
                           vmin=0.0, vmax=vmax, zorder=2, interpolation='nearest')
-            ax.text(a.xlim[0] + 2, y, f'lane y={y:+.2f} ({suf})', va='center',
-                    fontsize=8, zorder=5,
+            ax.text(a.xlim[0] + 2, y, f'{suf}', va='center',
+                    fontsize=7, zorder=5,
                     bbox=dict(fc='white', ec='none', alpha=0.65, pad=1.5))
 
         # RSU とボアサイト
@@ -191,8 +216,8 @@ def main():
     print(f"wrote {out}")
 
     # 数値サマリ: 車線ごとに各 RSU が担当する区間長
-    print("\n車線   RSU  担当長[m]  平均リスク[dB²]")
-    for (y, suf), (mus, risks, ws, ids) in per_lane.items():
+    print("\nキー      RSU  担当長[m]  平均リスク[dB²]")
+    for (y, suf), (mus, risks, ws, ids, _lh) in per_lane.items():
         mu_masked = np.where(ws >= a.w_min, mus, -np.inf)
         best = np.argmax(mu_masked, axis=0)
         obs = (ws.max(axis=0) >= a.w_min) & (mu_masked.max(axis=0) >= a.mu_min)
@@ -201,7 +226,7 @@ def main():
             sel = obs & (best == j)
             if sel.sum() == 0:
                 continue
-            print(f"y={y:+6.2f} RSU{rid}  {sel.sum() * dx:8.1f}  "
+            print(f"{suf:8s} RSU{rid}  {sel.sum() * dx:8.1f}  "
                   f"{np.nanmean(risks[j][sel]):12.1f}")
 
 

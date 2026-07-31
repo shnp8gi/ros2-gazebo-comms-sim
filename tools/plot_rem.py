@@ -80,18 +80,28 @@ def main():
     Phi = rbf_design(s, n_bases, a.s_min, a.s_max)
     x_world = s + a.x_offset
 
-    # 方向別キー (0_p / 0_m) なら方向で列を分ける
-    split = any('_' in k for k, _ in states)
-    if split:
-        cols = [('p', 'direction +1 (near lane)'), ('m', 'direction -1 (far lane)')]
-        groups = {c: [(k, v) for k, v in states if k.endswith('_' + c)]
-                  for c, _ in cols}
-    else:
-        cols = [('', 'all vehicles')]
-        groups = {'': states}
+    # キーは bs<j>[_<方向>][_a<アンテナ>]。RSU 番号を除いた残りが「場の種類」で、
+    # 種類ごとに列を分ける (方向分割のみなら p/m の2列、車載2アンテナを足せば
+    # p_a0/p_a1/m_a0/m_a1 の4列)。将来キーが増えても列が自動で増える
+    def suffix_of(k):
+        return k.split('_', 1)[1] if '_' in k else ''
+
+    def label_of(suf):
+        if not suf:
+            return 'all vehicles'
+        parts = suf.split('_')
+        d = {'p': 'direction +1 (near lane)', 'm': 'direction -1 (far lane)'}
+        out = d.get(parts[0], parts[0])
+        for extra in parts[1:]:
+            out += f'  /  antenna {extra[1:]}' if extra.startswith('a') else f'  /  {extra}'
+        return out
+
+    cols = [(suf, label_of(suf)) for suf in sorted({suffix_of(k) for k, _ in states})]
+    groups = {suf: [(k, v) for k, v in states if suffix_of(k) == suf]
+              for suf, _ in cols}
 
     run_count = states[0][1]['meta'].get('run_count', '?')
-    fig, axes = plt.subplots(4, len(cols), figsize=(7.0 * len(cols), 12.0),
+    fig, axes = plt.subplots(4, len(cols), figsize=(min(7.0, 28.0 / len(cols)) * len(cols), 12.0),
                              squeeze=False, sharex=True)
 
     for ci, (suffix, title) in enumerate(cols):
