@@ -102,6 +102,14 @@ class SchedulerConfig:
         # 明示指定が要る理由: 対象車を交通流から確率生成すると、run によっては
         # 片方向の対象車しか出ないことがある。推定に頼ると run ごとに地図の
         # キーが変わり、走行間で状態を読めず学習が一切蓄積しない
+        # 車載アンテナ本数。**向きが違えば同じ位置でも利得が全く違う**ので、
+        # REM は (RSU, 方向, アンテナ) ごとに分ける必要がある。位置 s だけで
+        # 索引すると前向き/後ろ向きの予測値が同一になり、割当は常にアンテナ0を
+        # 選び、学習も両者の観測を混ぜて地図を壊す (実測: 後ろ向きの grant が
+        # 0.00s、繋がり得た 47.9s を全て捨てていた)
+        ants = [len(v.get('antennas', [])) for v in cfg.get('vehicles', [])]
+        self.num_antennas = max(ants) if ants else 1
+
         declared = link.get('kkf_directions')
         if declared:
             self.directions = sorted({1 if int(d) >= 0 else -1 for d in declared})
@@ -396,7 +404,9 @@ class KkfMapPredictor:
         self.split = len(self.dirs) > 1     # 方向別に分けるか
 
         s_max = cfg.rbf_s_max if cfg.rbf_s_max > cfg.rbf_s_min else road.total_length()
-        self.keys = [(b, d) for b in range(len(cfg.bs_positions)) for d in self.dirs]
+        self.n_ant = max(1, int(getattr(cfg, 'num_antennas', 1)))
+        self.keys = [(b, d, a) for b in range(len(cfg.bs_positions))
+                     for d in self.dirs for a in range(self.n_ant)]
 
         def _make_basis(b):
             if cfg.basis_type == 'rbf':
@@ -443,14 +453,19 @@ class KkfMapPredictor:
                   f"(run_count={self.run_count}, dir={cfg.state_dir})", flush=True)
 
     def _state_key(self, key):
-        """永続化ファイル名のキー。単一方向なら従来と同じ '<bs>' (状態ファイル互換)。"""
-        b, d = key
-        return f"{b}" if not self.split else f"{b}_{'p' if d > 0 else 'm'}"
+        """永続化ファイル名のキー。単一方向・単一アンテナなら従来と同じ '<bs>'。"""
+        b, d, a = key
+        name = f"{b}" if not self.split else f"{b}_{'p' if d > 0 else 'm'}"
+        return name if self.n_ant <= 1 else f"{name}_a{a}"
 
-    def _key(self, vid, bs):
-        """(車, RSU) → 地図キー。単一方向シナリオでは方向を無視する。"""
+    def _key(self, vid, bs, ant=0):
+        """(車, RSU, アンテナ) → 地図キー。
+
+        アンテナを含めるのが要点。前向き/後ろ向きは同じ位置 s にあるので、
+        位置だけで索引すると予測が区別できず、割当が常に同じアンテナを選ぶ。
+        """
         d = self.cfg.vehicle_dirs.get(vid, self.dirs[0]) if self.split else self.dirs[0]
-        return (bs, d)
+        return (bs, d, min(int(ant), self.n_ant - 1))
 
     def save_state(self, t):
         """定期スナップショット (アトミック上書き)。学習相の run 間受け渡しに使う。"""
@@ -466,6 +481,7 @@ class KkfMapPredictor:
                 'basis_hash': basis_hash(kkf.basis.config()),
                 'bs_id': k[0],
                 'direction': k[1],
+                'antenna': k[2],
                 'run_count': self.run_count + 1,
                 'last_t': float(t),
             })
@@ -486,7 +502,7 @@ class KkfMapPredictor:
             z = rssi
             if self.priors:
                 z = rssi - self._prior_mean(vid, ant, bs, s_obs)  # 偏差のみ学習
-            key = self._key(vid, bs)
+            key = self._key(vid, bs, ant)
             # 式(10): 予測遮蔽帯内の観測は先回りで観測雑音を減格 (σ²_NLOS)。
             # 本番構成 (トラッカー無効) では固定 R_meas = σ_ν² を観測ノイズに
             # 流用しない (平均場学習を殺さない、本番仕様 §5.2)
@@ -503,7 +519,7 @@ class KkfMapPredictor:
                 self.trackers[key].ingest(t, fresh_residuals)
 
     def lcb(self, vid, ant, bs, s_future, t_future, kappa):
-        key = self._key(vid, bs)
+        key = self._key(vid, bs, ant)
         mean, var = self.maps[key].predict_at(s_future, t_future)
         if self.priors:
             mean += self._prior_mean(vid, ant, bs, s_future)
@@ -518,7 +534,7 @@ class KkfMapPredictor:
 
     def lcb_batch(self, vid, ant, bs, s_arr, t_arr, kappa):
         """ステージ一括の LCB (再計画の計算量ボトルネック解消用)。"""
-        key = self._key(vid, bs)
+        key = self._key(vid, bs, ant)
         means, variances = self.maps[key].predict_batch(s_arr, t_arr)
         if self.priors and vid in self.priors:
             means = means + self.priors[vid].mean_batch(ant, bs, s_arr)
@@ -551,7 +567,7 @@ class KkfMapPredictor:
         """
         groups = {}
         for i, (vid, ant, s_arr, t_arr) in enumerate(queries):
-            groups.setdefault(self._key(vid, bs), []).append(i)
+            groups.setdefault(self._key(vid, bs, ant), []).append(i)
 
         out = [None] * len(queries)
         for key, idxs in groups.items():
@@ -600,7 +616,7 @@ class KkfMapPredictor:
         """検証用: 確定トラックの (BS index, 中心弧長s, 速度) を返す。"""
         out = []
         if self.trackers:
-            for (b, _d), trk in self.trackers.items():
+            for (b, _d, _a), trk in self.trackers.items():
                 for tr in trk.tracks:
                     if tr.is_confirmed():
                         out.append((b, tr.predict_center(t), tr.velocity))

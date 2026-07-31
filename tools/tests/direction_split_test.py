@@ -24,22 +24,27 @@ sys.path.insert(0, '/workspace/src/comms_sim_pkg/comms_sim_pkg')
 import kkf_scheduler_node as node  # noqa: E402
 
 
-def make_config(tmpdir, bidirectional, **link_overrides):
+def make_config(tmpdir, bidirectional, n_ant=1, **link_overrides):
     link = {
         'control_plane': 'kkf_mpc', 'kkf_use_prior': False, 'kkf_basis': 'rbf',
         'kkf_rbf_num_bases': 20, 'kkf_varmap_enabled': True,
         'kkf_assigner': 'hungarian', 'kkf_kappa': 1.0, 'kkf_tracker_enabled': False,
     }
     link.update(link_overrides)
+    def ants(name):
+        a = [{'name': f'{name}_front', 'offset': [0.0, 0.0, 1.35],
+              'relative_rpy': [0.0, 0.0, 0.349]}]
+        if n_ant >= 2:      # 後ろ向き (180° − δ)。同じ位置だが向きが逆
+            a.append({'name': f'{name}_rear', 'offset': [0.0, 0.0, 1.35],
+                      'relative_rpy': [0.0, 0.0, np.pi - 0.349]})
+        return a
     vehicles = [{'name': 'up_1', 'pose': [-90.0, 1.75, 0, 0, 0, 0],
                  'waypoints': [[-90.0, 1.75, 0.0, 16.7], [90.0, 1.75, 0.0, 16.7]],
-                 'antennas': [{'name': 'up_1_ant', 'offset': [0.0, 0.0, 1.35],
-                               'relative_rpy': [0.0, 0.0, 0.349]}]}]
+                 'antennas': ants('up_1')}]
     if bidirectional:
         vehicles.append({'name': 'dn_1', 'pose': [90.0, -1.75, 0, 0, 0, 3.14159],
                          'waypoints': [[90.0, -1.75, 0.0, 16.7], [-90.0, -1.75, 0.0, 16.7]],
-                         'antennas': [{'name': 'dn_1_ant', 'offset': [0.0, 0.0, 1.35],
-                                       'relative_rpy': [0.0, 0.0, -0.349]}]})
+                         'antennas': ants('dn_1')})
     cfg_dict = {
         'link_controller_node': {'ros__parameters': link},
         'comms_simulator_node': {'ros__parameters': {
@@ -70,8 +75,8 @@ def main():
             failures.append(f"単一方向で分割された: dirs={cfg1.directions} split={p1.split}")
         if len(p1.maps) != 4:
             failures.append(f"単一方向の地図数が不正: {len(p1.maps)} != 4")
-        if p1._state_key((2, 1)) != '2':
-            failures.append(f"単一方向の状態キーが従来形式でない: {p1._state_key((2, 1))}")
+        if p1._state_key((2, 1, 0)) != '2':
+            failures.append(f"単一方向の状態キーが従来形式でない: {p1._state_key((2, 1, 0))}")
 
         # --- 2) 双方向は (RSU, 方向) に分かれる ---
         cfg = make_config(tmpdir, True)
@@ -144,11 +149,11 @@ def main():
         if cfg_uni.directions != [-1, 1]:
             failures.append(f"kkf_directions の明示が効いていない: {cfg_uni.directions}")
         p_uni = node.make_predictor(cfg_uni, node.RoadCoordinate(cfg_uni.road_points))
-        if not p_uni.split or p_uni._state_key((0, 1)) != '0_p':
+        if not p_uni.split or p_uni._state_key((0, 1, 0)) != '0_p':
             failures.append("片方向の交通でも宣言どおり方向別キーになっていない")
         cfg_bi = make_config(tmpdir, True, kkf_directions=[-1, 1])
         p_bi = node.make_predictor(cfg_bi, node.RoadCoordinate(cfg_bi.road_points))
-        if p_uni._state_key((0, 1)) != p_bi._state_key((0, 1)):
+        if p_uni._state_key((0, 1, 0)) != p_bi._state_key((0, 1, 0)):
             failures.append("交通実現によって状態キーが変わる (学習が蓄積しない)")
         print("  状態キーの安定性: 片方向/双方向どちらの交通でも同一キー")
 
@@ -171,6 +176,34 @@ def main():
         if len(lengths) != 1 or len(hashes) != 1:
             failures.append(f"座標系が run で変わる: 長さ{lengths} ハッシュ{len(hashes)}種")
         print(f"  座標系の安定性: 道路長 {lengths.pop()}m, 基底ハッシュ 1種で固定")
+
+        # --- 5d) アンテナ別に地図が分かれる (向きが違えば利得が違うため) ---
+        # front と rear は**同じ位置 s**にあるので、位置だけで索引すると予測が
+        # 完全に一致し、割当は常にアンテナ0を選ぶ。学習も両者の観測を混ぜて
+        # 地図を壊す (実測: 後ろ向きの grant が 0.00s、繋がり得た 47.9s を全廃棄)
+        cfg2a = make_config(tmpdir, True, n_ant=2, kkf_directions=[-1, 1])
+        if cfg2a.num_antennas != 2:
+            failures.append(f"アンテナ本数を読めていない: {cfg2a.num_antennas}")
+        p2a = node.make_predictor(cfg2a, node.RoadCoordinate(cfg2a.road_points))
+        if len(p2a.maps) != 4 * 2 * 2:
+            failures.append(f"地図数が不正: {len(p2a.maps)} != 16 (4RSU×2方向×2アンテナ)")
+        # アンテナ0だけに観測を入れ、アンテナ1に漏れないこと
+        rng2 = np.random.default_rng(5)
+        rd2 = node.RoadCoordinate(cfg2a.road_points)
+        for step in range(200):
+            tt = step * 0.05
+            ss = rd2.project(np.array([-90.0 + 16.7 * tt, 1.75, 0.0]))
+            p2a.ingest('up_1', tt, [ss, ss], [(0, 1, -55.0 + rng2.normal(0, 1.0))])
+        sp = rd2.project(np.array([0.0, 0.0, 0.0]))
+        v_a0 = p2a.lcb('up_1', 0, 1, sp, 1e4, 0.0)
+        v_a1 = p2a.lcb('up_1', 1, 1, sp, 1e4, 0.0)
+        print(f'  アンテナ別: ant0 {v_a0:.1f} dBm / ant1 {v_a1:.1f} dBm (ant1は未学習)')
+        if abs(v_a0 - (-55.0)) > 5.0:
+            failures.append(f"アンテナ0の学習が反映されていない: {v_a0:.1f}")
+        if abs(v_a1 - (-55.0)) < 10.0:
+            failures.append(f"アンテナ1に学習が漏れている (地図が分かれていない): {v_a1:.1f}")
+        if p2a._state_key((0, 1, 1)) != '0_p_a1':
+            failures.append(f"アンテナ別の状態キーが不正: {p2a._state_key((0, 1, 1))}")
 
         # --- 6) 状態ファイルが方向別に分かれる ---
         sd = os.path.join(tmpdir, 'rem_state')
