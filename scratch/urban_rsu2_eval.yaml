@@ -1,0 +1,62 @@
+# RSU2基 + 車載2アンテナ構成での競合評価。
+#
+# 問題の性質: 上り用・下り用が各1基しかないため「どのRSUを選ぶか」ではなく
+# 「希少な1基を競合する複数の車にどう配分するか」= 時間軸スケジューリング。
+# 競合条件では単一RSUへの需要が109%(供給超過)になる。
+sweep:
+  name: "urban_rsu2_eval"
+  description: "RSU2基・車載2本。5手法 x 競合/中負荷 x N (基準=assoc_hold)"
+  scenario: "config/scenarios/road_urban_2lane.yaml"
+  variables:
+    - name: method
+      cases:
+        assoc_hold:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: assoc_hold
+            link_controller_node.ros__parameters.control_plane: none
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+        geo_optimal:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: geo_optimal
+            link_controller_node.ros__parameters.control_plane: none
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+        kkf_k0:
+          config:
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+        kkf_k3:
+          config:
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 3
+            link_controller_node.ros__parameters.kkf_lookahead_discount: 0.7
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+        oracle:
+          config:
+            link_controller_node.ros__parameters.control_plane: oracle
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: true
+            comms_simulator_node.ros__parameters.measurement_report.noise_std_db: 0.0
+    - name: load
+      cases:
+        contended:
+          scenario:
+            traffic.lanes[0].speed_mps: 7.0
+            traffic.lanes[1].speed_mps: 7.0
+            traffic.lanes[0].headway_s.mean: 2.0
+            traffic.lanes[1].headway_s.mean: 2.0
+            traffic.target_ratio: 0.8
+            traffic.window_s: [0.0, 35.0]
+        moderate: {}
+  analysis:
+    group_by: [method, load]
+    arm_var: method
+    baseline: assoc_hold
+    metrics: [total_data_MB, connected_time_s, jain_index, nlos_grant_pct,
+              path_mean_MB, path_min_MB, path_zero_pct, n_paths]
+  execution:
+    num_runs: 5
+    base_seed: 12345
+    task_timeout_sec: 3600
+    real_time_factor: 2.0
+    max_concurrency: 4
+    output_name: "urban_rsu2_eval"
