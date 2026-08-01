@@ -10,9 +10,14 @@
 #
 # 全アームを1スイープに入れて同一シードで対比較する (別スイープを跨いで
 # 突き合わせると、統合の意味論を誤ると対比較の自由度を偽りかねない)。
+#
+# A3 標準ベースラインは別 study (urban_a3_study.yaml) に切り出した。競合条件で
+# 接続0.34s/車・HO 8385回という退化を示し、原因が hysteresis/TTT でも確立時間
+# (T_est=2ms) でもないことまでは分かったが未特定のため。本命のアブレーションを
+# 待たせない。
 sweep:
   name: "urban_rsu2_ablation"
-  description: "RSU2基・競合条件。アブレーション5種 + A3標準ベースライン x N=10"
+  description: "RSU2基・競合条件。アブレーション5種 x N=10"
   scenario: "config/scenarios/road_urban_2lane.yaml"
   variables:
     - name: method
@@ -23,10 +28,6 @@ sweep:
             link_controller_node.ros__parameters.scheduling_policy: assoc_hold
             link_controller_node.ros__parameters.control_plane: none
             comms_simulator_node.ros__parameters.measurement_report.enabled: false
-        a3:                             # 3GPP A3イベント型HO (hysteresis + TTT)
-          config:
-            link_controller_node.ros__parameters.control_plane: a3
-
         # --- 完全な KKF (参照点) ---
         kkf_conv:
           config:
