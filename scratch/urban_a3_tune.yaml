@@ -1,0 +1,47 @@
+sweep:
+  name: urban_a3_tune
+  description: RSU2基・競合条件。アブレーション4種 + A3標準ベースライン x N=10
+  scenario: config/scenarios/road_urban_2lane.yaml
+  variables:
+  - name: method
+    cases:
+      a3_h3_t010:
+        config:
+          link_controller_node.ros__parameters.control_plane: a3
+          link_controller_node.ros__parameters.a3_hysteresis_db: 3.0
+          link_controller_node.ros__parameters.a3_time_to_trigger_s: 0.1
+      a3_h6_t032:
+        config:
+          link_controller_node.ros__parameters.control_plane: a3
+          link_controller_node.ros__parameters.a3_hysteresis_db: 6.0
+          link_controller_node.ros__parameters.a3_time_to_trigger_s: 0.32
+      a3_h9_t064:
+        config:
+          link_controller_node.ros__parameters.control_plane: a3
+          link_controller_node.ros__parameters.a3_hysteresis_db: 9.0
+          link_controller_node.ros__parameters.a3_time_to_trigger_s: 0.64
+  - name: load
+    cases:
+      moderate: {}
+  analysis:
+    group_by:
+    - method
+    - load
+    arm_var: method
+    baseline: a3_h3_t010
+    metrics:
+    - total_data_MB
+    - connected_time_s
+    - jain_index
+    - nlos_grant_pct
+    - path_mean_MB
+    - path_min_MB
+    - path_zero_pct
+    - n_paths
+  execution:
+    num_runs: 2
+    base_seed: 12345
+    task_timeout_sec: 1200
+    real_time_factor: 2.0
+    max_concurrency: 3
+    output_name: urban_a3_tune

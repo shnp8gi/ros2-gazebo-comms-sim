@@ -1,0 +1,86 @@
+# RSU2基構成 アブレーション + 標準ベースライン (競合条件のみ)。
+#
+# 目的: 「KKF が assoc_hold に勝つ」ことは示せたが、その差が**学習した地図**
+# によるものかは未検証だった。KKF は LCB による悲観的選択・アンテナ別評価・
+# 排他性の考慮など複数の要素を含むので、地図が冷たいままでも同じ結果が出る
+# 可能性を排除できていない。ここを切り分ける。
+#
+# 中負荷は本評価で有意差が出ない (p=0.625) ことが分かっているので外す。
+# 効果が存在する条件でのみ要素分解する。
+#
+# 全アームを1スイープに入れて同一シードで対比較する (別スイープを跨いで
+# 突き合わせると、統合の意味論を誤ると対比較の自由度を偽りかねない)。
+sweep:
+  name: "urban_rsu2_ablation"
+  description: "RSU2基・競合条件。アブレーション5種 + A3標準ベースライン x N=10"
+  scenario: "config/scenarios/road_urban_2lane.yaml"
+  variables:
+    - name: method
+      cases:
+        # --- ベースライン ---
+        assoc_hold:                     # 802.15.3e 準拠の受動接続 (本評価の基準)
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: assoc_hold
+            link_controller_node.ros__parameters.control_plane: none
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+        a3:                             # 3GPP A3イベント型HO (hysteresis + TTT)
+          config:
+            link_controller_node.ros__parameters.control_plane: a3
+
+        # --- 完全な KKF (参照点) ---
+        kkf_conv:
+          config:
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+
+        # --- アブレーション ---
+        kkf_cold:                       # 学習した地図を渡さず、観測も規格忠実
+          config:                       #   スモークでは1バイトも送れなかった:
+                                        #   冷たい地図では LCB が閾値に届かず grant が
+                                        #   出ず、grant が無いので観測も入らない。
+                                        #   学習相で見たのと同じデッドロック
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+            link_controller_node.ros__parameters.kkf_state_dir: ''
+        kkf_cold_probe:                 # 地図なし + 全ペア観測 (走行内オンライン学習)
+          config:                       #   「地図を持つ」価値と「事前に学習する」
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+            link_controller_node.ros__parameters.kkf_state_dir: ''
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: true
+        kkf_nolcb:                      # kappa=0 = 平均場のみ、不確実性を使わない
+          config:                       #   LCB (悲観的選択) の価値を測る
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+            link_controller_node.ros__parameters.kkf_kappa: 0.0
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+        kkf_novar:                      # sigma_nu^2 マップ無効
+          config:                       #   遮蔽リスク地図の価値を測る
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+            link_controller_node.ros__parameters.kkf_varmap_enabled: false
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+    - name: load
+      cases:
+        contended:
+          scenario:
+            traffic.lanes[0].speed_mps: 7.0
+            traffic.lanes[1].speed_mps: 7.0
+            traffic.lanes[0].headway_s.mean: 2.0
+            traffic.lanes[1].headway_s.mean: 2.0
+            traffic.target_ratio: 0.8
+            traffic.window_s: [0.0, 35.0]
+  analysis:
+    group_by: [method, load]
+    arm_var: method
+    baseline: kkf_conv          # 各要素を抜いたときに何を失うかを見る
+    metrics: [total_data_MB, connected_time_s, jain_index, nlos_grant_pct,
+              path_mean_MB, path_min_MB, path_zero_pct, n_paths]
+  execution:
+    num_runs: 10
+    base_seed: 12345            # 本評価 (A+B) と同じ交通実現を再現する
+    task_timeout_sec: 3600
+    real_time_factor: 2.0
+    max_concurrency: 4
+    output_name: "urban_rsu2_ablation"
