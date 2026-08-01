@@ -1,10 +1,15 @@
-# RSU2基 + 車載2アンテナ構成での競合評価。
+# RSU2基 + 車載2アンテナ構成での競合評価 (第2バッチ: 走行6-10相当)。
+#
+# sweep_sim の resume はタスクを (y, angle) だけで識別するため、method x load
+# のような一般変数の掃引では走行数を増やす追加実行ができない。そこで別スイープ
+# として実行し、解析段階で runs.csv を突き合わせて N=10 の対比較を作る。
+# base_seed を A (12345..16345) と重ねないことで、10 個の独立したシードになる。
 #
 # 問題の性質: 上り用・下り用が各1基しかないため「どのRSUを選ぶか」ではなく
 # 「希少な1基を競合する複数の車にどう配分するか」= 時間軸スケジューリング。
 # 競合条件では単一RSUへの需要が109%(供給超過)になる。
 sweep:
-  name: "urban_rsu2_eval"
+  name: "urban_rsu2_eval_b"
   description: "RSU2基・車載2本。5手法 x 競合/中負荷 x N (基準=assoc_hold)"
   scenario: "config/scenarios/road_urban_2lane.yaml"
   variables:
@@ -55,8 +60,8 @@ sweep:
               path_mean_MB, path_min_MB, path_zero_pct, n_paths]
   execution:
     num_runs: 5
-    base_seed: 12345
+    base_seed: 17345
     task_timeout_sec: 3600
     real_time_factor: 2.0
     max_concurrency: 4
-    output_name: "urban_rsu2_eval"
+    output_name: "urban_rsu2_eval_b"

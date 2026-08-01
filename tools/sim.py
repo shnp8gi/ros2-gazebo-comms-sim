@@ -114,8 +114,9 @@ def cmd_run(args):
              + (f" --resume {args.resume}" if args.resume else ""))
     if IN_CONTAINER:
         return subprocess.call(['bash', '-c', inner], cwd='/workspace')
-    return subprocess.call(['docker', 'compose', 'exec', '-T', 'sim',
-                            'bash', '-c', inner], cwd=REPO_ROOT)
+    # 委譲層を通す。直に docker exec するとシグナルが中へ届かず、止めたはず
+    # のスイープが排他ロックを握ったまま残る
+    return delegate_to_container(sys.argv[1:])
 
 
 def cmd_status(args):
