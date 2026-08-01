@@ -111,7 +111,7 @@ def cmd_run(args):
     inner = (f"cd /workspace && PYTHONDONTWRITEBYTECODE=1 "
              f"python3 tools/sweep_sim.py --sweep-config {args.sweep_config}"
              + (" --no-build" if args.no_build else "")
-             + (" --resume" if args.resume else ""))
+             + (f" --resume {args.resume}" if args.resume else ""))
     if IN_CONTAINER:
         return subprocess.call(['bash', '-c', inner], cwd='/workspace')
     return subprocess.call(['docker', 'compose', 'exec', '-T', 'sim',
@@ -756,7 +756,12 @@ def main():
     p = sub.add_parser('run', help='スイープ実行')
     p.add_argument('--sweep-config', required=True)
     p.add_argument('--no-build', action='store_true')
-    p.add_argument('--resume', action='store_true')
+    p.add_argument('--resume', nargs='?', const='latest', default=None,
+                   metavar='DIR',
+                   help='中断/完了したスイープを再開する。値なしで直近の '
+                        'sweep_* を自動検出、ディレクトリを渡せばそれを対象に '
+                        'する (完了済みスイープは output_name に改名されていて '
+                        '自動検出に掛からないため、走行数を増やす場合は明示する)')
 
     p = sub.add_parser('status', help='進捗表示')
     p.add_argument('--watch', action='store_true')

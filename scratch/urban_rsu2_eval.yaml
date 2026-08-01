@@ -54,7 +54,7 @@ sweep:
     metrics: [total_data_MB, connected_time_s, jain_index, nlos_grant_pct,
               path_mean_MB, path_min_MB, path_zero_pct, n_paths]
   execution:
-    num_runs: 5
+    num_runs: 10
     base_seed: 12345
     task_timeout_sec: 3600
     real_time_factor: 2.0
