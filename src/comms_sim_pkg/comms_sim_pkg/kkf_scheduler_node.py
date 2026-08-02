@@ -1117,6 +1117,7 @@ class A3Scheduler:
         self.lock = threading.Lock()
         self.inbox = []
         self.backlog = []          # 取り込み待ち (lockstep ではエポック境界で切る)
+        self.seen_reports = set()  # 再送による二重取り込みを防ぐ
         self.prev_t = -1.0
         # lockstep ではエポックを 0 から刻む。従来は「最初の観測時刻+周期」
         self.next_plan_t = 0.0 if cfg.lockstep else -1e18
@@ -1136,6 +1137,16 @@ class A3Scheduler:
             self.inbox.append(msg)
 
     def _process_report(self, msg):
+        # lockstep ではプラグインが待機中に観測を再送する (取りこぼしからの復旧)。
+        # 同じ観測を二重に取り込むとカルマンフィルタが前提とする観測の独立性が
+        # 壊れ分散を過小評価するので、(シム時刻, 車両) で重複を落とす
+        key = (round(float(msg.t_sim), 6), msg.vehicle or self.default_vid)
+        if key in self.seen_reports:
+            return
+        self.seen_reports.add(key)
+        if len(self.seen_reports) > 20000:      # 古いエポック分は捨てる
+            cutoff = self.prev_t - 5.0
+            self.seen_reports = {k for k in self.seen_reports if k[0] >= cutoff}
         t = msg.t_sim
         self.prev_t = max(self.prev_t, t)
         vid = msg.vehicle or self.default_vid

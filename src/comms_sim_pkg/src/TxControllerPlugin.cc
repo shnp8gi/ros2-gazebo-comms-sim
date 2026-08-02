@@ -1228,6 +1228,8 @@ namespace tx_controller
                 vp->set_y(pos.y());
                 vp->set_z(pos.z());
                 this->report_pub.Publish(report_msg);
+                this->last_report_msg = report_msg;
+                this->has_last_report = true;
                 // グリッドで決める (累積加算だと浮動小数の誤差が溜まり、
                 // lockstep でエポック境界と観測時刻がずれる。ずれた回では
                 // シム時刻を止めたまま新しい観測が出ず、制御プレーンが計画を
@@ -1259,10 +1261,27 @@ namespace tx_controller
             while (current_time_s + 1e-9 >= this->next_lockstep_epoch) {
                 const double need = this->next_lockstep_epoch - this->lockstep_epoch_s;
                 if (need >= 0.0) {
-                    std::unique_lock<std::mutex> lk(this->lockstep_mutex);
-                    const bool got = this->lockstep_cv.wait_for(
-                        lk, std::chrono::duration<double>(this->lockstep_timeout_s),
-                        [&]{ return this->latest_sched_issued_t >= need - 1e-9; });
+                    // シム時刻を止めている間は「待てば次の観測が来る」が成り立た
+                    // ない。観測が1通でも取りこぼされると (108台×20Hz = 毎秒
+                    // 2160通) 制御プレーンは永久に計画を出せず、回復不能な
+                    // デッドロックになる。待機中は直近の観測を再送して復旧させる
+                    bool got = false;
+                    const double retry_s = 0.5;
+                    double waited = 0.0;
+                    while (waited < this->lockstep_timeout_s) {
+                        {
+                            std::unique_lock<std::mutex> lk(this->lockstep_mutex);
+                            got = this->lockstep_cv.wait_for(
+                                lk, std::chrono::duration<double>(retry_s),
+                                [&]{ return this->latest_sched_issued_t >= need - 1e-9; });
+                        }
+                        if (got) break;
+                        waited += retry_s;
+                        if (this->has_last_report) {
+                            this->report_pub.Publish(this->last_report_msg);
+                            ++this->lockstep_resends;
+                        }
+                    }
                     if (!got) {
                         gzerr << "[TxControllerPlugin] lockstep timeout: t_sim="
                               << current_time_s << " epoch=" << need
@@ -1381,6 +1400,9 @@ namespace tx_controller
         double lockstep_timeout_s = 300.0;
         double next_lockstep_epoch = 0.0;
         double latest_sched_issued_t = -1e18;
+        comms_sim::msgs::MeasurementReport last_report_msg;
+        bool has_last_report = false;
+        long lockstep_resends = 0;      // 再送回数 (取りこぼしの実測)
         std::mutex lockstep_mutex;
         std::condition_variable lockstep_cv;
     };
