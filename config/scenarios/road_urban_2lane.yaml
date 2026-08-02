@@ -23,6 +23,12 @@ scenario:
         kkf_assigner: hungarian
         kkf_switch_bonus_db: 3.0
         kkf_replan_period_s: 0.05
+        # 制御プレーンをシム時刻のエポックに同期させる。非同期のままだと計画が
+        # 効き始めるシム時刻が計算機の混み具合で変わり、外部プロセスで動く手法
+        # だけが負荷で不利になる (実測: KKFノード4個同時で grant -4.6%、
+        # プラグイン内で完結する assoc_hold は +2.6%)。手法間の差 (5-14%) と
+        # 同程度の交絡になるため同期は必須
+        kkf_lockstep: true
         kkf_lookahead_stages: 1
         kkf_lookahead_discount: 0.7
         kkf_stale_report_s: 1.0

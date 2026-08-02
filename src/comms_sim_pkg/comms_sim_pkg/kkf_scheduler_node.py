@@ -209,6 +209,9 @@ class SchedulerConfig:
         self.varmap_prior_var_db2 = float(link.get('kkf_varmap_prior_var_db2', 0.0))
 
         # --- 走行間永続化 (本番仕様 §5.3) ---
+        # 制御プレーンをシム時刻のエポックに同期させる (実時間非依存)。
+        # 既定 false は従来動作 (実時間ループ)
+        self.lockstep = bool(link.get('kkf_lockstep', False))
         self.state_dir = str(link.get('kkf_state_dir', '') or '')
         self.state_save = bool(link.get('kkf_state_save', False))
         self.q_forget = float(link.get('kkf_q_forget', 0.05))
@@ -1113,8 +1116,10 @@ class A3Scheduler:
 
         self.lock = threading.Lock()
         self.inbox = []
+        self.backlog = []          # 取り込み待ち (lockstep ではエポック境界で切る)
         self.prev_t = -1.0
-        self.next_plan_t = -1e18
+        # lockstep ではエポックを 0 から刻む。従来は「最初の観測時刻+周期」
+        self.next_plan_t = 0.0 if cfg.lockstep else -1e18
         self.last_signature = None
         self.report_count = 0
 
@@ -1157,26 +1162,63 @@ class A3Scheduler:
                                mode=msgs.MEASURE if is_measure else msgs.DATA,
                                vehicle=vid)
             published_any = True
-        if published_any:
+        # lockstep ではプラグインが毎エポック応答を待つので、言うことが無くても
+        # 必ず配信する (受信側は空メッセージを合図として扱い割当に触れない)
+        if published_any or self.cfg.lockstep:
             self.pub.publish(sched)
 
     def spin(self):
-        """取込・計画・配信ループ (メインスレッド)。状態変化時は即時、無変化でも周期配信。"""
+        """取込・計画・配信ループ (メインスレッド)。
+
+        lockstep=false (従来): 実時間ループ。状態変化時は即時、無変化でも周期配信。
+          プラグインは届いた時点のステップで適用するため、**同じ入力でも計算機の
+          混み具合で結果が変わる**。実測で、KKF ノードを4つ同時に走らせると
+          grant 時間が 4.6% 落ち、手法間の差 (5-14%) と同程度の交絡になった。
+
+        lockstep=true: シム時刻のエポック t_k = k·T に同期する。
+          エポック k の観測が出揃った時点 (= t_k より後の観測が届いた時点) で
+          エポック k 用の計画を作り、t_issued=t_k を付けて配信する。プラグインは
+          t_{k+1} で「t_issued >= t_k の計画」が来るまでシム時刻を止めて待つ。
+          実時間がいくらかかっても、計画が効き始めるシム時刻は必ず同じになる。
+        """
         last_status_wall = time.monotonic()
         try:
             while True:
-                time.sleep(0.01)
+                # lockstep ではシムがこの応答を待って止まっている。
+                # ポーリング間隔がそのまま実時間コストになる
+                time.sleep(0.0005 if self.cfg.lockstep else 0.01)
                 with self.lock:
                     pending, self.inbox = self.inbox, []
-                for msg in pending:
-                    self._process_report(msg)
+                # 到着順は配送タイミング次第で変わるので、シム時刻と車両名で
+                # 決定的に並べ替えてから取り込む (取り込み順が推定に効くため)
+                self.backlog.extend(pending)
+                self.backlog.sort(key=lambda m: (m.t_sim, m.vehicle))
 
-                if self.prev_t >= 0.0:
-                    signature = tuple((c.serving, c.probe) for c in self.ctrls.values())
-                    if signature != self.last_signature or self.prev_t >= self.next_plan_t:
-                        self._publish(self.prev_t)
-                        self.last_signature = signature
-                        self.next_plan_t = self.prev_t + self.cfg.replan_period_s
+                if not self.cfg.lockstep:
+                    for msg in self.backlog:
+                        self._process_report(msg)
+                    self.backlog = []
+                    if self.prev_t >= 0.0:
+                        signature = tuple((c.serving, c.probe) for c in self.ctrls.values())
+                        if signature != self.last_signature or self.prev_t >= self.next_plan_t:
+                            self._publish(self.prev_t)
+                            self.last_signature = signature
+                            self.next_plan_t = self.prev_t + self.cfg.replan_period_s
+                else:
+                    # エポック k の締切は「t_k より後の観測が届いたこと」で判定する。
+                    # 全プラグインは同じシムステップで観測を出すので、t_k を超える
+                    # 観測が1つでも来れば t_k 以前の観測は出揃っている
+                    while self.backlog and self.backlog[-1].t_sim > self.next_plan_t:
+                        epoch = self.next_plan_t
+                        keep = []
+                        for msg in self.backlog:
+                            if msg.t_sim <= epoch:
+                                self._process_report(msg)
+                            else:
+                                keep.append(msg)
+                        self.backlog = keep
+                        self._publish(epoch)          # 必ず配信 (無変化でも待たせない)
+                        self.next_plan_t = epoch + self.cfg.replan_period_s
 
                 if time.monotonic() - last_status_wall >= 2.0:
                     last_status_wall = time.monotonic()

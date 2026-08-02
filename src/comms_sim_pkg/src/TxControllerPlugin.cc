@@ -27,6 +27,8 @@
 #include <iomanip>
 #include <atomic>
 #include <map>
+#include <condition_variable>
+#include <cstdlib>
 #include <mutex>
 #include "comms_sim_pkg/comms_calculator.hpp"
 #include "comms_sim_pkg/antenna_pattern_parser.hpp"
@@ -558,6 +560,19 @@ namespace tx_controller
                 this->report_pub = this->node.Advertise<comms_sim::msgs::MeasurementReport>(this->report_topic);
             }
 
+            // 制御プレーンとのシム時刻同期 (lockstep)。実時間非依存にする
+            if (link_ctrl_params && link_ctrl_params["kkf_lockstep"]) {
+                this->lockstep = link_ctrl_params["kkf_lockstep"].as<bool>(false);
+            }
+            if (link_ctrl_params && link_ctrl_params["kkf_replan_period_s"]) {
+                this->lockstep_epoch_s =
+                    link_ctrl_params["kkf_replan_period_s"].as<double>(this->lockstep_epoch_s);
+            }
+            if (link_ctrl_params && link_ctrl_params["kkf_lockstep_timeout_s"]) {
+                this->lockstep_timeout_s =
+                    link_ctrl_params["kkf_lockstep_timeout_s"].as<double>(this->lockstep_timeout_s);
+            }
+
             // 外部スケジュール実行戦略 (制御プレーンが生成したスケジュールに追従)
             if (this->scheduling_policy == "external_schedule") {
                 std::string schedule_topic =
@@ -765,6 +780,20 @@ namespace tx_controller
         /// 制御プレーンからのスケジュール受信 (gz-transport受信スレッド)
         void OnHoSchedule(const comms_sim::msgs::HoSchedule &msg) {
             if (!this->external_strategy) return;
+            {   // lockstep: 「いつの状態から作られた計画か」を記録して待機側を起こす
+                std::lock_guard<std::mutex> lk(this->lockstep_mutex);
+                this->latest_sched_issued_t = std::max(this->latest_sched_issued_t,
+                                                       msg.t_issued());
+            }
+            this->lockstep_cv.notify_all();
+
+            // 計画が1件も無いメッセージは「今エポックは言うことがない」という
+            // 合図として扱い、現在の割当には触れない。lockstep ではプラグインが
+            // 毎エポック応答を待つため、空エポックでも配信が要る。
+            // 「あなたには割り当てない」(他車向けの計画は入っている) 場合は
+            // 従来どおり自車の計画を消す — 両者は意味が違う
+            if (msg.plan_size() == 0) return;
+
             ExternalScheduleStrategy::Schedule schedule;
             schedule.valid_until = msg.valid_until();
             for (const auto &entry : msg.plan()) {
@@ -1045,7 +1074,14 @@ namespace tx_controller
             }
 
             // 4. Update Link States and Data Accumulation
-            bool do_report = this->report_enabled && current_time_s >= this->next_report_time;
+            // lockstep ではこの直後にエポック境界で停止する。停止前に必ず観測を
+            // 出しておかないと、シム時刻が凍結した状態で制御プレーンが新しい
+            // 入力を得られず、待ち合わせが永久に成立しない
+            const bool at_epoch = this->lockstep && this->external_strategy
+                                  && this->lockstep_epoch_s > 0.0
+                                  && current_time_s + 1e-9 >= this->next_lockstep_epoch;
+            bool do_report = this->report_enabled
+                             && (current_time_s >= this->next_report_time || at_epoch);
             comms_sim::msgs::MeasurementReport report_msg;
             std::vector<bool> grant_flags(this->vehicle_antennas.size(), false);
 
@@ -1192,7 +1228,52 @@ namespace tx_controller
                 vp->set_y(pos.y());
                 vp->set_z(pos.z());
                 this->report_pub.Publish(report_msg);
-                this->next_report_time = current_time_s + this->report_period_s;
+                // グリッドで決める (累積加算だと浮動小数の誤差が溜まり、
+                // lockstep でエポック境界と観測時刻がずれる。ずれた回では
+                // シム時刻を止めたまま新しい観測が出ず、制御プレーンが計画を
+                // 作れないので待ち合わせが成立しない = タイムアウトまで硬直)
+                this->next_report_time =
+                    (std::floor(current_time_s / this->report_period_s) + 1.0)
+                    * this->report_period_s;
+            }
+
+            this->WaitForControlEpoch(current_time_s);
+        }
+
+        /// \brief 制御プレーンの計画をシム時刻で待ち合わせる (lockstep)。
+        ///
+        /// 非同期のままだと、計画が「シム時刻の何時点で効き始めるか」が計算機の
+        /// 混み具合で変わる。外部プロセスで動く手法だけが負荷で不利になり、
+        /// 手法間比較が成立しない (実測: KKF ノード4個同時で grant -4.6%、
+        /// プラグイン内で完結する assoc_hold は +2.6%)。
+        ///
+        /// エポック t_k = k·T ごとに、「t_{k-1} の状態から作られた計画」が届く
+        /// まで PreUpdate を止める。シム時刻は進まないので、実時間がいくら
+        /// かかっても計画が効き始めるシム時刻は必ず同じになる。
+        /// 1エポック遅らせるのは、t_k の観測を全車が出し終える前に待つと
+        /// デッドロックするため (待つ側が先に止まると後続が観測を出せない)。
+        void WaitForControlEpoch(double current_time_s) {
+            if (!this->lockstep || !this->external_strategy) return;
+            if (this->lockstep_epoch_s <= 0.0) return;
+
+            while (current_time_s + 1e-9 >= this->next_lockstep_epoch) {
+                const double need = this->next_lockstep_epoch - this->lockstep_epoch_s;
+                if (need >= 0.0) {
+                    std::unique_lock<std::mutex> lk(this->lockstep_mutex);
+                    const bool got = this->lockstep_cv.wait_for(
+                        lk, std::chrono::duration<double>(this->lockstep_timeout_s),
+                        [&]{ return this->latest_sched_issued_t >= need - 1e-9; });
+                    if (!got) {
+                        gzerr << "[TxControllerPlugin] lockstep timeout: t_sim="
+                              << current_time_s << " epoch=" << need
+                              << " latest_issued=" << this->latest_sched_issued_t
+                              << " — 制御プレーンが応答しません。"
+                              << "非決定的なデータを出さないため異常終了します。"
+                              << std::endl;
+                        std::exit(1);
+                    }
+                }
+                this->next_lockstep_epoch += this->lockstep_epoch_s;
             }
         }
 
@@ -1293,6 +1374,15 @@ namespace tx_controller
 
         // 外部スケジュール実行戦略 (scheduling_policy == "external_schedule" 時のみ)
         std::shared_ptr<ExternalScheduleStrategy> external_strategy;
+
+        // 制御プレーンとのシム時刻同期 (lockstep)
+        bool lockstep = false;
+        double lockstep_epoch_s = 0.2;
+        double lockstep_timeout_s = 300.0;
+        double next_lockstep_epoch = 0.0;
+        double latest_sched_issued_t = -1e18;
+        std::mutex lockstep_mutex;
+        std::condition_variable lockstep_cv;
     };
 } // namespace tx_controller
 
