@@ -28,7 +28,9 @@ scenario:
         # だけが負荷で不利になる (実測: KKFノード4個同時で grant -4.6%、
         # プラグイン内で完結する assoc_hold は +2.6%)。手法間の差 (5-14%) と
         # 同程度の交絡になるため同期は必須
-        kkf_lockstep: true
+        # 事後再計算 (tools/replay_sim.py) に切り替えたため既定は無効。
+        # lockstep は競合条件で散発的にデッドロックし、実用に至らなかった
+        kkf_lockstep: false
         kkf_lookahead_stages: 1
         kkf_lookahead_discount: 0.7
         kkf_stale_report_s: 1.0
