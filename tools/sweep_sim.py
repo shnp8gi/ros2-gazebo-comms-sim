@@ -717,6 +717,20 @@ def run_single_task(task_info, worker_id, sweep_start_time, total_runs_tasks, is
                             if len(wp) >= 1:
                                 wp[0] += dither_x
             
+            # 記録先などの文字列に含まれる {seed} を、その走行のシードで展開する。
+            # 事後再計算の入力をシードごとに分けて書き出すために要る
+            # (これが無いと 1 スイープ内の全走行が同じ場所へ上書きしてしまう)
+            if run_seed is not None:
+                def _expand_seed(o):
+                    if isinstance(o, dict):
+                        return {k: _expand_seed(v) for k, v in o.items()}
+                    if isinstance(o, list):
+                        return [_expand_seed(v) for v in o]
+                    if isinstance(o, str) and '{seed}' in o:
+                        return o.replace('{seed}', str(run_seed))
+                    return o
+                config_dict = _expand_seed(config_dict)
+
             write_sim_params(config_dict, tmp_config_path)
             
             # Now that tmp_config_path is written, we can estimate duration

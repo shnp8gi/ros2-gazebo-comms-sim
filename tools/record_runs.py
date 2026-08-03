@@ -64,57 +64,48 @@ def main():
     os.makedirs(os.path.join(REPO_ROOT, root), exist_ok=True)
     started = datetime.datetime.now()
 
-    for m in range(a.start_run, a.runs + 1):
-        seed = a.base_seed + a.seed_stride * (m - 1)
-        rec = f"/workspace/{root}/seed_{seed}"
-        # 記録には制御プレーンを使わない。何を記録するかは手法に依存しないので、
-        # 最も軽い構成 (プラグイン内で完結し、外部ノードを立てない) を選ぶ
-        case_cfg = {
-            'link_controller_node.ros__parameters.scheduling_policy': 'assoc_hold',
-            'link_controller_node.ros__parameters.control_plane': 'none',
-            'comms_simulator_node.ros__parameters.measurement_report.enabled': False,
-            'comms_simulator_node.ros__parameters.record_pairs_dir': f"{rec}/pairs",
-        }
-        scen = dict(LOAD_PRESETS[a.load])
-        scen['simulation_overrides.record_poses_path'] = f"{rec}/poses.csv"
-        scen['simulation_overrides.record_poses_period_s'] = a.period_s
+    seed_tag = "{seed}"
+    rec = f"/workspace/{root}/seed_{seed_tag}"
+    # 記録には制御プレーンを使わない。何を記録するかは手法に依存しないので、
+    # 最も軽い構成 (プラグイン内で完結し外部ノードを立てない) を選ぶ
+    case_cfg = {
+        'link_controller_node.ros__parameters.scheduling_policy': 'assoc_hold',
+        'link_controller_node.ros__parameters.control_plane': 'none',
+        'comms_simulator_node.ros__parameters.measurement_report.enabled': False,
+        'comms_simulator_node.ros__parameters.record_pairs_dir': f"{rec}/pairs",
+    }
+    scen = dict(LOAD_PRESETS[a.load])
+    scen['simulation_overrides.record_poses_path'] = f"{rec}/poses.csv"
+    scen['simulation_overrides.record_poses_period_s'] = a.period_s
 
-        sweep = {'sweep': {
-            'name': f"{a.name}_seed{seed}",
-            'scenario': a.scenario,
-            'variables': [
-                {'name': 'method', 'cases': {'record': {'config': case_cfg}}},
-                {'name': 'load', 'cases': {a.load: {'scenario': scen} if scen else {}}},
-            ],
-            'analysis': {'group_by': ['method', 'load'], 'arm_var': 'method',
-                         'baseline': 'record', 'metrics': ['total_data_MB']},
-            'execution': {
-                'num_runs': 1,
-                'base_seed': seed,
-                'task_timeout_sec': a.timeout,
-                'real_time_factor': 2.0,
-                'max_concurrency': max(1, a.concurrency),
-                'output_name': f"{a.name}/sweeps/seed_{seed}",
-            },
-        }}
-        path = os.path.join('scratch', f"record_{a.name}.yaml")
-        with open(os.path.join(REPO_ROOT, path), 'w', encoding='utf-8') as f:
-            yaml.dump(sweep, f, sort_keys=False, allow_unicode=True)
+    sweep = {'sweep': {
+        'name': a.name,
+        'scenario': a.scenario,
+        'variables': [
+            {'name': 'method', 'cases': {'record': {'config': case_cfg}}},
+            {'name': 'load', 'cases': {a.load: {'scenario': scen} if scen else {}}},
+        ],
+        'analysis': {'group_by': ['method', 'load'], 'arm_var': 'method',
+                     'baseline': 'record', 'metrics': ['total_data_MB']},
+        'execution': {
+            'num_runs': a.runs,
+            'base_seed': a.base_seed,
+            'task_timeout_sec': a.timeout,
+            'real_time_factor': 2.0,
+            'max_concurrency': max(1, a.concurrency),
+            'output_name': f"{a.name}/sweep",
+        },
+    }}
+    path = os.path.join('scratch', f"record_{a.name}.yaml")
+    with open(os.path.join(REPO_ROOT, path), 'w', encoding='utf-8') as f:
+        yaml.dump(sweep, f, sort_keys=False, allow_unicode=True)
 
-        done = m - a.start_run
-        elapsed = (datetime.datetime.now() - started).total_seconds()
-        eta = (elapsed / done * (a.runs - m + 1)) if done else 0.0
-        print(f"\n[record] ===== seed {seed} ({m}/{a.runs}) "
-              f"経過 {elapsed / 60:.0f}分 残り目安 {eta / 60:.0f}分 =====",
-              flush=True)
-
-        cmd = [sys.executable, os.path.join(TOOLS_DIR, 'sim.py'),
-               'run', '--sweep-config', path]
-        rc = subprocess.call(cmd, cwd=REPO_ROOT)
-        if rc != 0:
-            print(f"[record] seed {seed} が失敗 (exit {rc})。"
-                  f"--start-run {m} で再開できます", file=sys.stderr)
-            return rc
+    print(f"[record] {a.runs} シード x {a.load} を並列 {a.concurrency} で記録", flush=True)
+    rc = subprocess.call([sys.executable, os.path.join(TOOLS_DIR, 'sim.py'),
+                          'run', '--sweep-config', path], cwd=REPO_ROOT)
+    if rc != 0:
+        print(f"[record] 失敗 (exit {rc})", file=sys.stderr)
+        return rc
 
     print(f"\n[record] 完了: {root}/seed_* "
           f"({datetime.datetime.now() - started})")
