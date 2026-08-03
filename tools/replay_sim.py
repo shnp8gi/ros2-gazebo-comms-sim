@@ -206,6 +206,9 @@ def make_kkf_scheduler(sim_params_path, state_dir=None, overrides=None):
     import kkf_scheduler_node as ksn
 
     cfg = ksn.SchedulerConfig(sim_params_path)
+    # 記録走行は制御プレーンを使わない構成 (control_plane: none) で回すため、
+    # 保存された設定にはその値が残っている。再生では KKF の予測器が要る
+    cfg.control_plane = 'kkf_mpc'
     for k, v in (overrides or {}).items():
         setattr(cfg, k, v)
     # 学習済み地図は明示したときだけ読む。設定に残った値を暗黙に拾うと
