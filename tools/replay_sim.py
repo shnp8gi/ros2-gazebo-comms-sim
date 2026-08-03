@@ -208,8 +208,9 @@ def make_kkf_scheduler(sim_params_path, state_dir=None, overrides=None):
     cfg = ksn.SchedulerConfig(sim_params_path)
     for k, v in (overrides or {}).items():
         setattr(cfg, k, v)
-    if state_dir is not None:
-        cfg.state_dir = state_dir
+    # 学習済み地図は明示したときだけ読む。設定に残った値を暗黙に拾うと
+    # cold のつもりが warm になる (実測で kkf_cold が kkf_conv と同値になった)
+    cfg.state_dir = state_dir or ''
 
     class ReplayScheduler(ksn.MpcScheduler):
         def _setup_transport(self):
@@ -384,6 +385,13 @@ def main():
                     choices=sorted(list(POLICIES) + ['kkf']))
     ap.add_argument('--state-dir', default=None,
                     help='学習済み REM のディレクトリ (kkf 用、省略で cold)')
+    ap.add_argument('--kkf-set', action='append', default=[], metavar='KEY=VAL',
+                    help='SchedulerConfig の属性を上書き (例 kappa=0.0)。'
+                         'アブレーションで LCB や分散地図を切るのに使う')
+    ap.add_argument('--observe-all-pairs', action='store_true',
+                    help='観測を grant 中のペアに限らず全ペアにする。'
+                         '「地図を持つ」価値と「事前に学習する」価値を分ける'
+                         'kkf_cold_probe 用 (規格忠実ではない)')
     ap.add_argument('--out', required=True, help='出力ディレクトリ')
     ap.add_argument('--config', default=None, help='実効 sim_params (省略時は rec_dir から探す)')
     a = ap.parse_args()
@@ -422,7 +430,15 @@ def main():
         if not os.path.exists(poses_path):
             sys.exit(f"KKF には姿勢が要ります: {poses_path}")
         poses = load_poses(poses_path)
-        sched, _ksn = make_kkf_scheduler(cfg_path, state_dir=a.state_dir)
+        ov = {}
+        for kv in a.kkf_set:
+            k, _, v = kv.partition('=')
+            try:
+                ov[k.strip()] = yaml.safe_load(v)
+            except Exception:
+                ov[k.strip()] = v
+        sched, _ksn = make_kkf_scheduler(cfg_path, state_dir=a.state_dir,
+                                         overrides=ov)
         ext = {n: ExternalSchedule() for n in order}
         report_period = float(params.get('comms_simulator_node', {})
                               .get('ros__parameters', {})
@@ -450,10 +466,16 @@ def main():
                     if j is None:
                         continue
                     ent = []
-                    for i, ant in enumerate(v.ants):
-                        b = ant.assigned_bs
-                        if b >= 0:
-                            ent.append((i, b, float(v.rssi[k, i, b])))
+                    if a.observe_all_pairs:
+                        for i in range(v.n_ant):
+                            for b in range(v.n_bs):
+                                ent.append((i, b, float(v.rssi[k, i, b])))
+                    else:
+                        # 規格忠実: grant 中のペアしか観測できない
+                        for i, ant in enumerate(v.ants):
+                            b = ant.assigned_bs
+                            if b >= 0:
+                                ent.append((i, b, float(v.rssi[k, i, b])))
                     sched._process_report(Report(tf, name, pxyz[j], ent))
             # 2. 再計画 (実行時と同じ周期・同じロジック)
             if tf + 1e-9 >= next_plan_t:
