@@ -2,6 +2,7 @@
 import sys
 import rclpy
 from rclpy.node import Node
+from rosgraph_msgs.msg import Clock
 from std_msgs.msg import Bool
 
 class MissionCoordinatorNode(Node):
@@ -21,9 +22,24 @@ class MissionCoordinatorNode(Node):
         if not vehicle_names_param:
             vehicle_names_param = ['suv']
 
+        # シム時刻による安全停止。全車の完走を待つだけだと、1台でも完走できない
+        # 車両があると走行が終わらない (実測: 交通生成を使う構成で 20 走行中 9 走行が
+        # 停止せず、シム時刻 3245 秒まで走り続けた)。
+        # 実時間ではなくシム時刻で判定するため、計算機の速度によらず同じ地点で止まる
+        self.declare_parameter('max_sim_time_s', 0.0)
+        self.max_sim_time_s = float(
+            self.get_parameter('max_sim_time_s').get_parameter_value().double_value)
+
         self.vehicles = list(vehicle_names_param)
         self.completion_status = {v: False for v in self.vehicles}
         self.subscriptions_list = []
+        self._stopping = False
+
+        if self.max_sim_time_s > 0.0:
+            self.clock_sub = self.create_subscription(
+                Clock, '/clock', self.clock_callback, 10)
+            self.get_logger().info(
+                f"Safety stop enabled: sim time limit {self.max_sim_time_s} s")
 
         self.get_logger().info(f"Mission Coordinator started. Waiting for {len(self.vehicles)} vehicles: {self.vehicles}")
 
@@ -37,6 +53,34 @@ class MissionCoordinatorNode(Node):
             )
             self.subscriptions_list.append(sub)
 
+    def clock_callback(self, msg: Clock):
+        t = msg.clock.sec + msg.clock.nanosec * 1e-9
+        if t >= self.max_sim_time_s:
+            done = sum(1 for v in self.completion_status.values() if v)
+            self.get_logger().warn(
+                f"Sim time {t:.1f}s reached the limit ({self.max_sim_time_s}s). "
+                f"{done}/{len(self.vehicles)} vehicles completed. Shutting down.")
+            self._shutdown_after_flush()
+
+    def _shutdown_after_flush(self):
+        """ログの書き出しを待ってから終了する。
+
+        コールバック内で rclpy.shutdown() を呼ぶとデッドロックするため、
+        別スレッドで os._exit する。
+        """
+        if self._stopping:
+            return
+        self._stopping = True
+        import os
+        import threading
+        import time
+
+        def delayed_exit():
+            time.sleep(3.0)
+            os._exit(0)
+
+        threading.Thread(target=delayed_exit, daemon=True).start()
+
     def mission_complete_callback(self, msg: Bool, vehicle_name: str):
         if msg.data and not self.completion_status[vehicle_name]:
             self.completion_status[vehicle_name] = True
@@ -44,17 +88,7 @@ class MissionCoordinatorNode(Node):
             
             if all(self.completion_status.values()):
                 self.get_logger().info("All vehicles have completed their missions! Waiting for logs to flush before shutting down...")
-                
-                # Sleep briefly to ensure Gazebo CSVs and ROS standard outputs are flushed
-                # Note: Do not call rclpy.shutdown() inside a callback as it causes a deadlock.
-                import os
-                import time
-                import threading
-                def delayed_exit():
-                    time.sleep(3.0)
-                    os._exit(0)
-                
-                threading.Thread(target=delayed_exit, daemon=True).start()
+                self._shutdown_after_flush()
 
 def main(args=None):
     rclpy.init(args=args)

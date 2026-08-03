@@ -9,7 +9,10 @@ scenario:
   description: 都市部 片側1車線×1車線・対象車と一般車の混在交通 (target_ratio で分離)。RSU 2台 10.0m間隔 y=6.00 (歩道外側端)、傾き ±70.0° (alternate)
     / 車 ±20.0°。δ_rsu+δ_veh=90° (相互ボアサイト成立)。tools/gen_urban_scenario.py により生成
   base_config: src/comms_sim_pkg/config/sim_params.yaml
-  simulation_overrides: {headless: true, real_time_factor: 2.0, logging_level: 3, physics_max_step_size: 0.001}
+  # max_sim_time_s: 全車の完走を待つだけでは、1台でも完走できない車両が
+  # あると走行が終わらない (実測: 20走行中9走行が停止せず、シム時刻3245秒
+  # まで走り続けた)。シム時刻で判定するので計算機の速度によらず同じ地点で止まる
+  simulation_overrides: {headless: true, max_sim_time_s: 90.0, real_time_factor: 2.0, logging_level: 3, physics_max_step_size: 0.001}
   config_overrides:
     link_controller_node:
       ros__parameters:

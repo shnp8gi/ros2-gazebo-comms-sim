@@ -905,7 +905,11 @@ def launch_setup(context, *args, **kwargs):
             executable='mission_coordinator_node.py',
             name='mission_coordinator_node',
             output='screen',
-            parameters=[{'vehicle_names': vehicle_names_list}]
+            parameters=[{'vehicle_names': vehicle_names_list,
+                         # シム時刻の上限。全車の完走を待つだけだと、1台でも
+                         # 完走できない車両があると走行が終わらない
+                         'max_sim_time_s': float(
+                             sim_config.get('max_sim_time_s', 0.0))}]
         )
         actions.append(mission_coordinator_node)
 
