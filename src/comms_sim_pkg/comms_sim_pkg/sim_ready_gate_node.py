@@ -87,9 +87,19 @@ class SimReadyGateNode(Node):
             self.get_logger().info(
                 '=== 全ノード Ready。シミュレーション開始シグナルを発行します ==='
             )
-            ready_msg = Bool()
-            ready_msg.data = True
-            self.all_ready_pub.publish(ready_msg)
+            self._publish_all_ready()
+            # 開始シグナルは繰り返し発行する。VOLATILE QoS では発行の瞬間に
+            # 購読が確立していない相手に届かず、その車両は永久に動き出さない。
+            # 実測で、28台すべてが開始シグナルを取り逃して 1 台も動かず、
+            # 走行が終わらないまま打ち切られた。
+            # (TRANSIENT_LOCAL にすると前の走行の信号を拾う恐れがあるため、
+            #  QoS は VOLATILE のまま再送で担保する)
+            self._repeat_timer = self.create_timer(0.5, self._publish_all_ready)
+
+    def _publish_all_ready(self):
+        msg = Bool()
+        msg.data = True
+        self.all_ready_pub.publish(msg)
 
 
 def main(args=None):
