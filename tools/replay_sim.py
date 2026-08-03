@@ -182,6 +182,94 @@ def policy_assoc_hold(veh, k, t, occ, cfg):
             veh.active_ant = i
 
 
+# --------------------------------------------------------------- KKF
+
+class _CapturedSchedule:
+    """MpcScheduler が発行する HoSchedule を配信せず受け取るだけの器。"""
+
+    def __init__(self):
+        self.entries = []          # [(t_start, ant, bs, vehicle)]
+
+    def publish(self, sched):
+        self.entries = [(e.t_start, e.ant, e.bs, e.vehicle) for e in sched.plan]
+
+
+def make_kkf_scheduler(sim_params_path, state_dir=None, overrides=None):
+    """既存の MpcScheduler を、通信層だけ差し替えて再生から呼べるようにする。
+
+    計画ロジック (クリギング・LCB・割当) には一切手を触れない。実行時と同じ
+    コードが同じ入力に対して同じ判断を返すことが要件なので、再実装はしない。
+    """
+    sys.path.insert(0, os.path.join(
+        os.path.dirname(os.path.abspath(__file__)),
+        '..', 'src', 'comms_sim_pkg', 'comms_sim_pkg'))
+    import kkf_scheduler_node as ksn
+
+    cfg = ksn.SchedulerConfig(sim_params_path)
+    for k, v in (overrides or {}).items():
+        setattr(cfg, k, v)
+    if state_dir is not None:
+        cfg.state_dir = state_dir
+
+    class ReplayScheduler(ksn.MpcScheduler):
+        def _setup_transport(self):
+            self.pub = _CapturedSchedule()   # 配信せず捕捉するだけ
+
+    return ReplayScheduler(cfg), ksn
+
+
+class Report:
+    """MeasurementReport の最小の代役 (_process_report が触る属性のみ)。"""
+
+    class _E:
+        __slots__ = ('ant', 'bs', 'rssi_dbm')
+
+        def __init__(self, ant, bs, rssi):
+            self.ant, self.bs, self.rssi_dbm = ant, bs, rssi
+
+    class _P:
+        __slots__ = ('x', 'y', 'z')
+
+        def __init__(self, p):
+            self.x, self.y, self.z = float(p[0]), float(p[1]), float(p[2])
+
+    def __init__(self, t, vehicle, pos, entries):
+        self.t_sim = t
+        self.vehicle = vehicle
+        self.vehicle_pos = Report._P(pos)
+        self.reports = [Report._E(a, b, r) for a, b, r in entries]
+
+
+class ExternalSchedule:
+    """ExternalScheduleStrategy の移植 (計画の区間解決と再確立)。"""
+
+    def __init__(self):
+        self.cur_ant = -1
+        self.cur_bs = -1
+        self.entries = []
+        self.valid_until = -1.0
+
+    def set_plan(self, entries, valid_until):
+        # 空の計画は「今は言うことがない」なので現割当に触れない
+        if not entries:
+            return
+        self.entries = sorted(entries, key=lambda e: e[0])
+        self.valid_until = valid_until
+
+    def resolve(self, t):
+        """(ant, bs, 切替が起きたか) を返す。"""
+        tgt_a, tgt_b = self.cur_ant, self.cur_bs
+        if self.entries and t <= self.valid_until:
+            for t_start, a, b in self.entries:
+                if t_start <= t:
+                    tgt_a, tgt_b = a, b
+                else:
+                    break
+        changed = (tgt_a != self.cur_ant) or (tgt_b != self.cur_bs)
+        self.cur_ant, self.cur_bs = tgt_a, tgt_b
+        return tgt_a, tgt_b, changed
+
+
 POLICIES = {'assoc_hold': policy_assoc_hold}
 
 
@@ -253,6 +341,19 @@ def grant_simple(veh, i):
     return veh.ants[i].assigned_bs >= 0
 
 
+def load_poses(path):
+    """poses.csv を {model: (times, xyz)} に整える (スケジューラの位置入力)。"""
+    d = pd.read_csv(path)
+    d['t_s'] = d['t_s'].round(6)
+    out = {}
+    for name, g in d.groupby('model'):
+        g = g.sort_values('t_s')
+        out[name] = (g['t_s'].to_numpy(),
+                     g[['x', 'y', 'z']].to_numpy(),
+                     {round(float(t), 6): i for i, t in enumerate(g['t_s'])})
+    return out
+
+
 def load_pairs(pairs_dir, cfg):
     """<vehicle>_pairs.csv を (時刻 × アンテナ × BS) の密行列に整える。"""
     out = {}
@@ -279,7 +380,10 @@ def main():
     ap = argparse.ArgumentParser(
         description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument('rec_dir', help='記録ディレクトリ (pairs/ と config/ を含む)')
-    ap.add_argument('--arm', default='assoc_hold', choices=sorted(POLICIES))
+    ap.add_argument('--arm', default='assoc_hold',
+                    choices=sorted(list(POLICIES) + ['kkf']))
+    ap.add_argument('--state-dir', default=None,
+                    help='学習済み REM のディレクトリ (kkf 用、省略で cold)')
     ap.add_argument('--out', required=True, help='出力ディレクトリ')
     ap.add_argument('--config', default=None, help='実効 sim_params (省略時は rec_dir から探す)')
     a = ap.parse_args()
@@ -312,15 +416,79 @@ def main():
     # 手法によらず共通なので比較の公平性は保たれる)
     order = sorted(vehicles)
     occ = BsOccupancy()
-    policy = POLICIES[a.arm]
 
-    for t in grid:
-        for name in order:
-            v = vehicles[name]
-            k = v.row(t)
-            if k is None:
-                continue          # その時刻には未スポーン/退場済み
-            step_vehicle(v, k, float(t), dt, occ, cfg, policy, grant_simple)
+    if a.arm == 'kkf':
+        poses_path = os.path.join(a.rec_dir, 'poses.csv')
+        if not os.path.exists(poses_path):
+            sys.exit(f"KKF には姿勢が要ります: {poses_path}")
+        poses = load_poses(poses_path)
+        sched, _ksn = make_kkf_scheduler(cfg_path, state_dir=a.state_dir)
+        ext = {n: ExternalSchedule() for n in order}
+        report_period = float(params.get('comms_simulator_node', {})
+                              .get('ros__parameters', {})
+                              .get('measurement_report', {})
+                              .get('period_s', 0.05))
+        replan_period = float(sched.cfg.replan_period_s)
+        next_report_t, next_plan_t = 0.0, 0.0
+
+        def grant_kkf(veh, i):
+            # 単一ペアネット: 計画された (アンテナ, BS) のみ grant
+            return i == veh.active_ant and veh.ants[i].assigned_bs >= 0
+
+        for t in grid:
+            tf = float(t)
+            # 1. 観測 (規格忠実: grant 中のペアのみ。学習相と違い全ペアではない)
+            if tf + 1e-9 >= next_report_t:
+                next_report_t = (math.floor(tf / report_period) + 1.0) * report_period
+                for name in order:
+                    v = vehicles[name]
+                    k = v.row(tf)
+                    if k is None or name not in poses:
+                        continue
+                    pt, pxyz, pidx = poses[name]
+                    j = pidx.get(round(tf, 6))
+                    if j is None:
+                        continue
+                    ent = []
+                    for i, ant in enumerate(v.ants):
+                        b = ant.assigned_bs
+                        if b >= 0:
+                            ent.append((i, b, float(v.rssi[k, i, b])))
+                    sched._process_report(Report(tf, name, pxyz[j], ent))
+            # 2. 再計画 (実行時と同じ周期・同じロジック)
+            if tf + 1e-9 >= next_plan_t:
+                next_plan_t = (math.floor(tf / replan_period) + 1.0) * replan_period
+                sched._replan(tf)
+                byveh = {}
+                for t_start, ant, bs, vid in sched.pub.entries:
+                    byveh.setdefault(vid, []).append((t_start, ant, bs))
+                for name in order:
+                    if name in byveh:
+                        ext[name].set_plan(byveh[name], tf + 1.0)
+            # 3. 計画の適用とデータ会計
+            for name in order:
+                v = vehicles[name]
+                k = v.row(tf)
+                if k is None:
+                    continue
+                ta, tb, changed = ext[name].resolve(tf)
+                for i, ant in enumerate(v.ants):
+                    ant.assigned_bs = tb if (i == ta and tb is not None and tb >= 0) else -1
+                v.active_ant = ta if 0 <= ta < v.n_ant else -1
+                if changed:      # ペア変更はペアネット再確立を課す
+                    for ant in v.ants:
+                        ant.link_state = 'DISCONNECTED'
+                        ant.est_steps = 0
+                step_vehicle(v, k, tf, dt, occ, cfg, lambda *_: None, grant_kkf)
+    else:
+        policy = POLICIES[a.arm]
+        for t in grid:
+            for name in order:
+                v = vehicles[name]
+                k = v.row(t)
+                if k is None:
+                    continue      # その時刻には未スポーン/退場済み
+                step_vehicle(v, k, float(t), dt, occ, cfg, policy, grant_simple)
 
     os.makedirs(a.out, exist_ok=True)
     rows = []

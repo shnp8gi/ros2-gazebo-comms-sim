@@ -368,6 +368,19 @@ def launch_setup(context, *args, **kwargs):
                     raise ValueError('ワールドSDFに </world> がありません')
                 world_content = (world_content[:idx] + recorder_xml
                                  + world_content[idx:])
+                # 再生を自己完結させるため、実効設定 (交通生成後の車両定義を
+                # 含む) を記録の隣に残す。スケジューラはアンテナ配置と道路形状を
+                # 要るので、これが無いと事後再計算ができない
+                try:
+                    cfg_copy = os.path.join(
+                        os.path.dirname(os.path.abspath(record_poses_path)),
+                        'effective_sim_params.yaml')
+                    with open(cfg_copy, 'w', encoding='utf-8') as cf:
+                        yaml.safe_dump(config, cf, sort_keys=False,
+                                       allow_unicode=True)
+                    print(f"[sim_launch] Effective config saved -> {cfg_copy}")
+                except Exception as e:
+                    print(f"[sim_launch] Warning: effective config dump failed: {e}")
                 print(f"[sim_launch] Pose recording enabled -> {record_poses_path}")
 
             # Save to temp file

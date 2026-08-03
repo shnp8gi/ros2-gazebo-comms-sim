@@ -1,0 +1,42 @@
+sweep:
+  name: rec_run
+  description: RSU2基・競合条件。アブレーション5種 x N=10
+  scenario: config/scenarios/road_urban_2lane.yaml
+  variables:
+  - name: method
+    cases:
+      kkf_conv:
+        config:
+          link_controller_node.ros__parameters.control_plane: kkf_mpc
+          link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+          link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+          link_controller_node.ros__parameters.kkf_lockstep: false
+          comms_simulator_node.ros__parameters.record_pairs_dir: /workspace/sim_results/rec1/pairs
+  - name: load
+    cases:
+      moderate:
+        scenario:
+          simulation_overrides.record_poses_path: /workspace/sim_results/rec1/poses.csv
+          simulation_overrides.record_poses_period_s: 0.005
+  analysis:
+    group_by:
+    - method
+    - load
+    arm_var: method
+    baseline: kkf_conv
+    metrics:
+    - total_data_MB
+    - connected_time_s
+    - jain_index
+    - nlos_grant_pct
+    - path_mean_MB
+    - path_min_MB
+    - path_zero_pct
+    - n_paths
+  execution:
+    num_runs: 1
+    base_seed: 12345
+    task_timeout_sec: 1800
+    real_time_factor: 2.0
+    max_concurrency: 1
+    output_name: rec_run

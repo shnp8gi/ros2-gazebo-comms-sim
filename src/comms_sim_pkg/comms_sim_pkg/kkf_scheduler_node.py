@@ -824,6 +824,17 @@ class MpcScheduler:
         self.report_count = 0
         self.last_t = -1.0
 
+        self._setup_transport()
+
+    def _setup_transport(self):
+        """gz-transport の入出力を用意する。
+
+        事後再計算 (tools/replay_sim.py) は計画ロジックだけを再利用し、入出力は
+        同期呼び出しに差し替える。差し替え点をここに閉じておくことで、計画側
+        (クリギング・LCB・割当) には一切手を触れずに済む。実行時の経路は
+        中身が同じなので挙動は変わらない。
+        """
+        cfg = self.cfg
         self.node = Node()
         self.pub = self.node.advertise(cfg.schedule_topic, msgs.HoSchedule)
         ok = self.node.subscribe(msgs.MeasurementReport, cfg.report_topic, self.on_report)
