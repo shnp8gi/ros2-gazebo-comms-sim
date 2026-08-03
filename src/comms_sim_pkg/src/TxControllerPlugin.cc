@@ -560,6 +560,19 @@ namespace tx_controller
                 this->report_pub = this->node.Advertise<comms_sim::msgs::MeasurementReport>(this->report_topic);
             }
 
+            // 全ペア RSSI の記録 (通信計算を事後に回すため)。
+            // 評価されるリンクの集合と順序は幾何だけで決まり、割当の判断には
+            // 依存しない。したがって RSSI は一度記録すれば手法をまたいで
+            // 使い回せる。フェージングは状態を持つ RNG なので Python で
+            // 再現するのは非現実的だが、記録してしまえば再現の必要がない
+            if (comms_params && comms_params["record_pairs_dir"]) {
+                const std::string dir = comms_params["record_pairs_dir"].as<std::string>("");
+                if (!dir.empty()) {
+                    std::filesystem::create_directories(dir);
+                    this->pairs_path = dir + "/" + this->model.Name(_ecm) + "_pairs.csv";
+                }
+            }
+
             // 制御プレーンとのシム時刻同期 (lockstep)。実時間非依存にする
             if (link_ctrl_params && link_ctrl_params["kkf_lockstep"]) {
                 this->lockstep = link_ctrl_params["kkf_lockstep"].as<bool>(false);
@@ -853,13 +866,21 @@ namespace tx_controller
             // 通信計算の間引き (comms_update_period_s > 0)。実効 dt = 前回comms
             // 更新からの経過sim時間とし、データ会計 (throughput·dt) とリンク確立
             // (T_est/dt ステップ) の総量が物理ステップ毎と一致するようにする。
+            //
+            // 判定はグローバルなグリッド (k·周期) で行う。前回時刻からの経過で
+            // 判定すると、各車の初回更新時刻が起点になって位相が車ごと・走行ごと
+            // にずれる。実測で、同一シードの2走行で車両の通信更新時刻が 1-3ms
+            // ずれ、時刻を鍵にした突き合わせが全く成立しなかった。
+            // 全車が同一グリッドに乗れば、記録した RSSI を手法をまたいで
+            // 再利用できる
             if (this->comms_update_period_s > 0.0) {
+                const double period = this->comms_update_period_s;
+                const double grid_idx = std::floor(current_time_s / period + 1e-9);
+                if (grid_idx <= this->last_comms_grid_idx) return;
                 if (this->last_comms_time_s >= 0.0) {
-                    double elapsed = current_time_s - this->last_comms_time_s;
-                    // 1e-9 の許容で「ちょうど周期」を取りこぼさない
-                    if (elapsed < this->comms_update_period_s - 1e-9) return;
-                    dt = elapsed;
+                    dt = current_time_s - this->last_comms_time_s;
                 }
+                this->last_comms_grid_idx = grid_idx;
                 this->last_comms_time_s = current_time_s;
             }
 
@@ -893,9 +914,16 @@ namespace tx_controller
                         break;
                     }
                 }
+                // 記録モードでは grant を見ない。grant 保持の有無で評価する
+                // ステップ数が変わると、フェージング (状態を持つ共有 RNG) の
+                // 消費もずれ、RSSI そのものが手法によって変わってしまう
+                // (実測: 同一シードの2手法で最大 20 dB 差、9万行が片側のみ)。
+                // 記録は「幾何だけで決まる正準なチャネル実現」を作るのが目的
                 bool holds_grant = false;
-                for (const auto& ant : this->vehicle_antennas) {
-                    if (ant.assigned_bs_idx >= 0) { holds_grant = true; break; }
+                if (this->pairs_path.empty()) {
+                    for (const auto& ant : this->vehicle_antennas) {
+                        if (ant.assigned_bs_idx >= 0) { holds_grant = true; break; }
+                    }
                 }
                 if (!any_in_range && !holds_grant) return;
             }
@@ -909,6 +937,8 @@ namespace tx_controller
                 this->vehicle_antennas, this->base_stations, pos, vehicle_rotmat,
                 current_time_s, &this->blockage_env.Obstacles(),
                 this->link_eval_radius_m);
+
+            this->RecordPairs(current_time_s, all_ant_bs_metrics);
 
             // 3. Scheduling Policy
             auto sched_res = this->scheduler.UpdateLinks(
@@ -1296,6 +1326,27 @@ namespace tx_controller
             }
         }
 
+        /// \brief 全 (アンテナ, BS) ペアの RSSI を逐次書き出す。
+        /// 1走行で数百万行になるためメモリには溜めない。
+        void RecordPairs(double t,
+                         const std::vector<std::vector<AntennaMetrics>>& metrics) {
+            if (this->pairs_path.empty()) return;
+            if (!this->pairs_ofs.is_open()) {
+                this->pairs_ofs.open(this->pairs_path);
+                if (!this->pairs_ofs) { this->pairs_path.clear(); return; }
+                this->pairs_ofs << "t_s,ant,bs,rssi_dBm,los\n";
+                this->pairs_ofs << std::fixed << std::setprecision(4);
+            }
+            for (size_t i = 0; i < metrics.size(); ++i) {
+                for (size_t b = 0; b < metrics[i].size(); ++b) {
+                    const auto& m = metrics[i][b];
+                    this->pairs_ofs << t << ',' << i << ',' << b << ','
+                                    << m.best_rssi << ',' << (m.is_los ? 1 : 0)
+                                    << '\n';
+                }
+            }
+        }
+
         void SetVelocity(gz::sim::EntityComponentManager &_ecm, double v, double w) {
             auto linComp = _ecm.Component<gz::sim::components::LinearVelocityCmd>(this->model.Entity());
             if (!linComp) {
@@ -1375,6 +1426,7 @@ namespace tx_controller
         std::mutex logs_mutex;
         BlockageEnvironment blockage_env;
 
+        double last_comms_grid_idx = -1.0;   // 全車共通のグリッド番号
         // 通信計算の間引き (0 = 物理ステップ毎)。last_comms_time_s は実効dt算出用
         double comms_update_period_s = 0.0;
         double link_eval_radius_m = 0.0;
@@ -1393,6 +1445,10 @@ namespace tx_controller
 
         // 外部スケジュール実行戦略 (scheduling_policy == "external_schedule" 時のみ)
         std::shared_ptr<ExternalScheduleStrategy> external_strategy;
+
+        // 全ペア RSSI の逐次記録
+        std::string pairs_path;
+        std::ofstream pairs_ofs;
 
         // 制御プレーンとのシム時刻同期 (lockstep)
         bool lockstep = false;

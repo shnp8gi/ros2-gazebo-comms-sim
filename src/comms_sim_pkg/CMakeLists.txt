@@ -94,6 +94,23 @@ target_link_libraries(WaypointMoverPlugin
 )
 set_target_properties(WaypointMoverPlugin PROPERTIES PREFIX "")
 
+# 姿勢レコーダ (軌跡を記録し、通信計算を事後に回すため)
+add_library(PoseRecorderPlugin SHARED
+  src/PoseRecorderPlugin.cc
+)
+target_include_directories(PoseRecorderPlugin PRIVATE
+  ${CMAKE_CURRENT_SOURCE_DIR}/include
+  ${EIGEN3_INCLUDE_DIR}
+)
+target_link_libraries(PoseRecorderPlugin
+  gz-sim8::gz-sim8
+  gz-plugin2::gz-plugin2
+  gz-transport13::gz-transport13
+  gz-msgs10::gz-msgs10
+  gz-math7::gz-math7
+)
+set_target_properties(PoseRecorderPlugin PROPERTIES PREFIX "")
+
 # KKF C++リファレンスのゴールデンダンプ (Python kkf_core との数値一致検証用)
 add_executable(kkf_golden_dump src/kkf_golden_dump.cc)
 target_include_directories(kkf_golden_dump PRIVATE
@@ -104,7 +121,7 @@ install(TARGETS kkf_golden_dump
   DESTINATION lib/${PROJECT_NAME}
 )
 
-install(TARGETS TxControllerPlugin WaypointMoverPlugin
+install(TARGETS TxControllerPlugin WaypointMoverPlugin PoseRecorderPlugin
   DESTINATION lib/${PROJECT_NAME}/plugins
 )
 

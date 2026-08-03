@@ -334,18 +334,41 @@ def launch_setup(context, *args, **kwargs):
 
     # Dynamic replacement of physics_max_step_size from sim_params.yaml
     physics_max_step_size = sim_config.get('physics_max_step_size', None)
-    if physics_max_step_size is not None:
+    # 姿勢記録: 通信計算は運動に影響しないので、軌跡を残しておけば通信と
+    # スケジューリングは後から単一プロセスで再計算できる (手法ごとに Gazebo を
+    # 回す必要がなくなり、非同期由来の非決定性も消える)
+    record_poses_path = str(sim_config.get('record_poses_path', '') or '')
+    record_poses_period = float(sim_config.get('record_poses_period_s', 0.005))
+    if physics_max_step_size is not None or record_poses_path:
         try:
-            physics_max_step_size_val = float(physics_max_step_size)
             with open(world_file, 'r', encoding='utf-8') as f:
                 world_content = f.read()
 
-            # Replace max_step_size
-            world_content = re.sub(
-                r'<max_step_size>\s*[0-9.eE+-]+\s*</max_step_size>',
-                f'<max_step_size>{physics_max_step_size_val}</max_step_size>',
-                world_content
-            )
+            if physics_max_step_size is not None:
+                physics_max_step_size_val = float(physics_max_step_size)
+                world_content = re.sub(
+                    r'<max_step_size>\s*[0-9.eE+-]+\s*</max_step_size>',
+                    f'<max_step_size>{physics_max_step_size_val}</max_step_size>',
+                    world_content
+                )
+
+            if record_poses_path:
+                os.makedirs(os.path.dirname(os.path.abspath(record_poses_path)),
+                            exist_ok=True)
+                recorder_xml = (
+                    '<plugin filename="PoseRecorderPlugin.so" '
+                    'name="comms_sim::PoseRecorderPlugin">'
+                    f'<output_path>{record_poses_path}</output_path>'
+                    f'<period_s>{record_poses_period}</period_s>'
+                    '</plugin>\n'
+                )
+                # </world> の直前に差し込む (ワールド直下のシステムとして動く)
+                idx = world_content.rfind('</world>')
+                if idx < 0:
+                    raise ValueError('ワールドSDFに </world> がありません')
+                world_content = (world_content[:idx] + recorder_xml
+                                 + world_content[idx:])
+                print(f"[sim_launch] Pose recording enabled -> {record_poses_path}")
 
             # Save to temp file
             tmp_dir = os.path.join(tempfile.gettempdir(), 'comms_sim_worlds')
@@ -356,7 +379,8 @@ def launch_setup(context, *args, **kwargs):
             with open(tmp_world_path, 'w', encoding='utf-8') as f:
                 f.write(world_content)
 
-            print(f"[sim_launch] Dynamic world generation: max_step_size set to {physics_max_step_size_val} s")
+            if physics_max_step_size is not None:
+                print(f"[sim_launch] Dynamic world generation: max_step_size set to {physics_max_step_size_val} s")
             world_file = tmp_world_path
         except Exception as e:
             print(f"[sim_launch] Warning: failed to dynamically update world max_step_size: {e}")
