@@ -83,19 +83,17 @@ scenario:
       sdf_path: models://antenna
       description: 沿道RSUアンテナ (歩道外側端のポール)
       default_antenna_offset: [0.0, 0.0, 2.5]
+    # 走行する車両には遮蔽属性を与えない。移動体による遮蔽は走行のたびに配置が
+    # 変わるため環境の性質ではなく、位置を鍵にした地図では捉えられない。
+    # (車高 1.5m は RSU 2.5m と車載 1.35m を結ぶ視線 (最低 1.58m) の下を通るため
+    #  元々ほとんど遮っていなかったが、幾何に依存する偶然なので明示的に外す)
     Car:
       sdf_path: models://GhostBox
-      description: 配信対象の乗用車 (車高1.5m)
+      description: 配信対象の乗用車 (車高1.5m)。遮蔽体としては扱わない
       default_antenna_offset: [0.0, 0.0, 1.35]
-      blockage:
-        size: [4.5, 1.8, 1.5]
-        loss_db: 8.0
     SedanBlocker:
       sdf_path: models://GhostBox
-      description: 乗用車 (車高1.5m、視線下=遮蔽せず)
-      blockage:
-        size: [4.5, 1.8, 1.5]
-        loss_db: 8.0
+      description: 走行する乗用車 (車高1.5m)。遮蔽体としては扱わない
     MinivanBlocker:
       sdf_path: models://GhostBox
       description: ミニバン・SUV (車高1.9m、視線を遮る境界クラス)
@@ -114,6 +112,18 @@ scenario:
       blockage:
         size: [11.0, 2.5, 3.2]
         loss_db: 22.0
+    ParkedVan:
+      sdf_path: models://GhostBox
+      description: 路上駐車のバン (車高2.1m)。位置が固定された遮蔽体
+      blockage:
+        size: [5.2, 2.0, 2.1]
+        loss_db: 14.0
+    ParkedTruck:
+      sdf_path: models://GhostBox
+      description: 路上駐車のトラック (車高3.2m)。位置が固定された遮蔽体
+      blockage:
+        size: [7.5, 2.4, 3.2]
+        loss_db: 22.0
   traffic:
     seed: 0
     window_s: [0.0, 60.0]
@@ -123,7 +133,7 @@ scenario:
     corridor: [-45.0, 45.0]
     margin_m: 30.0
     max_vehicles: 400
-    target_ratio: 0.3
+    target_ratio: 1.0    # 全車が通信対象 (遮蔽専用の一般車を出さない)
     target_template:
       model: Car
       antenna_offset: [0.0, 0.0, 1.35]
@@ -136,11 +146,12 @@ scenario:
         offset: [0.0, 0.0, 1.35]
         relative_yaw_by_direction: {'1': 2.792527, '-1': -2.792527}
     tx_entry_jitter_s: 0.0
+    # 移動体による遮蔽は行わない。走行のたびに配置が変わる遮蔽は環境の性質では
+    # なく、位置を鍵にした地図では捉えられないため (実測: 学習した平均場を持つ
+    # 構成が、走行内観測のみの構成に有意に劣った)。
+    # 遮蔽は entities に置いた固定物 (路上駐車) が担う
     vehicle_mix:
-    - {model: SedanBlocker, ratio: 0.8, can_be_target: true}
-    - {model: MinivanBlocker, ratio: 0.0, can_be_target: true}
-    - {model: TruckBlocker, ratio: 0.15, can_be_target: false}
-    - {model: BusBlocker, ratio: 0.05, can_be_target: false}
+    - {model: SedanBlocker, ratio: 1.0, can_be_target: true}
     lanes:
     - y: 1.75
       direction: 1
@@ -169,3 +180,17 @@ scenario:
     - name: rsu_1
       offset: [0.0, 0.0, 2.5]
       relative_rpy: [0.0, 0.0, 0.0]
+  # --- 固定遮蔽 (路上駐車) ---
+  # RSU (y=+6.0, z=2.5) から下り車線 (y=-1.75) への視線は、駐車帯 (y=+4.0) を
+  # x=-14〜+14 の範囲で横切る。ここに置くことで下り車線の特定区間に NLOS を作る。
+  # 位置が固定されているため走行によらず同じ場所で遮蔽が起き、位置を鍵にした
+  # 地図が学習できる対象になる (移動体遮蔽は走行ごとに変わるため学習できない)。
+  # 左右非対称に配置し、RSU 0 側と RSU 1 側で遮蔽の様子を変えている
+  - {name: park_0, model: ParkedTruck, role: blockage, static: true,
+     pose: [-11.0, 4.0, 0.0, 0.0, 0.0, 0.0]}
+  - {name: park_1, model: ParkedVan,   role: blockage, static: true,
+     pose: [-2.5, 4.0, 0.0, 0.0, 0.0, 0.0]}
+  - {name: park_2, model: ParkedVan,   role: blockage, static: true,
+     pose: [6.5, 4.0, 0.0, 0.0, 0.0, 0.0]}
+  - {name: park_3, model: ParkedTruck, role: blockage, static: true,
+     pose: [12.5, 4.0, 0.0, 0.0, 0.0, 0.0]}
