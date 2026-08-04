@@ -888,6 +888,9 @@ def launch_setup(context, *args, **kwargs):
                     output='screen',
                     parameters=[{
                         'expected_nodes': expected_ready_nodes,
+                        # Ready を1台でも取りこぼすと開始できないため上限を置く
+                        'ready_timeout_s': float(
+                            sim_config.get('ready_timeout_s', 60.0)),
                         'use_sim_time': False
                     }]
                 )
