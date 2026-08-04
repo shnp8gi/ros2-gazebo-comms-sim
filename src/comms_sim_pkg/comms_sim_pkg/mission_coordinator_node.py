@@ -26,6 +26,13 @@ class MissionCoordinatorNode(Node):
         # 車両があると走行が終わらない (実測: 交通生成を使う構成で 20 走行中 9 走行が
         # 停止せず、シム時刻 3245 秒まで走り続けた)。
         # 実時間ではなくシム時刻で判定するため、計算機の速度によらず同じ地点で止まる
+        # 完了報告が途絶えてからの猶予 [シム秒]。0 = 無効
+        self.declare_parameter('idle_stop_s', 10.0)
+        self.idle_stop_s = float(
+            self.get_parameter('idle_stop_s').get_parameter_value().double_value)
+        self._last_report_t = -1.0
+        self._sim_t = 0.0
+
         self.declare_parameter('max_sim_time_s', 0.0)
         self.max_sim_time_s = float(
             self.get_parameter('max_sim_time_s').get_parameter_value().double_value)
@@ -55,6 +62,20 @@ class MissionCoordinatorNode(Node):
 
     def clock_callback(self, msg: Clock):
         t = msg.clock.sec + msg.clock.nanosec * 1e-9
+        self._sim_t = t
+        # 完了報告も plugin → gz-transport → bridge → ROS の多段経路を通るため
+        # 取りこぼしうる。実測では、全車が終点に到達しているのに報告が揃わず
+        # 上限まで空回りした走行が多数あった。報告が一定時間途絶えたら、
+        # 走行は実質終わっているとみなして打ち切る (データは既に揃っている)
+        if (self._last_report_t > 0.0 and self.idle_stop_s > 0.0
+                and t - self._last_report_t >= self.idle_stop_s
+                and any(self.completion_status.values())):
+            done = sum(1 for v in self.completion_status.values() if v)
+            self.get_logger().warn(
+                f"完了報告が {self.idle_stop_s}s 途絶えました "
+                f"({done}/{len(self.vehicles)} 受信)。走行を終了します")
+            self._shutdown_after_flush()
+            return
         if t >= self.max_sim_time_s:
             done = sum(1 for v in self.completion_status.values() if v)
             self.get_logger().warn(
@@ -84,6 +105,7 @@ class MissionCoordinatorNode(Node):
     def mission_complete_callback(self, msg: Bool, vehicle_name: str):
         if msg.data and not self.completion_status[vehicle_name]:
             self.completion_status[vehicle_name] = True
+            self._last_report_t = self._sim_t
             self.get_logger().info(f"Vehicle '{vehicle_name}' has completed its mission.")
             
             if all(self.completion_status.values()):
