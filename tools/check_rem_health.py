@@ -52,6 +52,15 @@ def main():
                     help='この観測重み未満を「未観測」とみなす')
     ap.add_argument('--max-phantom-pct', type=float, default=2.0,
                     help='許容する幻リンク率 [%%]。超えたら終了コード 1')
+    ap.add_argument('--rsu-x', type=float, nargs='*', default=None,
+                    help='RSU の world x [m]。指定すると、RSU から遠く離れて '
+                         'そもそもリンクが成立しない位置の幻リンクを数えない '
+                         '(基底の裾が観測域外へ伸びるのは避けられないが、'
+                         '選ばれない位置であれば実害が無いため)')
+    ap.add_argument('--rsu-reach-m', type=float, default=60.0,
+                    help='RSU からこの距離までを判定対象とする')
+    ap.add_argument('--x-offset', type=float, default=-105.0,
+                    help='弧長 0 に対応する world x [m]')
     a = ap.parse_args()
 
     files = sorted(glob.glob(os.path.join(a.state_dir, 'bs*.npz')))
@@ -79,8 +88,17 @@ def main():
         lcb = mu - a.kappa * np.sqrt(np.maximum(var_kf + var_nu, 0.0))
 
         unobs = Wi < a.w_min
+        # RSU から遠すぎてリンクが成立しない位置は判定から外す。
+        # 基底関数の裾が観測域の外へ伸びるのは避けられないが、そこが
+        # 「選ばれうる位置」でなければ実害が無い
+        in_reach = np.ones_like(s, dtype=bool)
+        if a.rsu_x:
+            x_world = s + a.x_offset
+            dist = np.min(np.abs(x_world[:, None] - np.array(a.rsu_x)[None, :]),
+                          axis=1)
+            in_reach = dist <= a.rsu_reach_m
         # 幻リンク = 観測が無いのに「繋がる」と判定される位置 (道路全体に対する率)
-        phantom = float((unobs & (lcb > a.threshold)).mean() * 100.0)
+        phantom = float((unobs & in_reach & (lcb > a.threshold)).mean() * 100.0)
         worst = max(worst, phantom)
         key = os.path.basename(f)[2:-4]
         med = float(np.median(lcb[unobs])) if unobs.any() else float('nan')
