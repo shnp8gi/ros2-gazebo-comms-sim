@@ -114,16 +114,21 @@ scenario:
         loss_db: 22.0
     ParkedVan:
       sdf_path: models://GhostBox
-      description: 路上駐車のバン (車高2.1m)。位置が固定された遮蔽体
+      description: 路上駐車のバン (車高2.4m)。RSU(2.5m)と車載(1.35m)を結ぶ視線が
+        駐車帯 (y=+4.0) を横切る高さは車両位置によらず 2.20m なので、
+        2.4m は視線をわずかに超えて浅く遮る
       blockage:
-        size: [5.2, 2.0, 2.1]
-        loss_db: 14.0
+        # ミリ波帯において車両による遮蔽損失は一般に 20〜40 dB とされる。
+        # 14 dB では余裕を食い切らずリンクが切れないため (実測: 接続可能な点の
+        # 52% が NLOS のままだった)、現実的な範囲に置く
+        size: [5.2, 2.0, 2.4]
+        loss_db: 22.0
     ParkedTruck:
       sdf_path: models://GhostBox
       description: 路上駐車のトラック (車高3.2m)。位置が固定された遮蔽体
       blockage:
         size: [7.5, 2.4, 3.2]
-        loss_db: 22.0
+        loss_db: 32.0
   traffic:
     seed: 0
     window_s: [0.0, 60.0]
@@ -181,16 +186,16 @@ scenario:
       offset: [0.0, 0.0, 2.5]
       relative_rpy: [0.0, 0.0, 0.0]
   # --- 固定遮蔽 (路上駐車) ---
-  # RSU (y=+6.0, z=2.5) から下り車線 (y=-1.75) への視線は、駐車帯 (y=+4.0) を
-  # x=-14〜+14 の範囲で横切る。ここに置くことで下り車線の特定区間に NLOS を作る。
-  # 位置が固定されているため走行によらず同じ場所で遮蔽が起き、位置を鍵にした
-  # 地図が学習できる対象になる (移動体遮蔽は走行ごとに変わるため学習できない)。
-  # 左右非対称に配置し、RSU 0 側と RSU 1 側で遮蔽の様子を変えている
-  - {name: park_0, model: ParkedTruck, role: blockage, static: true,
-     pose: [-11.0, 4.0, 0.0, 0.0, 0.0, 0.0]}
-  - {name: park_1, model: ParkedVan,   role: blockage, static: true,
-     pose: [-2.5, 4.0, 0.0, 0.0, 0.0, 0.0]}
-  - {name: park_2, model: ParkedVan,   role: blockage, static: true,
-     pose: [6.5, 4.0, 0.0, 0.0, 0.0, 0.0]}
-  - {name: park_3, model: ParkedTruck, role: blockage, static: true,
-     pose: [12.5, 4.0, 0.0, 0.0, 0.0, 0.0]}
+  # RSU (y=+6.0, z=2.5) から下り車線 (y=-1.75, z=1.35) への視線が駐車帯
+  # (y=+4.0) を横切る高さは、車両位置によらず 2.20m である
+  # (y と z が同じ媒介変数で線形補間されるため)。したがって車高 2.2m 以上の
+  # 車両のみが遮蔽体として機能する。
+  #
+  # 視線が駐車帯を横切る x の範囲は概ね -14〜+14 (幅 28m)。実際の路上駐車は
+  # 連続ではなく間欠的なので、この範囲の 3 割程度を占める配置とする。
+  # 左右非対称にして、RSU 0 側と RSU 1 側で遮蔽の様子を変えている
+  # (対称だとどちらの RSU を選んでも同じになり、割当の判断材料にならない)
+  - {name: park_0, model: ParkedTruck, role: blocker, static: true,
+     pose: [-9.0, 4.0, 0.0, 0.0, 0.0, 0.0]}
+  - {name: park_1, model: ParkedVan,   role: blocker, static: true,
+     pose: [7.0, 4.0, 0.0, 0.0, 0.0, 0.0]}

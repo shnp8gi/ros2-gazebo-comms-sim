@@ -146,9 +146,13 @@ def expand_traffic(scenario, seed=None):
     for m in mix:
         if m['model'] not in catalog:
             raise ValueError(f"traffic: model_catalog に {m['model']} が無い")
-        if 'blockage' not in catalog[m['model']]:
-            raise ValueError(f"traffic: {m['model']} に blockage 属性が無い "
-                             f"(遮蔽体として機能しない)")
+        # 遮蔽属性が要るのは「通信対象になりえない車両」だけ。そうした車両は
+        # 遮蔽体として存在する意味しかないため、属性が無ければ設定ミスである。
+        # 一方、通信対象になりうる車両は需要を作るために存在するので、
+        # 遮蔽属性が無くてもよい (固定遮蔽のみを使う構成ではこちらになる)
+        if not m.get('can_be_target', False) and 'blockage' not in catalog[m['model']]:
+            raise ValueError(f"traffic: {m['model']} は通信対象になりえないのに "
+                             f"blockage 属性が無い (存在する意味が無い)")
 
     # --- 対象車 (role: tx) の設定 ---
     target_ratio = float(traffic.get('target_ratio', 0.0))
