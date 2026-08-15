@@ -1,0 +1,78 @@
+# 都市部2車線 本評価 (仕様 docs/urban_2lane_scenario_spec.md)
+#
+# 前提: 学習相を先に回すこと
+#   python3 tools/sim.py learn --scenario config/scenarios/road_urban_2lane.yaml \
+#       --name urban_learn --runs 30 --snapshot-every 10
+#
+# arm と情報制約 (ここに書いた設定が制約の実体):
+#   assoc_hold  802.15.3e 準拠の受動接続。最初に閾値を超えた空きRSUに繋ぎ、
+#               閾値以上の間は保持 (能動的HOなし)。閾値割れは T_recover 待って再アソシ
+#   geo_optimal 理論RSSI (距離+両端指向性) をオンライン計算し中央調停で大域最適。
+#               遮蔽・シャドウを知らない = 確率成分に盲目
+#   kkf_k0      方向別REM (学習済み) + 中央調停。先読みなし (K=1)
+#               → geo_optimal との差 = 確率成分を学習することの価値
+#   kkf_mpc     同上 + 先読み K=10 (1.0s)
+#               → kkf_k0 との差 = 先読みの価値
+#   oracle      全対の現在真値 + 中央調停 = 情報上界 (幾何最適・時間軸は貪欲)
+#
+# CRN: 全 arm・全負荷で base_seed 共通 → 同一 run_idx は同一の交通実現・
+# 測定雑音・固定シャドウ。学習相のシード域 (512345〜) とは重ねない。
+sweep:
+  name: "urban_2lane_eval"
+  description: "5 arm × 負荷2条件 (都市部2車線・傾斜70°・RSU間隔10m)"
+  scenario: "config/scenarios/road_urban_2lane.yaml"
+
+  variables:
+    - name: method
+      cases:
+        assoc_hold:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: assoc_hold
+            link_controller_node.ros__parameters.control_plane: none
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+        geo_optimal:
+          config:
+            link_controller_node.ros__parameters.scheduling_policy: geo_optimal
+            link_controller_node.ros__parameters.control_plane: none
+            comms_simulator_node.ros__parameters.measurement_report.enabled: false
+        kkf_k0:
+          config:
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 1
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+        kkf_mpc:
+          config:
+            link_controller_node.ros__parameters.control_plane: kkf_mpc
+            link_controller_node.ros__parameters.kkf_lookahead_stages: 10
+            link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_learn/rem_state
+        oracle:
+          config:
+            link_controller_node.ros__parameters.control_plane: oracle
+            comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: true
+            comms_simulator_node.ros__parameters.measurement_report.noise_std_db: 0.0
+
+    - name: load
+      cases:
+        under: {}     # シナリオ既定 (16.7 m/s, headway 5.0s, target 0.30)
+        matched:
+          scenario:
+            traffic.lanes[0].speed_mps: 11.1
+            traffic.lanes[1].speed_mps: 11.1
+            traffic.lanes[0].headway_s.mean: 3.0
+            traffic.lanes[1].headway_s.mean: 3.0
+            traffic.target_ratio: 0.50
+
+  analysis:
+    group_by: [method, load]
+    arm_var: method
+    baseline: kkf_mpc
+    metrics: [total_data_MB, connected_time_s, min_car_data_MB,
+              jain_index, nlos_grant_pct, ho_count]
+
+  execution:
+    num_runs: 20
+    base_seed: 12345      # 学習相 (512345〜) と重ねない
+    task_timeout_sec: 1800
+    real_time_factor: 2.0
+    max_concurrency: 4    # 閉ループを含むため厳守
+    output_name: "urban_2lane_eval_n20"

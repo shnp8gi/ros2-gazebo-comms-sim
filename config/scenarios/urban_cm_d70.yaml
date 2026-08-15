@@ -1,0 +1,410 @@
+# tools/make_choice_margin_variant.py により生成 — 手編集しないこと
+scenario:
+  name: urban_cm_d70
+  description: 選択余地の掃引用変種。RSU dual 配置 (ポール 4 本 x 上流/下流2面 = 論理 RSU 8 基)、ポール間隔 20.0 m、δ_rsu ±70.0° / δ_veh ±20.0°、接続閾値 -78.5 dBm (snr_min 16.5 dB、kkf_idle_lcb_db も同値に追従)。土台 config/scenarios/road_urban_2lane.yaml
+    から tools/make_choice_margin_variant.py で生成。選択余地率は tools/analyze_connection_windows.py で確認すること
+  base_config: src/comms_sim_pkg/config/sim_params.yaml
+  simulation_overrides:
+    headless: true
+    max_sim_time_s: 90.0
+    real_time_factor: 2.0
+    logging_level: 3
+    physics_max_step_size: 0.001
+  config_overrides:
+    link_controller_node:
+      ros__parameters:
+        scheduling_policy: external_schedule
+        control_plane: kkf_mpc
+        schedule_topic: /comms/ho_schedule
+        ff_max_pairs: 1
+        assoc_recover_timeout_s: 0.2
+        export_rssi_profile: true
+        kkf_use_prior: false
+        kkf_assigner: hungarian
+        kkf_switch_bonus_db: 3.0
+        kkf_replan_period_s: 0.05
+        kkf_lockstep: false
+        kkf_lookahead_stages: 1
+        kkf_lookahead_discount: 0.7
+        kkf_stale_report_s: 1.0
+        kkf_directions:
+        - -1
+        - 1
+        kkf_road_x_range:
+        - -105.0
+        - 105.0
+        kkf_rbf_s_min: 0.0
+        kkf_rbf_s_max: 210.0
+        kkf_horizon_s: 4.0
+        kkf_plan_dt_s: 0.1
+        kkf_kappa: 1.0
+        kkf_idle_lcb_db: -78.5
+        kkf_mean_prior_dbm: -110.0
+        kkf_basis: rbf
+        kkf_rbf_num_bases: 40
+        kkf_rbf_width_m: 0.0
+        kkf_sigma_nu_db: 4.0
+        kkf_corr_length_s_m: 20.0
+        kkf_corr_length_t_s: 5.0
+        kkf_varmap_enabled: true
+        kkf_varmap_grid_m: 2.0
+        kkf_varmap_prior_var_db2: 0.0
+        kkf_state_dir: ''
+        kkf_state_save: false
+        kkf_q_forget: 0.05
+        kkf_state_gamma: 0.997
+        kkf_tracker_enabled: false
+        tskf_process_noise_q: 25.0
+        tskf_prior_mean_dbm: -120.0
+        tskf_prior_var: 400.0
+    comms_simulator_node:
+      ros__parameters:
+        tx_power: -7.0
+        comms_update_period_s: 0.005
+        link_eval_radius_m: 100.0
+        rate_model:
+          type: shannon
+          bandwidth_hz: 100000000.0
+          noise_floor_dbm: -95.0
+          efficiency: 1.0
+          snr_min_db: 16.5
+          snr_cap_db: 50.0
+        channel:
+          seed: 42
+          blockage:
+            enabled: true
+            max_total_loss_db: 60.0
+          shadowing:
+            enabled: true
+            type: frozen
+            sigma_db: 4.0
+            corr_length_m: 6.0
+            environment_seed: 1
+            grid_m: 1.5
+            axis: x
+            u_min: -65.0
+            u_max: 65.0
+          fading:
+            enabled: false
+        measurement_report:
+          enabled: true
+          period_s: 0.05
+          noise_std_db: 2.0
+          observe_all_pairs: false
+          seed: 123
+  model_catalog:
+    antenna:
+      sdf_path: models://antenna
+      description: 沿道RSUアンテナ (歩道外側端のポール)
+      default_antenna_offset:
+      - 0.0
+      - 0.0
+      - 2.5
+    Car:
+      sdf_path: models://GhostBox
+      description: 配信対象の乗用車 (車高1.5m)。遮蔽体としては扱わない
+      default_antenna_offset:
+      - 0.0
+      - 0.0
+      - 1.35
+    SedanBlocker:
+      sdf_path: models://GhostBox
+      description: 走行する乗用車 (車高1.5m)。遮蔽体としては扱わない
+    MinivanBlocker:
+      sdf_path: models://GhostBox
+      description: ミニバン・SUV (車高1.9m、視線を遮る境界クラス)
+      blockage:
+        size:
+        - 4.8
+        - 1.8
+        - 1.9
+        loss_db: 12.0
+    TruckBlocker:
+      sdf_path: models://GhostBox
+      description: トラック (車高3.8m)
+      blockage:
+        size:
+        - 12.0
+        - 2.5
+        - 3.8
+        loss_db: 26.0
+    BusBlocker:
+      sdf_path: models://GhostBox
+      description: バス (車高3.2m)
+      blockage:
+        size:
+        - 11.0
+        - 2.5
+        - 3.2
+        loss_db: 22.0
+    ParkedVan:
+      sdf_path: models://GhostBox
+      description: 路上駐車のバン (車高2.4m)。RSU(2.5m)と車載(1.35m)を結ぶ視線が 駐車帯 (y=+4.0) を横切る高さは車両位置によらず 2.20m なので、 2.4m は視線をわずかに超えて浅く遮る
+      blockage:
+        size:
+        - 5.2
+        - 2.0
+        - 2.4
+        loss_db: 22.0
+    ParkedTruck:
+      sdf_path: models://GhostBox
+      description: 路上駐車のトラック (車高3.2m)。位置が固定された遮蔽体
+      blockage:
+        size:
+        - 7.5
+        - 2.4
+        - 3.2
+        loss_db: 32.0
+  traffic:
+    seed: 0
+    window_s:
+    - 0.0
+    - 60.0
+    warmup_s: 5.0
+    prefill: auto
+    interleave_arrivals: true
+    corridor:
+    - -45.0
+    - 45.0
+    margin_m: 30.0
+    max_vehicles: 400
+    target_ratio: 1.0
+    target_template:
+      model: Car
+      antenna_offset:
+      - 0.0
+      - 0.0
+      - 1.35
+      relative_yaw_by_direction:
+        1: 0.349066
+        -1: -0.349066
+      antennas:
+      - suffix: front
+        offset:
+        - 0.0
+        - 0.0
+        - 1.35
+        relative_yaw_by_direction:
+          1: 0.349066
+          -1: -0.349066
+      - suffix: rear
+        offset:
+        - 0.0
+        - 0.0
+        - 1.35
+        relative_yaw_by_direction:
+          1: 2.792527
+          -1: -2.792527
+    tx_entry_jitter_s: 0.0
+    vehicle_mix:
+    - model: SedanBlocker
+      ratio: 1.0
+      can_be_target: true
+    lanes:
+    - y: 1.75
+      direction: 1
+      speed_mps: 16.7
+      headway_s:
+        dist: lognormal
+        mean: 5.0
+        sigma: 0.6
+        min: 1.0
+    - y: -1.75
+      direction: -1
+      speed_mps: 16.7
+      headway_s:
+        dist: lognormal
+        mean: 5.0
+        sigma: 0.6
+        min: 1.0
+  entities:
+  - name: rsu_0
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - -30.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -2.792527
+    antennas:
+    - name: rsu_0
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: rsu_1
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - -30.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -0.349066
+    antennas:
+    - name: rsu_1
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: rsu_2
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - -10.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -2.792527
+    antennas:
+    - name: rsu_2
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: rsu_3
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - -10.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -0.349066
+    antennas:
+    - name: rsu_3
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: rsu_4
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - 10.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -2.792527
+    antennas:
+    - name: rsu_4
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: rsu_5
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - 10.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -0.349066
+    antennas:
+    - name: rsu_5
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: rsu_6
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - 30.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -2.792527
+    antennas:
+    - name: rsu_6
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: rsu_7
+    model: antenna
+    role: rx
+    static: true
+    pose:
+    - 30.0
+    - 6.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - -0.349066
+    antennas:
+    - name: rsu_7
+      offset:
+      - 0.0
+      - 0.0
+      - 2.5
+      relative_rpy:
+      - 0.0
+      - 0.0
+      - 0.0
+  - name: park_0
+    model: ParkedTruck
+    role: blocker
+    static: true
+    pose:
+    - -9.0
+    - 4.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
+  - name: park_1
+    model: ParkedVan
+    role: blocker
+    static: true
+    pose:
+    - 7.0
+    - 4.0
+    - 0.0
+    - 0.0
+    - 0.0
+    - 0.0
