@@ -1,0 +1,18 @@
+sweep:
+  name: urban_cm_d70_reg_learn_run30
+  scenario: config/scenarios/urban_cm_d70_reg.yaml
+  variables:
+  - name: method
+    cases:
+      kkf_learn:
+        config:
+          link_controller_node.ros__parameters.control_plane: kkf_mpc
+          link_controller_node.ros__parameters.kkf_state_dir: /workspace/sim_results/urban_cm_d70_reg_learn/rem_state
+          link_controller_node.ros__parameters.kkf_state_save: true
+          comms_simulator_node.ros__parameters.measurement_report.observe_all_pairs: true
+  execution:
+    output_name: urban_cm_d70_reg_learn/runs/run_30
+    num_runs: 1
+    base_seed: 541345
+    task_timeout_sec: 900
+    max_concurrency: 1

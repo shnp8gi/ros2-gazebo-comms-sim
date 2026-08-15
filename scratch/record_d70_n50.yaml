@@ -1,0 +1,44 @@
+# 配置 d70 の記録 (N=50): dual 配置 (ポール4本 x 上流/下流2面 = 論理RSU 8基)・
+# ポール間隔 20m・δ_rsu 70°・接続閾値 -78.5dBm。実測の選択余地率は 0.180。
+# 交通条件は rec_cm_d70 (N=20) と同一にして、同じ学習済み地図で比較できるようにする。
+sweep:
+  name: rec_d70_n50
+  scenario: config/scenarios/urban_cm_d70.yaml
+  variables:
+  - name: method
+    cases:
+      record:
+        config:
+          link_controller_node.ros__parameters.scheduling_policy: assoc_hold
+          link_controller_node.ros__parameters.control_plane: none
+          comms_simulator_node.ros__parameters.measurement_report.enabled: false
+          comms_simulator_node.ros__parameters.record_pairs_dir: /workspace/sim_results/rec_d70_n50/seed_{seed}/pairs
+  - name: load
+    cases:
+      contended:
+        scenario:
+          traffic.lanes[0].speed_mps: 7.0
+          traffic.lanes[1].speed_mps: 7.0
+          traffic.lanes[0].headway_s.mean: 2.0
+          traffic.lanes[1].headway_s.mean: 2.0
+          traffic.target_ratio: 0.8
+          traffic.window_s:
+          - 0.0
+          - 35.0
+          simulation_overrides.record_poses_path: /workspace/sim_results/rec_d70_n50/seed_{seed}/poses.csv
+          simulation_overrides.record_poses_period_s: 0.005
+  analysis:
+    group_by:
+    - method
+    - load
+    arm_var: method
+    baseline: record
+    metrics:
+    - total_data_MB
+  execution:
+    num_runs: 50
+    base_seed: 12345
+    task_timeout_sec: 5400
+    real_time_factor: 2.0
+    max_concurrency: 8
+    output_name: rec_d70_n50/sweep
