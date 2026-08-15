@@ -388,8 +388,8 @@ table(['項目', '設定'],
                     '伝搬そのものには影響せず，道路に沿った標本の分布のみが変わる'],
        ['評価', f'記録 {N_REC} 走行のうち {N} 走行（base_seed 12345，シード刻み 1000）。'
                 '対比較 Wilcoxon 符号順位検定，信頼区間は対差の t 区間'],
-       ['再現', 'commit 755fe3d + 未コミットの作業差分'
-                '（差分は sim_results/rec_d70_n50/sweep/config/workspace.patch に保存）。'
+       ['再現', 'コードと設定は feat/urban-2lane の 789996b / ef7b8b7。'
+                '記録時の作業差分は sim_results/rec_d70_n50/sweep/config/workspace.patch。'
                 '実行環境と手順は付録 D']],
       widths=[2.6, 14.4], right_from=99)
 body_p('持続シャドウイングの場と路上駐車の位置は，学習相と評価相で同一である。'
@@ -708,15 +708,16 @@ h1('付録 D：再現手順')
 body_p('本評価は Docker コンテナ内で，/workspace を作業ディレクトリとして実行した'
        '（イメージ ros2-gazebo-comms-sim:humble-harmonic，ROS 2 Humble，'
        'Gazebo Sim 8.11.0，Python 3.10.12）。以下はすべてコンテナ内で実行する。')
-note('① コードを揃える： 755fe3d を checkout し，'
-     'sim_results/rec_d70_n50/sweep/config/workspace.patch を適用する。'
-     'この差分に含まれるのは追跡下の 5 ファイル'
-     '（TxControllerPlugin.cc，sim_launch.py，replay_sim.py，replay_sweep.py，test_yaml.cpp）'
-     'であり，いずれも挙動に影響する。'
-     'シナリオと sweep 設定と図表生成スクリプトは版管理下になく差分に含まれないため，'
-     '別途配布が必要である。前者 2 つは記録時のスナップショットが '
+note('① コードを揃える： feat/urban-2lane の 789996b を checkout する'
+     '（本評価に用いたシミュレータ・シナリオ・ツールを含む）。'
+     '記録と学習の sweep 設定，および図表の生成スクリプトは ef7b8b7 に含まれる。'
+     '記録した時点の作業差分は sim_results/rec_d70_n50/sweep/config/workspace.patch に'
+     '残してあり，これを 755fe3d に当てた状態と 789996b とで，'
+     '挙動に関わる 4 ファイル（TxControllerPlugin.cc，sim_launch.py，'
+     'replay_sim.py，replay_sweep.py）が一致することを確認済みである。'
+     'シナリオと sweep 設定は記録時のスナップショットも '
      'sim_results/rec_d70_n50/sweep/config/ に scenario.yaml・sweep.yaml・'
-     'sim_params_base.yaml として残っており，②③ ではこれを使う。')
+     'sim_params_base.yaml として残っており，照合に使える。')
 note('② 地図を学習する： python3 tools/sim.py learn '
      '--scenario config/scenarios/urban_cm_d70.yaml --name urban_cm_d70_learn '
      '--runs 30 --base-seed 512345 → sim_results/urban_cm_d70_learn/rem_state。'
@@ -746,9 +747,10 @@ body_p('したがって，記録一式（約 13 GB）と学習済み地図（644
        '表 A5 は 9 条件それぞれの集計（choice_margin_summary.csv，confound_summary.csv），'
        '付録 C は較正監査の出力（sim_results/audit_d70）を別に必要とする。'
        'これらを含めない配布では，本資料の一部の表は再計算できない。')
-body_p('現時点の制約として，① の差分がコミットされていない。'
-       'workspace.patch と未追跡ファイルを添えれば再現できるが，'
-       '外部に出す前にコミットして版を確定させることが望ましい。')
+body_p('残る制約はデータの配布である。コードと設定の版は確定したが，'
+       '記録一式は約 13 GB あり，リポジトリには含めていない'
+       '（sim_results/ は版管理の対象外）。'
+       '第三者が ④ 以降だけを検証する場合は，記録一式と学習済み地図を別途受け渡す必要がある。')
 
 path = os.path.join(OUT, '内部調査資料_2026-08-13.docx')
 doc.save(path)

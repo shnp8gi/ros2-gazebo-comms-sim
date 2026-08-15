@@ -34,7 +34,7 @@ KKF 電波地図に基づく能動的ハンドオーバーの有用性
 レート | Shannon 式（帯域 100 MHz，雑音床 −95 dBm，効率 1.0，SNR 上限 50 dB）．802.15.3e に準拠するのは接続手順（受動アソシエーションと排他接続）であり，チャネル帯域は規格の 2.16 GHz ではない
 KKF 地図 | 道路に沿って等間隔に置いた山型の関数（RBF 基底）40 個の重み付き和で受信電力を表す（道路に沿った距離で 0〜210 m）．地図は（RSU，走行方向，車載アンテナ）ごとに独立 = 32 枚．学習 30 走行（base_seed 512345，評価とシード域を分離）．学習相の交通は素のシナリオの設定（速度 16.7 m/s，車頭 5.0 s，生成窓 60 s）で評価相とは異なるが，走行車両は遮蔽体として扱わないため伝搬そのものには影響せず，道路に沿った標本の分布のみが変わる
 評価 | 記録 50 走行のうち 48 走行（base_seed 12345，シード刻み 1000）．対比較 Wilcoxon 符号順位検定，信頼区間は対差の t 区間
-再現 | commit 755fe3d + 未コミットの作業差分（差分は sim_results/rec_d70_n50/sweep/config/workspace.patch に保存）．実行環境と手順は付録 D
+再現 | コードと設定は feat/urban-2lane の 789996b / ef7b8b7．記録時の作業差分は sim_results/rec_d70_n50/sweep/config/workspace.patch．実行環境と手順は付録 D
 
 持続シャドウイングの場と路上駐車の位置は，学習相と評価相で同一である．これは環境に固有の減衰を学習対象とする電波地図の前提そのものであり，走行ごとに変わるのは交通実現と観測雑音である．したがって本評価が示すのは「同じ環境を走り続けた場合に地図が持つ価値」であって，環境が変わったときの地図の陳腐化は評価していない（第 5 章）．
 
@@ -220,7 +220,7 @@ d70s10 | 4 本 / 10 m / 70° | 8 | 0.306 | 26,738 | +25.3% | 17
 
 本評価は Docker コンテナ内で，/workspace を作業ディレクトリとして実行した（イメージ ros2-gazebo-comms-sim:humble-harmonic，ROS 2 Humble，Gazebo Sim 8.11.0，Python 3.10.12）．以下はすべてコンテナ内で実行する．
 
-① コードを揃える： 755fe3d を checkout し，sim_results/rec_d70_n50/sweep/config/workspace.patch を適用する．この差分に含まれるのは追跡下の 5 ファイル（TxControllerPlugin.cc，sim_launch.py，replay_sim.py，replay_sweep.py，test_yaml.cpp）であり，いずれも挙動に影響する．シナリオと sweep 設定と図表生成スクリプトは版管理下になく差分に含まれないため，別途配布が必要である．前者 2 つは記録時のスナップショットが sim_results/rec_d70_n50/sweep/config/ に scenario.yaml・sweep.yaml・sim_params_base.yaml として残っており，②③ ではこれを使う．
+① コードを揃える： feat/urban-2lane の 789996b を checkout する（本評価に用いたシミュレータ・シナリオ・ツールを含む）．記録と学習の sweep 設定，および図表の生成スクリプトは ef7b8b7 に含まれる．記録した時点の作業差分は sim_results/rec_d70_n50/sweep/config/workspace.patch に残してあり，これを 755fe3d に当てた状態と 789996b とで，挙動に関わる 4 ファイル（TxControllerPlugin.cc，sim_launch.py，replay_sim.py，replay_sweep.py）が一致することを確認済みである．シナリオと sweep 設定は記録時のスナップショットも sim_results/rec_d70_n50/sweep/config/ に scenario.yaml・sweep.yaml・sim_params_base.yaml として残っており，照合に使える．
 
 ② 地図を学習する： python3 tools/sim.py learn --scenario config/scenarios/urban_cm_d70.yaml --name urban_cm_d70_learn --runs 30 --base-seed 512345 → sim_results/urban_cm_d70_learn/rem_state．直列実行で約 59 分（1 走行あたり約 2 分）．
 
@@ -234,4 +234,4 @@ d70s10 | 4 本 / 10 m / 70° | 8 | 0.306 | 26,738 | +25.3% | 17
 
 したがって，記録一式（約 13 GB）と学習済み地図（644 KB）があれば，図1 と図3〜図5，表 A1・A3・A4 は第三者が完全に検証できる．ただし表 A2 は前回の記録（sim_results/rec_cm_d70_ablation），表 A5 は 9 条件それぞれの集計（choice_margin_summary.csv，confound_summary.csv），付録 C は較正監査の出力（sim_results/audit_d70）を別に必要とする．これらを含めない配布では，本資料の一部の表は再計算できない．
 
-現時点の制約として，① の差分がコミットされていない．workspace.patch と未追跡ファイルを添えれば再現できるが，外部に出す前にコミットして版を確定させることが望ましい．
+残る制約はデータの配布である．コードと設定の版は確定したが，記録一式は約 13 GB あり，リポジトリには含めていない（sim_results/ は版管理の対象外）．第三者が ④ 以降だけを検証する場合は，記録一式と学習済み地図を別途受け渡す必要がある．
