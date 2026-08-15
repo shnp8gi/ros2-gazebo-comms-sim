@@ -332,71 +332,6 @@ def launch_setup(context, *args, **kwargs):
             f"{'='*70}\n"
         )
 
-    # Dynamic replacement of physics_max_step_size from sim_params.yaml
-    physics_max_step_size = sim_config.get('physics_max_step_size', None)
-    # 姿勢記録: 通信計算は運動に影響しないので、軌跡を残しておけば通信と
-    # スケジューリングは後から単一プロセスで再計算できる (手法ごとに Gazebo を
-    # 回す必要がなくなり、非同期由来の非決定性も消える)
-    record_poses_path = str(sim_config.get('record_poses_path', '') or '')
-    record_poses_period = float(sim_config.get('record_poses_period_s', 0.005))
-    if physics_max_step_size is not None or record_poses_path:
-        try:
-            with open(world_file, 'r', encoding='utf-8') as f:
-                world_content = f.read()
-
-            if physics_max_step_size is not None:
-                physics_max_step_size_val = float(physics_max_step_size)
-                world_content = re.sub(
-                    r'<max_step_size>\s*[0-9.eE+-]+\s*</max_step_size>',
-                    f'<max_step_size>{physics_max_step_size_val}</max_step_size>',
-                    world_content
-                )
-
-            if record_poses_path:
-                os.makedirs(os.path.dirname(os.path.abspath(record_poses_path)),
-                            exist_ok=True)
-                recorder_xml = (
-                    '<plugin filename="PoseRecorderPlugin.so" '
-                    'name="comms_sim::PoseRecorderPlugin">'
-                    f'<output_path>{record_poses_path}</output_path>'
-                    f'<period_s>{record_poses_period}</period_s>'
-                    '</plugin>\n'
-                )
-                # </world> の直前に差し込む (ワールド直下のシステムとして動く)
-                idx = world_content.rfind('</world>')
-                if idx < 0:
-                    raise ValueError('ワールドSDFに </world> がありません')
-                world_content = (world_content[:idx] + recorder_xml
-                                 + world_content[idx:])
-                # 再生を自己完結させるため、実効設定 (交通生成後の車両定義を
-                # 含む) を記録の隣に残す。スケジューラはアンテナ配置と道路形状を
-                # 要るので、これが無いと事後再計算ができない
-                try:
-                    cfg_copy = os.path.join(
-                        os.path.dirname(os.path.abspath(record_poses_path)),
-                        'effective_sim_params.yaml')
-                    with open(cfg_copy, 'w', encoding='utf-8') as cf:
-                        yaml.safe_dump(config, cf, sort_keys=False,
-                                       allow_unicode=True)
-                    print(f"[sim_launch] Effective config saved -> {cfg_copy}")
-                except Exception as e:
-                    print(f"[sim_launch] Warning: effective config dump failed: {e}")
-                print(f"[sim_launch] Pose recording enabled -> {record_poses_path}")
-
-            # Save to temp file
-            tmp_dir = os.path.join(tempfile.gettempdir(), 'comms_sim_worlds')
-            os.makedirs(tmp_dir, exist_ok=True)
-            config_suffix = os.path.splitext(os.path.basename(config_path))[0]
-            tmp_world_path = os.path.join(tmp_dir, f'world_{config_suffix}.sdf')
-
-            with open(tmp_world_path, 'w', encoding='utf-8') as f:
-                f.write(world_content)
-
-            if physics_max_step_size is not None:
-                print(f"[sim_launch] Dynamic world generation: max_step_size set to {physics_max_step_size_val} s")
-            world_file = tmp_world_path
-        except Exception as e:
-            print(f"[sim_launch] Warning: failed to dynamically update world max_step_size: {e}")
 
     world_name = sim_config.get('world_name', 'comms_sim_world')
     verbosity = sim_config.get('verbosity', 3)
@@ -442,6 +377,131 @@ def launch_setup(context, *args, **kwargs):
             # 旧形式の suv を spawn_entities から除外（車両は vehicles で処理する）
             spawn_entities = {k: v for k, v in spawn_entities.items()
                               if k.lower() != 'suv'}
+
+    # -----------------------------------------------------------------
+    # 静的エンティティ (基地局・駐車車両) はワールドSDFに直接書き込む。
+    #
+    # 以前は ros_gz_sim の create ノードから /world/<name>/create を呼んで
+    # スポーンしていたが、この要求は既定 5 秒でタイムアウトする。並列実行で
+    # Gazebo が CPU を奪われるとこの 5 秒を超えることがあり、しかも create は
+    # タイムアウト後も "OK creation of entity." と表示して終了コード 0 で抜ける
+    # ため、エンティティが欠けたことが誰にも気づかれない。基地局が 1 基でも
+    # 欠けると TxControllerPlugin は全基そろうまで待ち続けて通信計算に一度も
+    # 入らず、その走行は通信量ゼロのまま「正常終了」する
+    # (実測: 20走行中 5-7走行、並列8の第1バッチに集中)。
+    # ワールドに直書きすればサービス呼び出しそのものが無くなり、この競合は
+    # 原理的に起きない。動く遮蔽体 (waypoints つき) はプラグインの動的生成が
+    # 要るので従来どおり create でスポーンする
+    # -----------------------------------------------------------------
+    static_entities = []
+    for _key, _cfg in spawn_entities.items():
+        static_entities.append((_key, _cfg, 'エンティティ'))
+    for _key, _cfg in config.get('blocker_entities', {}).items():
+        if not _cfg.get('waypoints'):
+            static_entities.append((_key, _cfg, '遮蔽体'))
+
+    static_include_xml = ''
+    for _key, _cfg, _label in static_entities:
+        _name = _cfg.get('name', _key)
+        _pose = _cfg.get('pose', [0, 0, 0, 0, 0, 0])
+        if not isinstance(_pose, list) or len(_pose) != 6:
+            raise ValueError(
+                f"{_label} '{_key}' のポーズが不正: {_pose}\n"
+                f"ポーズは6要素のリスト [x, y, z, roll, pitch, yaw] でなければなりません"
+            )
+        # _resolve_model_uri は .../model.sdf を返すので、include にはその親
+        # ディレクトリ (model.config を含む) を渡す
+        _model_dir = os.path.dirname(
+            _resolve_model_uri(_cfg.get('model_uri', ''), model_prefix))
+        _pose_str = ' '.join(str(float(v)) for v in _pose)
+        static_include_xml += (
+            '<include>'
+            f'<uri>{_model_dir}</uri>'
+            f'<name>{_name}</name>'
+            f'<pose>{_pose_str}</pose>'
+            '</include>\n'
+        )
+
+    # Dynamic replacement of physics_max_step_size from sim_params.yaml
+    physics_max_step_size = sim_config.get('physics_max_step_size', None)
+    # 姿勢記録: 通信計算は運動に影響しないので、軌跡を残しておけば通信と
+    # スケジューリングは後から単一プロセスで再計算できる (手法ごとに Gazebo を
+    # 回す必要がなくなり、非同期由来の非決定性も消える)
+    record_poses_path = str(sim_config.get('record_poses_path', '') or '')
+    record_poses_period = float(sim_config.get('record_poses_period_s', 0.005))
+    if physics_max_step_size is not None or record_poses_path or static_include_xml:
+        try:
+            with open(world_file, 'r', encoding='utf-8') as f:
+                world_content = f.read()
+
+            if physics_max_step_size is not None:
+                physics_max_step_size_val = float(physics_max_step_size)
+                world_content = re.sub(
+                    r'<max_step_size>\s*[0-9.eE+-]+\s*</max_step_size>',
+                    f'<max_step_size>{physics_max_step_size_val}</max_step_size>',
+                    world_content
+                )
+
+            if static_include_xml:
+                idx = world_content.rfind('</world>')
+                if idx < 0:
+                    raise ValueError('ワールドSDFに </world> がありません')
+                world_content = (world_content[:idx] + static_include_xml
+                                 + world_content[idx:])
+                print(f"[sim_launch] 静的エンティティ {len(static_entities)} 体を"
+                      f"ワールドSDFに直接記述しました")
+
+            if record_poses_path:
+                os.makedirs(os.path.dirname(os.path.abspath(record_poses_path)),
+                            exist_ok=True)
+                recorder_xml = (
+                    '<plugin filename="PoseRecorderPlugin.so" '
+                    'name="comms_sim::PoseRecorderPlugin">'
+                    f'<output_path>{record_poses_path}</output_path>'
+                    f'<period_s>{record_poses_period}</period_s>'
+                    '</plugin>\n'
+                )
+                # </world> の直前に差し込む (ワールド直下のシステムとして動く)
+                idx = world_content.rfind('</world>')
+                if idx < 0:
+                    raise ValueError('ワールドSDFに </world> がありません')
+                world_content = (world_content[:idx] + recorder_xml
+                                 + world_content[idx:])
+                # 再生を自己完結させるため、実効設定 (交通生成後の車両定義を
+                # 含む) を記録の隣に残す。スケジューラはアンテナ配置と道路形状を
+                # 要るので、これが無いと事後再計算ができない
+                try:
+                    cfg_copy = os.path.join(
+                        os.path.dirname(os.path.abspath(record_poses_path)),
+                        'effective_sim_params.yaml')
+                    with open(cfg_copy, 'w', encoding='utf-8') as cf:
+                        yaml.safe_dump(config, cf, sort_keys=False,
+                                       allow_unicode=True)
+                    print(f"[sim_launch] Effective config saved -> {cfg_copy}")
+                except Exception as e:
+                    print(f"[sim_launch] Warning: effective config dump failed: {e}")
+                print(f"[sim_launch] Pose recording enabled -> {record_poses_path}")
+
+            # Save to temp file
+            tmp_dir = os.path.join(tempfile.gettempdir(), 'comms_sim_worlds')
+            os.makedirs(tmp_dir, exist_ok=True)
+            config_suffix = os.path.splitext(os.path.basename(config_path))[0]
+            tmp_world_path = os.path.join(tmp_dir, f'world_{config_suffix}.sdf')
+
+            with open(tmp_world_path, 'w', encoding='utf-8') as f:
+                f.write(world_content)
+
+            if physics_max_step_size is not None:
+                print(f"[sim_launch] Dynamic world generation: max_step_size set to {physics_max_step_size_val} s")
+            world_file = tmp_world_path
+        except Exception as e:
+            if static_include_xml:
+                # 静的エンティティはワールドSDFにしか書かれない。生成に失敗した
+                # まま起動すると基地局が1基も無い走行になるので、ここは落とす
+                raise RuntimeError(
+                    f"ワールドSDFの生成に失敗しました (静的エンティティを "
+                    f"書き込めません): {e}") from e
+            print(f"[sim_launch] Warning: failed to dynamically update world max_step_size: {e}")
 
     # TXコントローラ共通パラメータ
     tx_common = config.get('tx_controller_common', {})
@@ -528,48 +588,10 @@ def launch_setup(context, *args, **kwargs):
     # =========================================================================
     spawn_delay = gazebo_startup_delay
 
-    for entity_key, entity_config in spawn_entities.items():
-        model_uri = entity_config.get('model_uri', '')
-        name = entity_config.get('name', entity_key)
-        pose = entity_config.get('pose', [0, 0, 0, 0, 0, 0])
-
-        # ポーズ検証
-        if not isinstance(pose, list) or len(pose) != 6:
-            raise ValueError(
-                f"エンティティ '{entity_key}' のポーズが不正: {pose}\n"
-                f"ポーズは6要素のリスト [x, y, z, roll, pitch, yaw] でなければなりません"
-            )
-
-        x, y, z = pose[0], pose[1], pose[2]
-        roll, pitch, yaw = pose[3], pose[4], pose[5]
-
-        # model:// / models:// URIを実際のSDFファイルパスに変換
-        model_path = _resolve_model_uri(model_uri, model_prefix)
-
-        # ros_gz_sim の create ノードでスポーン
-        spawn_entity = TimerAction(
-            period=spawn_delay,
-            actions=[
-                Node(
-                    package='ros_gz_sim',
-                    executable='create',
-                    name=f'spawn_{name}',
-                    output='screen',
-                    arguments=[
-                        '-world', str(world_name),
-                        '-file', str(model_path),
-                        '-name', str(name),
-                        '-x', str(x),
-                        '-y', str(y),
-                        '-z', str(z),
-                        '-R', str(roll),
-                        '-P', str(pitch),
-                        '-Y', str(yaw),
-                    ]
-                )
-            ]
-        )
-        actions.append(spawn_entity)
+    # 基地局等の静的エンティティはワールドSDFに直書き済み (上の静的include参照)
+    # なのでスポーン動作は要らない。ただし車両のスポーン開始時刻を従来と揃える
+    # ため、消費していた分の待ち時間だけは残す (既存の記録走行と比較可能にする)
+    for _ in spawn_entities:
         spawn_delay += entity_spawn_interval
 
     # =========================================================================
@@ -690,6 +712,12 @@ def launch_setup(context, *args, **kwargs):
 
         b_model_path = _resolve_model_uri(b_cfg.get('model_uri', ''), model_prefix)
         b_waypoints_raw = b_cfg.get('waypoints', [])
+
+        if not b_waypoints_raw:
+            # 静的遮蔽体はワールドSDFに直書き済み (create のタイムアウトで
+            # 黙って消えると遮蔽条件が変わってしまうため)
+            spawn_delay += entity_spawn_interval
+            continue
 
         if b_waypoints_raw:
             b_waypoints_param = []

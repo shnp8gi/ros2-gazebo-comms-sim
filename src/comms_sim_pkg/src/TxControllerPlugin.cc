@@ -824,39 +824,75 @@ namespace tx_controller
             if (!this->comms_initialized) return;
 
             // Wait until base stations are located in Gazebo
+            //
+            // 並び順は必ず設定 (base_stations_cfg) の順にする。以前は ECM の走査順に
+            // push_back していたが、この順序は動的スポーンのエンティティ生成順に
+            // 依存し走行ごとに変わりうる。bs 索引はスケジューリング・BS排他・記録
+            // (pairs CSV) ・制御プレーンの地図キーのすべてで共有されるので、順序が
+            // 揺れると「同じ bs 番号が走行ごとに別の RSU を指す」ことになる。
+            // 実測: 19走行中3走行 (16%) で RSU0/RSU1 が入れ替わっていた
+            // (プロファイル相関 ±0.999 で判定、sim_results/rem_audit_fixblk)。
+            // 位置を鍵にした地図は互いに逆を向いた2基の平均を学ぶことになり、
+            // 平均場の山が消えて接続閾値に届かなくなる
             if (!this->base_stations_located) {
-                this->base_stations.clear();
+                // 先に名前 → 実体の姿勢を集め、そのあと設定順に組み立てる
+                std::map<std::string, gz::math::Pose3d> found;
                 _ecm.Each<gz::sim::components::Model, gz::sim::components::Name>(
                     [&](const gz::sim::Entity &_ent,
                         const gz::sim::components::Model *,
                         const gz::sim::components::Name *_name) -> bool
                     {
-                        std::string name = _name->Data();
-                        for (auto &bs : this->base_stations_cfg) {
-                            if (bs.name == name &&
-                                std::none_of(this->base_stations.begin(), this->base_stations.end(),
-                                    [&name](const BaseStationInfo& existing) { return existing.name == name; }))
-                            {
-                                BaseStationInfo bs_info = bs;
-                                auto poseComp = _ecm.Component<gz::sim::components::Pose>(_ent);
-                                if (poseComp) {
-                                    gz::math::Pose3d p = poseComp->Data();
-                                    bs_info.position = Eigen::Vector3d(p.Pos().X(), p.Pos().Y(), p.Pos().Z());
-                                    bs_info.rpy = Eigen::Vector3d(p.Rot().Roll(), p.Rot().Pitch(), p.Rot().Yaw());
-                                    Eigen::Vector3d ant_rpy_updated = bs_info.rpy + bs_info.antenna_relative_rpy;
-                                    bs_info.rotmat = utils::rpy_to_rotmat(ant_rpy_updated.x(), ant_rpy_updated.y(), ant_rpy_updated.z());
-                                }
-                                this->base_stations.push_back(bs_info);
-                            }
+                        const std::string name = _name->Data();
+                        if (found.count(name)) return true;
+                        for (const auto &bs : this->base_stations_cfg) {
+                            if (bs.name != name) continue;
+                            auto poseComp = _ecm.Component<gz::sim::components::Pose>(_ent);
+                            if (poseComp) found[name] = poseComp->Data();
+                            break;
                         }
                         return true;
                     });
-                if (this->base_stations.size() >= this->base_stations_cfg.size()) {
-                    this->base_stations_located = true;
-                    gzmsg << "[TxControllerPlugin] Located all base stations in Gazebo!" << std::endl;
-                } else {
-                    return;
+
+                if (found.size() < this->base_stations_cfg.size()) {
+                    // 猶予のあいだは待つ (スポーン直後は当然そろっていない)
+                    const double t_wait = std::chrono::duration<double>(_info.simTime).count();
+                    if (t_wait < this->bs_locate_timeout_s) {
+                        return;
+                    }
+                    // 猶予を過ぎても現れない基地局はスポーンに失敗している。
+                    // 黙って待ち続けると通信計算に一度も入らないまま走行が
+                    // 「正常終了」し、その走行だけ配信量ゼロになる
+                    // (実測: 並列8の記録スイープで20走行中5-7走行)。
+                    // 基地局は静的なので設定値の姿勢がそのまま実体の姿勢に
+                    // なる。警告を出したうえで設定値で補って続行する
+                    if (!this->bs_missing_reported) {
+                        this->bs_missing_reported = true;
+                        for (const auto &bs : this->base_stations_cfg) {
+                            if (found.count(bs.name)) continue;
+                            gzerr << "[TxControllerPlugin] base station [" << bs.name
+                                  << "] not found in Gazebo after " << this->bs_locate_timeout_s
+                                  << " s (spawn failed?). Falling back to the configured pose."
+                                  << std::endl;
+                        }
+                    }
                 }
+
+                this->base_stations.clear();
+                this->base_stations.reserve(this->base_stations_cfg.size());
+                for (const auto &bs : this->base_stations_cfg) {
+                    BaseStationInfo bs_info = bs;
+                    auto it = found.find(bs.name);
+                    if (it != found.end()) {
+                        const gz::math::Pose3d &p = it->second;
+                        bs_info.position = Eigen::Vector3d(p.Pos().X(), p.Pos().Y(), p.Pos().Z());
+                        bs_info.rpy = Eigen::Vector3d(p.Rot().Roll(), p.Rot().Pitch(), p.Rot().Yaw());
+                    }   // 見つからなければ設定値 (bs.position / bs.rpy) をそのまま使う
+                    Eigen::Vector3d ant_rpy_updated = bs_info.rpy + bs_info.antenna_relative_rpy;
+                    bs_info.rotmat = utils::rpy_to_rotmat(ant_rpy_updated.x(), ant_rpy_updated.y(), ant_rpy_updated.z());
+                    this->base_stations.push_back(bs_info);
+                }
+                this->base_stations_located = true;
+                gzmsg << "[TxControllerPlugin] Located all base stations in Gazebo!" << std::endl;
             }
 
             double current_time_s = std::chrono::duration<double>(_info.simTime).count();
@@ -1402,6 +1438,10 @@ namespace tx_controller
         std::vector<BaseStationInfo> base_stations_cfg;
         std::vector<BaseStationInfo> base_stations;
         bool base_stations_located = false;
+        // 基地局が ECM に現れるのを待つ上限 [シム秒]。これを過ぎたら
+        // 設定値の姿勢で補って続行する (待ち続けると配信量ゼロで完走する)
+        double bs_locate_timeout_s = 10.0;
+        bool bs_missing_reported = false;
 
         CommsEnvironment comms_env;
         HandoverScheduler scheduler;
