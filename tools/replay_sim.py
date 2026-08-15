@@ -395,6 +395,9 @@ def main():
                     help='観測を grant 中のペアに限らず全ペアにする。'
                          '「地図を持つ」価値と「事前に学習する」価値を分ける'
                          'kkf_cold_probe 用 (規格忠実ではない)')
+    ap.add_argument('--t-est-ms', type=float, default=None,
+                    help='ペアネット再確立に要する時間 [ms] を上書きする。'
+                         '判断ミスの代償を変える軸 (既定は記録時の設定)')
     ap.add_argument('--out', required=True, help='出力ディレクトリ')
     ap.add_argument('--config', default=None, help='実効 sim_params (省略時は rec_dir から探す)')
     a = ap.parse_args()
@@ -408,6 +411,8 @@ def main():
     with open(cfg_path, 'r', encoding='utf-8') as f:
         params = yaml.safe_load(f) or {}
     cfg = ReplayConfig(params)
+    if a.t_est_ms is not None:
+        cfg.t_est_ms = float(a.t_est_ms)
 
     pairs_dir = os.path.join(a.rec_dir, 'pairs')
     if not os.path.isdir(pairs_dir):

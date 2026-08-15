@@ -29,7 +29,34 @@ sys.path.insert(0, TOOLS_DIR)
 from lib import eval_metrics  # noqa: E402
 
 
-def arm_specs(state_dir):
+def tuning_specs(state_dir, key, values, common=None, tag_prefix=''):
+    """1つの設定値を振ったアームを作る (チューニング用)。
+
+    記録は手法に依存しないので、同じ記録を使い回して設定だけを変えられる。
+    実行時評価では設定ごとに Gazebo を回し直す必要があった。
+
+    common は全アームに共通で渡す設定。2因子の掃引 (例: 再計画周期 × kappa) は
+    片方を common に固定して2回走らせ、シードで対にして突き合わせる。
+    """
+    warm = ['--state-dir', state_dir]
+    c = []
+    for kv in (common or []):
+        c += ['--kkf-set', kv]
+    # 通信側の設定 (再確立コスト等) は SchedulerConfig ではなく replay_sim 側の
+    # 引数なので、キーで振り分ける
+    replay_flags = {'t_est_ms': '--t-est-ms'}
+    out = {'assoc_hold': ['--arm', 'assoc_hold']}
+    for v in values:
+        tag = f'{tag_prefix}{key}_{v}'.replace('-', 'm').replace('.', 'p')
+        if key in replay_flags:
+            extra = [replay_flags[key], str(v)]
+        else:
+            extra = ['--kkf-set', f'{key}={v}']
+        out[tag] = ['--arm', 'kkf'] + warm + c + extra
+    return out
+
+
+def arm_specs(state_dir, common=None):
     """アブレーションのアーム定義。値は replay_sim.py への追加引数。
 
     各アームが「何を抜いたときに何を失うか」を1つずつ切り分ける:
@@ -37,15 +64,25 @@ def arm_specs(state_dir):
       kkf_cold_probe  「地図を持つ」価値と「事前に学習する」価値の分離
       kkf_nolcb       LCB (不確実性を使った慎重な選択) の価値
       kkf_novar       遮蔽リスク地図 σ_ν² の価値
+      oracle          全ペアの現在真値を雑音なしで使う情報上界。
+                      「予測が完璧なら何点取れるか」= 地図を改良する余地の上限。
+                      これが assoc_hold と並ぶなら、その構成では地図に価値がない
     """
     warm = ['--state-dir', state_dir]
+    # common: 全 kkf アームに共通で渡す設定 (チューニング後の動作点で
+    # アブレーションを取り直すときに使う)
+    c = []
+    for kv in (common or []):
+        c += ['--kkf-set', kv]
     return {
         'assoc_hold': ['--arm', 'assoc_hold'],
-        'kkf_conv': ['--arm', 'kkf'] + warm,
-        'kkf_cold': ['--arm', 'kkf'],
-        'kkf_cold_probe': ['--arm', 'kkf', '--observe-all-pairs'],
-        'kkf_nolcb': ['--arm', 'kkf'] + warm + ['--kkf-set', 'kappa=0.0'],
-        'kkf_novar': ['--arm', 'kkf'] + warm + ['--kkf-set', 'varmap_enabled=false'],
+        'kkf_conv': ['--arm', 'kkf'] + warm + c,
+        'kkf_cold': ['--arm', 'kkf'] + c,
+        'kkf_cold_probe': ['--arm', 'kkf', '--observe-all-pairs'] + c,
+        'kkf_nolcb': ['--arm', 'kkf'] + warm + c + ['--kkf-set', 'kappa=0.0'],
+        'kkf_novar': ['--arm', 'kkf'] + warm + c + ['--kkf-set', 'varmap_enabled=false'],
+        'oracle': ['--arm', 'kkf', '--observe-all-pairs'] + c
+                  + ['--kkf-set', 'control_plane=oracle'],
     }
 
 
@@ -77,13 +114,25 @@ def main():
     ap.add_argument('--timeout', type=int, default=3600)
     ap.add_argument('--baseline', default='kkf_conv')
     ap.add_argument('--arms', nargs='*', default=None, help='既定は全アーム')
+    ap.add_argument('--tune', default=None, metavar='KEY',
+                    help='SchedulerConfig の属性を振る (例 idle_lcb_db)')
+    ap.add_argument('--tune-values', nargs='*', default=[],
+                    help='--tune で振る値')
+    ap.add_argument('--kkf-common', nargs='*', default=[], metavar='KEY=VAL',
+                    help='全 kkf アームに共通で渡す設定')
+    ap.add_argument('--tag-prefix', default='',
+                    help='--tune のアーム名の接頭辞 (2因子掃引の突き合わせ用)')
     a = ap.parse_args()
 
     recs = sorted(d for d in glob.glob(os.path.join(a.rec_root, 'seed_*'))
                   if os.path.isdir(os.path.join(d, 'pairs')))
     if not recs:
         sys.exit(f"記録が見つかりません: {a.rec_root}/seed_*/pairs")
-    specs = arm_specs(a.state_dir)
+    if a.tune:
+        specs = tuning_specs(a.state_dir, a.tune, a.tune_values,
+                             common=a.kkf_common, tag_prefix=a.tag_prefix)
+    else:
+        specs = arm_specs(a.state_dir, a.kkf_common)
     if a.arms:
         specs = {k: v for k, v in specs.items() if k in a.arms}
     print(f"[replay_sweep] {len(recs)} シード x {len(specs)} 手法 "
