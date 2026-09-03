@@ -56,11 +56,16 @@ simulation:
   # ノード起動タイミング設定
   # headless sweep 向けに短縮済み（GUIなし・RTF=10 なら高速起動可能）
   timing:
-    gazebo_startup_delay: 1.5 # Gazebo起動待機時間 [s] (headless は高速)
+    # 車両は ros_gz_sim create でスポーンするが、この要求は 5 秒で
+    # タイムアウトし、しかも終了コード 0 で抜けるため欠落が表に出ない
+    # (sim_launch.py の静的エンティティのコメント参照)。並列起動の第1
+    # バッチで Gazebo の初期化が 1.5 秒に収まらず、実測で 50 走行中 7 走行
+    # ・最悪 36.8% の車両が欠けていた。Gazebo が応答可能になるまで待つ
+    gazebo_startup_delay: 10.0 # Gazebo起動待機時間 [s]
     entity_spawn_interval: 0.5 # エンティティ間のスポーン間隔 [s]
-    bridge_startup_delay: 1.0 # ブリッジ起動待機時間 [s]
-    comms_node_delay: 3.0 # 通信ノード起動待機時間 [s]
-    tx_controller_delay: 3.5 # TXコントローラ起動待機時間 [s]
+    bridge_startup_delay: 9.5 # ブリッジ起動待機時間 [s] (gazebo 起動待ちに追従)
+    comms_node_delay: 11.5 # 通信ノード起動待機時間 [s] (同上)
+    tx_controller_delay: 12.0 # TXコントローラ起動待機時間 [s] (同上)
 
 # -----------------------------------------------------------------------------
 # 通信シミュレータノードパラメータ (共通設定)

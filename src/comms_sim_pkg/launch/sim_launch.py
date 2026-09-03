@@ -209,6 +209,36 @@ def _resolve_model_uri(model_uri: str, model_prefix: str) -> str:
     return path + '/model.sdf'
 
 
+def _vehicle_world_xml(sdf_path: str, name: str, pose) -> str:
+    """生成済みの車両SDFから <model> を取り出し、ワールドへ直接書ける形にする。
+
+    車両を ros_gz_sim の create でスポーンすると、要求が 5 秒でタイムアウトし
+    しかも終了コード 0 で抜けるため、車両が欠けたまま走行が「正常終了」する
+    (実測 2026-09-01: 50走行中 8走行、最悪 10%)。0.5 秒刻みで投げる設計だが、
+    create は1台につき別プロセスの ROS ノード起動なので要求が溜まり、Gazebo が
+    応答可能になった瞬間に一斉に殺到する。基地局と路上駐車が既にそうしている
+    ように、ワールドSDFに直接書けばサービス呼び出しそのものが無くなる。
+
+    交通は prefill で道路上に事前配置され、全車が /sim/all_ready で同時に
+    走り出すので、出現時刻が早まること以外に走行の中身は変わらない。
+    """
+    import xml.etree.ElementTree as ET
+
+    with open(sdf_path, 'r', encoding='utf-8') as f:
+        root = ET.fromstring(f.read())
+    model = root if root.tag == 'model' else root.find('model')
+    if model is None:
+        raise ValueError(f"車両SDFに <model> がありません: {sdf_path}")
+    model.set('name', name)
+    # モデル直下の既存 <pose> は配置ポーズで置き換える (リンク内の pose は残す)
+    for old in model.findall('pose'):
+        model.remove(old)
+    pose_el = ET.Element('pose')
+    pose_el.text = ' '.join(str(float(v)) for v in pose)
+    model.insert(0, pose_el)
+    return ET.tostring(model, encoding='unicode') + '\n'
+
+
 def _generate_vehicle_sdf(original_sdf_path: str, vehicle_name: str, plugin_xml: str = "", suffix: str = "") -> str:
     """
     車両固有のトピック名を持つSDFファイルを動的生成する。
@@ -393,6 +423,17 @@ def launch_setup(context, *args, **kwargs):
     # 原理的に起きない。動く遮蔽体 (waypoints つき) はプラグインの動的生成が
     # 要るので従来どおり create でスポーンする
     # -----------------------------------------------------------------
+    # TXコントローラ共通パラメータ
+    tx_common = config.get('tx_controller_common', {})
+    # 旧形式フォールバック
+    if not tx_common:
+        tx_common = config.get('tx_controller_node', {}).get('ros__parameters', {})
+    waypoint_tolerance = float(tx_common.get('waypoint_tolerance', 2.0))
+    control_rate = float(tx_common.get('control_rate', 10.0))
+    max_angular_velocity = float(tx_common.get('max_angular_velocity', 1.0))
+    heading_gain = float(tx_common.get('heading_gain', 1.5))
+    max_acceleration = float(tx_common.get('max_acceleration', 0.5))
+
     static_entities = []
     for _key, _cfg in spawn_entities.items():
         static_entities.append((_key, _cfg, 'エンティティ'))
@@ -422,6 +463,101 @@ def launch_setup(context, *args, **kwargs):
             '</include>\n'
         )
 
+    vehicle_include_xml = ''
+    # =========================================================================
+    # 車両もワールドSDFに直接書く (create のタイムアウトによる無言の欠落を防ぐ。
+    # 詳細は _vehicle_world_xml)。車両ごとにトピック名とプラグインが違うので
+    # include ではなく <model> を直接埋め込む
+    # =========================================================================
+    for vehicle_cfg in vehicles:
+        v_name = vehicle_cfg.get('name', 'suv')
+        v_model_uri = vehicle_cfg.get('model_uri', 'models://SUV')
+        v_pose = vehicle_cfg.get('pose', [0, 0, 0, 0, 0, 0])
+
+        # ポーズ検証
+        if not isinstance(v_pose, list) or len(v_pose) != 6:
+            raise ValueError(
+                f"車両 '{v_name}' のポーズが不正: {v_pose}\n"
+                f"ポーズは6要素のリスト [x, y, z, roll, pitch, yaw] でなければなりません"
+            )
+
+        x, y, z = v_pose[0], v_pose[1], v_pose[2]
+        roll, pitch, yaw = v_pose[3], v_pose[4], v_pose[5]
+
+        # 元のSDFパスを解決
+        original_sdf_path = _resolve_model_uri(v_model_uri, model_prefix)
+
+        # --- プラグインXMLの動的生成 ---
+        waypoints_raw = vehicle_cfg.get('waypoints', [])
+        waypoints_param = []
+        if waypoints_raw:
+            if isinstance(waypoints_raw[0], (list, tuple)):
+                for waypoint in waypoints_raw:
+                    waypoints_param.extend([float(v) for v in waypoint])
+            else:
+                waypoints_param = [float(v) for v in waypoints_raw]
+        waypoints_str = " ".join(map(str, waypoints_param))
+
+        is_shinkansen = 'shinkansen' in v_name.lower() or 'shinkansen' in original_sdf_path.lower()
+        
+        plugin_xml = f"""
+        <plugin filename="TxControllerPlugin.so" name="tx_controller::TxControllerPlugin">
+          <waypoints>{waypoints_str}</waypoints>
+          <waypoint_tolerance>{waypoint_tolerance}</waypoint_tolerance>
+          <heading_gain>{heading_gain}</heading_gain>
+          <max_acceleration>{max_acceleration}</max_acceleration>
+          <max_angular_velocity>{max_angular_velocity}</max_angular_velocity>
+          <is_shinkansen>{"true" if is_shinkansen else "false"}</is_shinkansen>
+          <mission_complete_topic>/{v_name}/mission_complete</mission_complete_topic>
+          <ready_pub_topic>/tx_controller_{v_name}/ready</ready_pub_topic>
+          <all_ready_topic>/sim/all_ready</all_ready_topic>
+          <config_file_path>{config_path}</config_file_path>
+        </plugin>
+        """
+
+        # 車両固有のSDFを生成（トピック名を書き換え + プラグイン追加）
+        config_suffix = os.path.splitext(os.path.basename(config_path))[0]
+        vehicle_sdf_path = _generate_vehicle_sdf(original_sdf_path, v_name, plugin_xml, suffix=config_suffix)
+
+        vehicle_include_xml += _vehicle_world_xml(vehicle_sdf_path, v_name, v_pose)
+
+    # =========================================================================
+    # 動く遮蔽体 (waypoints つき) もワールドSDFに直接書く。静的な遮蔽体は
+    # 上の static_include_xml で既に埋め込み済み
+    # =========================================================================
+    blocker_entities = config.get('blocker_entities', {})
+    for b_key, b_cfg in blocker_entities.items():
+        b_name = b_cfg.get('name', b_key)
+        b_pose = b_cfg.get('pose', [0, 0, 0, 0, 0, 0])
+        if not isinstance(b_pose, list) or len(b_pose) != 6:
+            raise ValueError(f"遮蔽体 '{b_key}' のポーズが不正: {b_pose}")
+
+        b_model_path = _resolve_model_uri(b_cfg.get('model_uri', ''), model_prefix)
+        b_waypoints_raw = b_cfg.get('waypoints', [])
+
+        if not b_waypoints_raw:
+            # 静的遮蔽体はワールドSDFに直書き済み (create のタイムアウトで
+            # 黙って消えると遮蔽条件が変わってしまうため)
+            continue
+
+        if b_waypoints_raw:
+            b_waypoints_param = []
+            for waypoint in b_waypoints_raw:
+                b_waypoints_param.extend([float(v) for v in waypoint])
+            mover_xml = f"""
+        <plugin filename="WaypointMoverPlugin.so" name="tx_controller::WaypointMoverPlugin">
+          <waypoints>{" ".join(map(str, b_waypoints_param))}</waypoints>
+          <loop>{"true" if b_cfg.get('loop', False) else "false"}</loop>
+          <all_ready_topic>/sim/all_ready</all_ready_topic>
+        </plugin>
+        """
+            config_suffix = os.path.splitext(os.path.basename(config_path))[0]
+            b_model_path = _generate_vehicle_sdf(b_model_path, b_name, mover_xml, suffix=config_suffix)
+
+        vehicle_include_xml += _vehicle_world_xml(b_model_path, b_name, b_pose)
+
+    n_embedded_vehicles = vehicle_include_xml.count('<model ')
+
     # Dynamic replacement of physics_max_step_size from sim_params.yaml
     physics_max_step_size = sim_config.get('physics_max_step_size', None)
     # 姿勢記録: 通信計算は運動に影響しないので、軌跡を残しておけば通信と
@@ -429,7 +565,8 @@ def launch_setup(context, *args, **kwargs):
     # 回す必要がなくなり、非同期由来の非決定性も消える)
     record_poses_path = str(sim_config.get('record_poses_path', '') or '')
     record_poses_period = float(sim_config.get('record_poses_period_s', 0.005))
-    if physics_max_step_size is not None or record_poses_path or static_include_xml:
+    if (physics_max_step_size is not None or record_poses_path
+            or static_include_xml or vehicle_include_xml):
         try:
             with open(world_file, 'r', encoding='utf-8') as f:
                 world_content = f.read()
@@ -442,13 +579,14 @@ def launch_setup(context, *args, **kwargs):
                     world_content
                 )
 
-            if static_include_xml:
+            if static_include_xml or vehicle_include_xml:
                 idx = world_content.rfind('</world>')
                 if idx < 0:
                     raise ValueError('ワールドSDFに </world> がありません')
                 world_content = (world_content[:idx] + static_include_xml
-                                 + world_content[idx:])
-                print(f"[sim_launch] 静的エンティティ {len(static_entities)} 体を"
+                                 + vehicle_include_xml + world_content[idx:])
+                print(f"[sim_launch] 静的エンティティ {len(static_entities)} 体 + "
+                      f"車両・動く遮蔽体 {n_embedded_vehicles} 体を"
                       f"ワールドSDFに直接記述しました")
 
             if record_poses_path:
@@ -495,7 +633,7 @@ def launch_setup(context, *args, **kwargs):
                 print(f"[sim_launch] Dynamic world generation: max_step_size set to {physics_max_step_size_val} s")
             world_file = tmp_world_path
         except Exception as e:
-            if static_include_xml:
+            if static_include_xml or vehicle_include_xml:
                 # 静的エンティティはワールドSDFにしか書かれない。生成に失敗した
                 # まま起動すると基地局が1基も無い走行になるので、ここは落とす
                 raise RuntimeError(
@@ -503,16 +641,6 @@ def launch_setup(context, *args, **kwargs):
                     f"書き込めません): {e}") from e
             print(f"[sim_launch] Warning: failed to dynamically update world max_step_size: {e}")
 
-    # TXコントローラ共通パラメータ
-    tx_common = config.get('tx_controller_common', {})
-    # 旧形式フォールバック
-    if not tx_common:
-        tx_common = config.get('tx_controller_node', {}).get('ros__parameters', {})
-    waypoint_tolerance = float(tx_common.get('waypoint_tolerance', 2.0))
-    control_rate = float(tx_common.get('control_rate', 10.0))
-    max_angular_velocity = float(tx_common.get('max_angular_velocity', 1.0))
-    heading_gain = float(tx_common.get('heading_gain', 1.5))
-    max_acceleration = float(tx_common.get('max_acceleration', 0.5))
 
     actions = []
 
@@ -594,87 +722,6 @@ def launch_setup(context, *args, **kwargs):
     for _ in spawn_entities:
         spawn_delay += entity_spawn_interval
 
-    # =========================================================================
-    # 車両スポーン: 各車両固有のSDF生成とスポーン
-    # =========================================================================
-    for vehicle_cfg in vehicles:
-        v_name = vehicle_cfg.get('name', 'suv')
-        v_model_uri = vehicle_cfg.get('model_uri', 'models://SUV')
-        v_pose = vehicle_cfg.get('pose', [0, 0, 0, 0, 0, 0])
-
-        # ポーズ検証
-        if not isinstance(v_pose, list) or len(v_pose) != 6:
-            raise ValueError(
-                f"車両 '{v_name}' のポーズが不正: {v_pose}\n"
-                f"ポーズは6要素のリスト [x, y, z, roll, pitch, yaw] でなければなりません"
-            )
-
-        x, y, z = v_pose[0], v_pose[1], v_pose[2]
-        roll, pitch, yaw = v_pose[3], v_pose[4], v_pose[5]
-
-        # 元のSDFパスを解決
-        original_sdf_path = _resolve_model_uri(v_model_uri, model_prefix)
-
-        # --- プラグインXMLの動的生成 ---
-        waypoints_raw = vehicle_cfg.get('waypoints', [])
-        waypoints_param = []
-        if waypoints_raw:
-            if isinstance(waypoints_raw[0], (list, tuple)):
-                for waypoint in waypoints_raw:
-                    waypoints_param.extend([float(v) for v in waypoint])
-            else:
-                waypoints_param = [float(v) for v in waypoints_raw]
-        waypoints_str = " ".join(map(str, waypoints_param))
-
-        is_shinkansen = 'shinkansen' in v_name.lower() or 'shinkansen' in original_sdf_path.lower()
-        
-        plugin_xml = f"""
-        <plugin filename="TxControllerPlugin.so" name="tx_controller::TxControllerPlugin">
-          <waypoints>{waypoints_str}</waypoints>
-          <waypoint_tolerance>{waypoint_tolerance}</waypoint_tolerance>
-          <heading_gain>{heading_gain}</heading_gain>
-          <max_acceleration>{max_acceleration}</max_acceleration>
-          <max_angular_velocity>{max_angular_velocity}</max_angular_velocity>
-          <is_shinkansen>{"true" if is_shinkansen else "false"}</is_shinkansen>
-          <mission_complete_topic>/{v_name}/mission_complete</mission_complete_topic>
-          <ready_pub_topic>/tx_controller_{v_name}/ready</ready_pub_topic>
-          <all_ready_topic>/sim/all_ready</all_ready_topic>
-          <config_file_path>{config_path}</config_file_path>
-        </plugin>
-        """
-
-        # 車両固有のSDFを生成（トピック名を書き換え + プラグイン追加）
-        config_suffix = os.path.splitext(os.path.basename(config_path))[0]
-        vehicle_sdf_path = _generate_vehicle_sdf(original_sdf_path, v_name, plugin_xml, suffix=config_suffix)
-
-        actions.append(LogInfo(
-            msg=f'[vehicle] {v_name}: SDF生成完了 → {vehicle_sdf_path}'
-        ))
-
-        spawn_vehicle = TimerAction(
-            period=spawn_delay,
-            actions=[
-                Node(
-                    package='ros_gz_sim',
-                    executable='create',
-                    name=f'spawn_{v_name}',
-                    output='screen',
-                    arguments=[
-                        '-world', str(world_name),
-                        '-file', str(vehicle_sdf_path),
-                        '-name', str(v_name),
-                        '-x', str(x),
-                        '-y', str(y),
-                        '-z', str(z),
-                        '-R', str(roll),
-                        '-P', str(pitch),
-                        '-Y', str(yaw),
-                    ]
-                )
-            ]
-        )
-        actions.append(spawn_vehicle)
-        spawn_delay += entity_spawn_interval
 
     # =========================================================================
     # 制御プレーンノード: external_schedule + control_plane が
@@ -699,60 +746,6 @@ def launch_setup(context, *args, **kwargs):
         )
         actions.append(kkf_scheduler)
 
-    # =========================================================================
-    # 遮蔽体スポーン: role=blocker のエンティティ
-    # (静的ならそのままスポーン、waypoints があれば WaypointMoverPlugin を付与)
-    # =========================================================================
-    blocker_entities = config.get('blocker_entities', {})
-    for b_key, b_cfg in blocker_entities.items():
-        b_name = b_cfg.get('name', b_key)
-        b_pose = b_cfg.get('pose', [0, 0, 0, 0, 0, 0])
-        if not isinstance(b_pose, list) or len(b_pose) != 6:
-            raise ValueError(f"遮蔽体 '{b_key}' のポーズが不正: {b_pose}")
-
-        b_model_path = _resolve_model_uri(b_cfg.get('model_uri', ''), model_prefix)
-        b_waypoints_raw = b_cfg.get('waypoints', [])
-
-        if not b_waypoints_raw:
-            # 静的遮蔽体はワールドSDFに直書き済み (create のタイムアウトで
-            # 黙って消えると遮蔽条件が変わってしまうため)
-            spawn_delay += entity_spawn_interval
-            continue
-
-        if b_waypoints_raw:
-            b_waypoints_param = []
-            for waypoint in b_waypoints_raw:
-                b_waypoints_param.extend([float(v) for v in waypoint])
-            mover_xml = f"""
-        <plugin filename="WaypointMoverPlugin.so" name="tx_controller::WaypointMoverPlugin">
-          <waypoints>{" ".join(map(str, b_waypoints_param))}</waypoints>
-          <loop>{"true" if b_cfg.get('loop', False) else "false"}</loop>
-          <all_ready_topic>/sim/all_ready</all_ready_topic>
-        </plugin>
-        """
-            config_suffix = os.path.splitext(os.path.basename(config_path))[0]
-            b_model_path = _generate_vehicle_sdf(b_model_path, b_name, mover_xml, suffix=config_suffix)
-
-        spawn_blocker = TimerAction(
-            period=spawn_delay,
-            actions=[
-                Node(
-                    package='ros_gz_sim',
-                    executable='create',
-                    name=f'spawn_{b_name}',
-                    output='screen',
-                    arguments=[
-                        '-world', str(world_name),
-                        '-file', str(b_model_path),
-                        '-name', str(b_name),
-                        '-x', str(b_pose[0]), '-y', str(b_pose[1]), '-z', str(b_pose[2]),
-                        '-R', str(b_pose[3]), '-P', str(b_pose[4]), '-Y', str(b_pose[5]),
-                    ]
-                )
-            ]
-        )
-        actions.append(spawn_blocker)
-        spawn_delay += entity_spawn_interval
 
     # =========================================================================
     # ROS-Gazeboブリッジ
