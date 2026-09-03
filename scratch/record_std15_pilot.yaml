@@ -1,0 +1,41 @@
+# urban_std15 の下見記録 (N=5)。本番 (学習30 + 記録50) に入る前に、
+# 規格閾値 -68.5 dBm で選択余地とカバレッジが実際に出るかを確かめるためのもの。
+# 交通条件は rec_d70_n50 と同一にして、配置以外の差が入らないようにする。
+sweep:
+  name: rec_std15_pilot
+  scenario: config/scenarios/urban_std15.yaml
+  variables:
+  - name: method
+    cases:
+      record:
+        config:
+          link_controller_node.ros__parameters.scheduling_policy: assoc_hold
+          link_controller_node.ros__parameters.control_plane: none
+          comms_simulator_node.ros__parameters.measurement_report.enabled: false
+          comms_simulator_node.ros__parameters.record_pairs_dir: /workspace/sim_results/rec_std15_pilot/seed_{seed}/pairs
+  - name: load
+    cases:
+      contended:
+        scenario:
+          traffic.lanes[0].speed_mps: 7.0
+          traffic.lanes[1].speed_mps: 7.0
+          traffic.lanes[0].headway_s.mean: 2.0
+          traffic.lanes[1].headway_s.mean: 2.0
+          traffic.target_ratio: 0.8
+          traffic.window_s:
+          - 0.0
+          - 35.0
+          simulation_overrides.record_poses_path: /workspace/sim_results/rec_std15_pilot/seed_{seed}/poses.csv
+          simulation_overrides.record_poses_period_s: 0.005
+  analysis:
+    group_by: [method, load]
+    arm_var: method
+    baseline: record
+    metrics: [total_data_MB]
+  execution:
+    num_runs: 5
+    base_seed: 12345
+    task_timeout_sec: 5400
+    real_time_factor: 2.0
+    max_concurrency: 5
+    output_name: rec_std15_pilot/sweep

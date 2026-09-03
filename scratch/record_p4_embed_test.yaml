@@ -1,0 +1,47 @@
+# 配置 d70 と同一幾何 (ポール4本 x 上流/下流2面 = 論理RSU 8基、間隔 20m、δ_rsu 70°) を
+# 規格の接続閾値 -68.5 dBm (snr_min 26.5) で取り直した記録 (N=50)。
+# 旧 rec_d70_n50 は車両スポーンの無言失敗により 50走行中7走行が汚染されていた
+# (最悪 36.8% 欠落)。gazebo_startup_delay を 1.5→10.0 s にして解消済み。
+# 交通条件は旧記録と同一。学習済み地図 urban_cm_d70_learn/rem_state をそのまま使える
+# (幾何・基底パラメータが一致することを確認済み)。
+sweep:
+  name: rec_p4_embed_test
+  scenario: config/scenarios/urban_std_p4.yaml
+  variables:
+  - name: method
+    cases:
+      record:
+        config:
+          link_controller_node.ros__parameters.scheduling_policy: assoc_hold
+          link_controller_node.ros__parameters.control_plane: none
+          comms_simulator_node.ros__parameters.measurement_report.enabled: false
+          comms_simulator_node.ros__parameters.record_pairs_dir: /workspace/sim_results/rec_p4_embed_test/seed_{seed}/pairs
+  - name: load
+    cases:
+      contended:
+        scenario:
+          traffic.lanes[0].speed_mps: 7.0
+          traffic.lanes[1].speed_mps: 7.0
+          traffic.lanes[0].headway_s.mean: 2.0
+          traffic.lanes[1].headway_s.mean: 2.0
+          traffic.target_ratio: 0.8
+          traffic.window_s:
+          - 0.0
+          - 35.0
+          simulation_overrides.record_poses_path: /workspace/sim_results/rec_p4_embed_test/seed_{seed}/poses.csv
+          simulation_overrides.record_poses_period_s: 0.005
+  analysis:
+    group_by:
+    - method
+    - load
+    arm_var: method
+    baseline: record
+    metrics:
+    - total_data_MB
+  execution:
+    num_runs: 8
+    base_seed: 12345
+    task_timeout_sec: 5400
+    real_time_factor: 2.0
+    max_concurrency: 8
+    output_name: rec_p4_embed_test/sweep

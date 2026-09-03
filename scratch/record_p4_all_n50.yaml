@@ -1,0 +1,46 @@
+# 配置は urban_std_p4 (ポール4本 x 上流/下流2面 = 論理RSU 8基、間隔 20m、δ_rsu 70°)、
+# 規格の接続閾値 -68.5 dBm。target_ratio: 1.0 で全走行車両を通信対象にする。
+# 交通生成の乱数消費は target_ratio に依らないため (is_target の判定で必ず
+# rng.random() を引く)、交通の実現は 0.8 版と同一のまま、非対象だった車が
+# 対象に変わるだけになる。車両スポーンはワールドSDF直書き済み。
+sweep:
+  name: rec_p4_all_n50
+  scenario: config/scenarios/urban_std_p4.yaml
+  variables:
+  - name: method
+    cases:
+      record:
+        config:
+          link_controller_node.ros__parameters.scheduling_policy: assoc_hold
+          link_controller_node.ros__parameters.control_plane: none
+          comms_simulator_node.ros__parameters.measurement_report.enabled: false
+          comms_simulator_node.ros__parameters.record_pairs_dir: /workspace/sim_results/rec_p4_all_n50/seed_{seed}/pairs
+  - name: load
+    cases:
+      contended:
+        scenario:
+          traffic.lanes[0].speed_mps: 7.0
+          traffic.lanes[1].speed_mps: 7.0
+          traffic.lanes[0].headway_s.mean: 2.0
+          traffic.lanes[1].headway_s.mean: 2.0
+          traffic.target_ratio: 1.0
+          traffic.window_s:
+          - 0.0
+          - 35.0
+          simulation_overrides.record_poses_path: /workspace/sim_results/rec_p4_all_n50/seed_{seed}/poses.csv
+          simulation_overrides.record_poses_period_s: 0.005
+  analysis:
+    group_by:
+    - method
+    - load
+    arm_var: method
+    baseline: record
+    metrics:
+    - total_data_MB
+  execution:
+    num_runs: 50
+    base_seed: 12345
+    task_timeout_sec: 5400
+    real_time_factor: 2.0
+    max_concurrency: 8
+    output_name: rec_p4_all_n50/sweep
