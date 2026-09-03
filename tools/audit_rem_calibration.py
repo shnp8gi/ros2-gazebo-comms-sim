@@ -54,7 +54,8 @@ import yaml  # noqa: E402
 import replay_sim  # noqa: E402  (記録の読み込みと予測器構成を共有する)
 
 
-def audit_seed(rec_dir, state_dir, mode, report_period=None, overrides=None):
+def audit_seed(rec_dir, state_dir, mode, report_period=None, overrides=None,
+               t_min=None, t_max=None):
     """1シード分の (予測, 真値) の対を全ペア・全時刻について集める。"""
     cfg_path = os.path.join(rec_dir, 'effective_sim_params.yaml')
     import yaml
@@ -62,8 +63,10 @@ def audit_seed(rec_dir, state_dir, mode, report_period=None, overrides=None):
         params = yaml.safe_load(f) or {}
     rcfg = replay_sim.ReplayConfig(params)
 
-    vehicles = replay_sim.load_pairs(os.path.join(rec_dir, 'pairs'), rcfg)
-    poses = replay_sim.load_poses(os.path.join(rec_dir, 'poses.csv'))
+    vehicles = replay_sim.load_pairs(os.path.join(rec_dir, 'pairs'), rcfg,
+                                     t_max=t_max, t_min=t_min)
+    poses = replay_sim.load_poses(os.path.join(rec_dir, 'poses.csv'),
+                                  t_max=t_max, t_min=t_min)
     if not vehicles:
         return None, None
 
@@ -191,6 +194,13 @@ def main():
     ap.add_argument('--state-dir', required=True, help='学習済み REM')
     ap.add_argument('--out', required=True)
     ap.add_argument('--mode', default='frozen', choices=['frozen', 'online'])
+    ap.add_argument('--from-motion', action='store_true',
+                    help='交通が走り出した時刻を各記録から検出し、そこを起点にする。'
+                         '発火前は全車が静止したまま通信だけが計算されているため、'
+                         '他の評価と揃えるには必須')
+    ap.add_argument('--t-min', type=float, default=None)
+    ap.add_argument('--duration', type=float, default=None,
+                    help='起点からの評価窓の長さ [s]')
     ap.add_argument('--seeds', type=int, default=0, help='先頭 N シードのみ (0=全部)')
     ap.add_argument('--kkf-set', action='append', default=[], metavar='KEY=VAL',
                     help='SchedulerConfig の上書き。学習時と基底設定が違う記録を'
@@ -211,7 +221,16 @@ def main():
         for kv in a.kkf_set:
             k, _, v = kv.partition('=')
             ov[k.strip()] = yaml.safe_load(v)
-        df, m = audit_seed(r, a.state_dir, a.mode, overrides=ov)
+        t_min = a.t_min
+        if a.from_motion:
+            det = replay_sim.detect_motion_start(os.path.join(r, 'poses.csv'))
+            if det is None:
+                print(f'  走り出しを検出できません: {r}')
+                continue
+            t_min = det if t_min is None else max(t_min, det)
+        t_max = None if a.duration is None else (t_min or 0.0) + a.duration
+        df, m = audit_seed(r, a.state_dir, a.mode, overrides=ov,
+                           t_min=t_min, t_max=t_max)
         if df is None or df.empty:
             print(f"  [{i}/{len(recs)}] {os.path.basename(r)}: 空")
             continue
@@ -224,7 +243,13 @@ def main():
         sys.exit("監査対象が空です")
     all_df = pd.concat(frames, ignore_index=True)
     os.makedirs(a.out, exist_ok=True)
-    all_df.to_parquet(os.path.join(a.out, f'samples_{a.mode}.parquet'), index=False)
+    # parquet が使えない環境があるので、無ければ gzip 圧縮 CSV に落とす
+    try:
+        all_df.to_parquet(os.path.join(a.out, f'samples_{a.mode}.parquet'),
+                          index=False)
+    except Exception:
+        all_df.to_csv(os.path.join(a.out, f'samples_{a.mode}.csv.gz'),
+                      index=False, compression='gzip')
 
     s = summarize(all_df, meta)
     per_seed = pd.DataFrame([

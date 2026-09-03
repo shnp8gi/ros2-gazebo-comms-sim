@@ -210,7 +210,13 @@ def make_kkf_scheduler(sim_params_path, state_dir=None, overrides=None):
     # 保存された設定にはその値が残っている。再生では KKF の予測器が要る
     cfg.control_plane = 'kkf_mpc'
     for k, v in (overrides or {}).items():
-        setattr(cfg, k, v)
+        # ドット区切りで入れ子の設定に届かせる (例 kkf_params.residual_buffer_size)。
+        # KkfParams はコンストラクタ時点で組み上がるため、属性を直に差し替える
+        obj, _, leaf = k.rpartition('.')
+        target = cfg
+        for part in obj.split('.') if obj else []:
+            target = getattr(target, part)
+        setattr(target, leaf, v)
     # 学習済み地図は明示したときだけ読む。設定に残った値を暗黙に拾うと
     # cold のつもりが warm になる (実測で kkf_cold が kkf_conv と同値になった)
     cfg.state_dir = state_dir or ''
@@ -345,10 +351,35 @@ def grant_simple(veh, i):
     return veh.ants[i].assigned_bs >= 0
 
 
-def load_poses(path):
+def detect_motion_start(poses_path):
+    """交通が走り出したシム時刻を poses.csv から求める。
+
+    全車は prefill で道路上に配置され、/sim/all_ready を受けて同時に走り出す。
+    このバリアは実時間で決まるため、シム時刻での発火点は走行ごとに 4-44 秒と
+    大きくばらつく。発火前は全車が静止したまま通信だけが計算されており、実測で
+    閾値超えサンプルの 7.8-50.7% が静止中のものだった。記録どうしを比べるには
+    ここを揃える必要がある。
+    """
+    d = pd.read_csv(poses_path, usecols=['t_s', 'model', 'x'])
+    # 書き出しが途中で切れた行はモデル名が欠けることがある
+    d = d.dropna(subset=['t_s', 'model', 'x'])
+    d = d[d['model'].str.startswith(('tx', 'tf'), na=False)]
+    if d.empty:
+        return None
+    d = d.sort_values('t_s')
+    moved = d.groupby('model')['x'].diff().abs() > 1e-4
+    t = d.loc[moved, 't_s']
+    return float(t.min()) if len(t) else None
+
+
+def load_poses(path, t_max=None, t_min=None):
     """poses.csv を {model: (times, xyz)} に整える (スケジューラの位置入力)。"""
     d = pd.read_csv(path)
     d['t_s'] = d['t_s'].round(6)
+    if t_max is not None:
+        d = d[d['t_s'] <= t_max]
+    if t_min is not None:
+        d = d[d['t_s'] >= t_min]
     out = {}
     for name, g in d.groupby('model'):
         g = g.sort_values('t_s')
@@ -358,7 +389,7 @@ def load_poses(path):
     return out
 
 
-def load_pairs(pairs_dir, cfg):
+def load_pairs(pairs_dir, cfg, t_max=None, t_min=None):
     """<vehicle>_pairs.csv を (時刻 × アンテナ × BS) の密行列に整える。"""
     out = {}
     for f in sorted(glob.glob(os.path.join(pairs_dir, '*_pairs.csv'))):
@@ -367,6 +398,12 @@ def load_pairs(pairs_dir, cfg):
         if d.empty:
             continue
         d['t_s'] = d['t_s'].round(6)
+        if t_max is not None:
+            d = d[d['t_s'] <= t_max]
+        if t_min is not None:
+            d = d[d['t_s'] >= t_min]
+        if d.empty:
+            continue
         times = np.sort(d['t_s'].unique())
         n_ant = int(d['ant'].max()) + 1
         n_bs = int(d['bs'].max()) + 1
@@ -400,6 +437,22 @@ def main():
                          '判断ミスの代償を変える軸 (既定は記録時の設定)')
     ap.add_argument('--out', required=True, help='出力ディレクトリ')
     ap.add_argument('--config', default=None, help='実効 sim_params (省略時は rec_dir から探す)')
+    ap.add_argument('--t-min', type=float, default=None,
+                    help='このシム時刻より前を捨てる [s]')
+    ap.add_argument('--from-motion', action='store_true',
+                    help='交通が走り出した時刻を poses.csv から検出し、そこを'
+                         '評価の起点にする。/sim/all_ready の発火はシム時刻では'
+                         '走行ごとに 4-44 秒とばらつき、それ以前は全車が静止した'
+                         'まま通信だけが計算されている (実測で閾値超えサンプルの'
+                         '7.8-50.7%%)。記録どうしを比べるときは必須')
+    ap.add_argument('--duration', type=float, default=None,
+                    help='評価窓の長さ [s]。起点 (--t-min / --from-motion、既定 0) '
+                         'から この長さだけを評価する。走行ごとに窓を揃えるための指定')
+    ap.add_argument('--t-max', type=float, default=None,
+                    help='このシム時刻までで打ち切る [s]。記録の長さは走行ごとに'
+                         '違う (交通が詰まった走行は max_sim_time_s で切られ、'
+                         'そうでない走行は全車完走で早く終わる) ため、記録どうしを'
+                         '比べるときは共通の窓に揃える')
     a = ap.parse_args()
 
     cfg_path = a.config
@@ -417,7 +470,25 @@ def main():
     pairs_dir = os.path.join(a.rec_dir, 'pairs')
     if not os.path.isdir(pairs_dir):
         pairs_dir = a.rec_dir
-    vehicles = load_pairs(pairs_dir, cfg)
+    t_min = a.t_min
+    if a.from_motion:
+        poses_for_detect = os.path.join(a.rec_dir, 'poses.csv')
+        if not os.path.exists(poses_for_detect):
+            sys.exit(f"--from-motion には姿勢が要ります: {poses_for_detect}")
+        detected = detect_motion_start(poses_for_detect)
+        if detected is None:
+            sys.exit(f"走り出しを検出できません: {poses_for_detect}")
+        t_min = detected if t_min is None else max(t_min, detected)
+    t_max = a.t_max
+    if a.duration is not None:
+        span = (t_min or 0.0) + a.duration
+        t_max = span if t_max is None else min(t_max, span)
+    if t_min is not None or t_max is not None:
+        print(f"[replay] 評価窓 t = "
+              f"{'-inf' if t_min is None else f'{t_min:.3f}'} .. "
+              f"{'inf' if t_max is None else f'{t_max:.3f}'} s")
+
+    vehicles = load_pairs(pairs_dir, cfg, t_max=t_max, t_min=t_min)
     if not vehicles:
         sys.exit(f"RSSI 表が見つかりません: {pairs_dir}")
 
@@ -437,7 +508,7 @@ def main():
         poses_path = os.path.join(a.rec_dir, 'poses.csv')
         if not os.path.exists(poses_path):
             sys.exit(f"KKF には姿勢が要ります: {poses_path}")
-        poses = load_poses(poses_path)
+        poses = load_poses(poses_path, t_max=t_max, t_min=t_min)
         ov = {}
         for kv in a.kkf_set:
             k, _, v = kv.partition('=')

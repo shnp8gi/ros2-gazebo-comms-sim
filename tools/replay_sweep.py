@@ -64,6 +64,8 @@ def arm_specs(state_dir, common=None):
       kkf_cold_probe  「地図を持つ」価値と「事前に学習する」価値の分離
       kkf_nolcb       LCB (不確実性を使った慎重な選択) の価値
       kkf_novar       遮蔽リスク地図 σ_ν² の価値
+      kkf_nokrig      残差クリギング (式(24)(25)の第2項) の価値
+      kkf_frozen      走行内の KF 更新の価値 (地図を凍結し予測のみ)
       oracle          全ペアの現在真値を雑音なしで使う情報上界。
                       「予測が完璧なら何点取れるか」= 地図を改良する余地の上限。
                       これが assoc_hold と並ぶなら、その構成では地図に価値がない
@@ -83,15 +85,53 @@ def arm_specs(state_dir, common=None):
         'kkf_novar': ['--arm', 'kkf'] + warm + c + ['--kkf-set', 'varmap_enabled=false'],
         'oracle': ['--arm', 'kkf', '--observe-all-pairs'] + c
                   + ['--kkf-set', 'control_plane=oracle'],
+        'kkf_nokrig': ['--arm', 'kkf'] + warm + c
+                      + ['--kkf-set', 'kkf_params.residual_buffer_size=0'],
+        'kkf_frozen': ['--arm', 'kkf'] + warm + c
+                      + ['--kkf-set', 'kkf_freeze=true'],
     }
 
 
-def run_one(rec_dir, arm, extra, out_root, timeout):
+def patched_config(rec_dir, out, patches):
+    """シードの実効設定にパッチを当てた写しを作り、そのパスを返す。
+
+    全シードで同じ設定ファイルを使い回すと channel.seed 等の走行固有値が
+    壊れるため、シードごとの実効設定を土台にして必要な鍵だけ差し替える。
+    """
+    import yaml
+    src = os.path.join(rec_dir, 'effective_sim_params.yaml')
+    if not patches:
+        return src
+    d = yaml.safe_load(open(src, encoding='utf-8'))
+    for kv in patches:
+        k, _, v = kv.partition('=')
+        node = d
+        parts = k.strip().split('.')
+        for part in parts[:-1]:
+            node = node[part]
+        node[parts[-1]] = yaml.safe_load(v)
+    os.makedirs(out, exist_ok=True)
+    dst = os.path.join(out, 'patched_sim_params.yaml')
+    with open(dst, 'w', encoding='utf-8') as f:
+        yaml.safe_dump(d, f, allow_unicode=True, sort_keys=False)
+    return dst
+
+
+def run_one(rec_dir, arm, extra, out_root, timeout, patches=(), t_max=None,
+            t_min=None, from_motion=False, duration=None):
     seed = os.path.basename(rec_dir.rstrip('/'))
     out = os.path.join(out_root, 'per_run', f'{arm}__{seed}')
-    cfg = os.path.join(rec_dir, 'effective_sim_params.yaml')
+    cfg = patched_config(rec_dir, out, patches)
     cmd = [sys.executable, os.path.join(TOOLS_DIR, 'replay_sim.py'), rec_dir,
            '--out', out, '--config', cfg] + extra
+    if t_max is not None:
+        cmd += ['--t-max', str(t_max)]
+    if t_min is not None:
+        cmd += ['--t-min', str(t_min)]
+    if from_motion:
+        cmd += ['--from-motion']
+    if duration is not None:
+        cmd += ['--duration', str(duration)]
     try:
         r = subprocess.run(cmd, capture_output=True, text=True, timeout=timeout)
     except subprocess.TimeoutExpired:
@@ -120,6 +160,21 @@ def main():
                     help='--tune で振る値')
     ap.add_argument('--kkf-common', nargs='*', default=[], metavar='KEY=VAL',
                     help='全 kkf アームに共通で渡す設定')
+    ap.add_argument('--from-motion', action='store_true',
+                    help='交通が走り出した時刻を各記録から検出し、そこを評価の'
+                         '起点にする。/sim/all_ready の発火はシム時刻で走行ごとに'
+                         'ばらつき、それ以前は全車静止のまま通信だけが計算されて'
+                         'いる。記録どうしを比べるときは --duration と併用する')
+    ap.add_argument('--t-min', type=float, default=None,
+                    help='このシム時刻より前を捨てる [s]')
+    ap.add_argument('--duration', type=float, default=None,
+                    help='評価窓の長さ [s]。走行ごとに窓を揃える')
+    ap.add_argument('--t-max', type=float, default=None,
+                    help='全再生をこのシム時刻で打ち切る [s]。記録の長さは走行ごとに'
+                         '違うので、記録どうしを比べるときは必ず揃える')
+    ap.add_argument('--param-set', nargs='*', default=[], metavar='DOTTED.KEY=VAL',
+                    help='各シードの実効設定に当てるパッチ (例 '
+                         'comms_simulator_node.ros__parameters.rate_model.snr_min_db=26.5)')
     ap.add_argument('--tag-prefix', default='',
                     help='--tune のアーム名の接頭辞 (2因子掃引の突き合わせ用)')
     a = ap.parse_args()
@@ -141,7 +196,8 @@ def main():
     jobs = [(r, arm, extra) for r in recs for arm, extra in specs.items()]
     results, failures = [], []
     with cf.ThreadPoolExecutor(max_workers=a.jobs) as ex:
-        futs = [ex.submit(run_one, r, arm, extra, a.out, a.timeout)
+        futs = [ex.submit(run_one, r, arm, extra, a.out, a.timeout, a.param_set,
+                          a.t_max, a.t_min, a.from_motion, a.duration)
                 for r, arm, extra in jobs]
         for i, f in enumerate(cf.as_completed(futs), 1):
             arm, seed, csv, err = f.result()
