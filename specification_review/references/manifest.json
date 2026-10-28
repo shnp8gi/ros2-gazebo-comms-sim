@@ -1,0 +1,113 @@
+[
+  {
+    "id": "S1",
+    "file": "petrov_2020_802153d.pdf",
+    "url": "https://arxiv.org/pdf/2011.01683",
+    "bytes": 601766,
+    "sha256": "d8b391ca1016306ff2ef8ccbf48308b73c8f3085af6a59668e7ada8fa1d67b65",
+    "status": "downloaded",
+    "title": "Petrov, Kürner, Hosako: IEEE 802.15.3d: First Standardization Efforts for Sub-Terahertz Band Communications towards 6G",
+    "date": "2020",
+    "source_type": "研究論文・標準化関係者による解説",
+    "used_sections": "§III、§IV-C、Fig.2/4（PDF p.3–4）",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S2",
+    "file": "itu_m2227_2017.pdf",
+    "url": "https://www.itu.int/dms_pub/itu-r/opb/rep/R-REP-M.2227-2-2017-PDF-E.pdf",
+    "bytes": 1385566,
+    "sha256": "11c86a4729df8c54701f82e8213f67f1d5f6b7e1bfb098e8e5b6036a9b73004b",
+    "status": "downloaded",
+    "title": "ITU-R M.2227-2: Use of multiple gigabit wireless systems in frequencies around 60 GHz",
+    "date": "2017/2018",
+    "source_type": "ITU公式技術報告",
+    "used_sections": "§8.1.1–8.1.2、Table 14（PDF p.23–24）",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S3",
+    "file": "tg3e_sc_phy_draft_2015.docx",
+    "url": "https://mentor.ieee.org/802.15/dcn/15/15-15-0665-00-003e-proposal-for-ieee802-15-3e-sc-phy-draft.docx",
+    "status": "unavailable",
+    "error": "HTTP Error 418: Unknown Code",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S4",
+    "file": "tg3e_association_proposal_2015.pptx",
+    "url": "https://mentor.ieee.org/802.15/dcn/15/15-15-0660-02-003e-proposal-for-ieee802-15-3e-mac-superframe-and-association.pptx",
+    "status": "unavailable",
+    "error": "HTTP Error 418: Unknown Code",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S5",
+    "file": "tg3e_mac_proposal_2015.pptx",
+    "url": "https://mentor.ieee.org/802.15/dcn/15/15-15-0917-00-003e-15-3e-mac.pptx",
+    "status": "unavailable",
+    "error": "HTTP Error 418: Unknown Code",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S6",
+    "file": "ohno_mic_standardization_2025.pdf",
+    "url": "https://www.kiai.gr.jp/jigyou/R7/PDF/0724p2.pdf",
+    "bytes": 12628953,
+    "sha256": "83b36b94e687993d7f2c78ad616a117e1e0e4a71862b44f868c3408761747774",
+    "status": "downloaded",
+    "title": "大野誠司（総務省）: Beyond 5G時代におけるテラヘルツ波の利用に向けた国内外の動向と総務省の取組",
+    "date": "2025-07-24",
+    "source_type": "行政機関講演・改訂経緯の説明",
+    "used_sections": "スライド24（PDF p.25）",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S7",
+    "file": "lee_2017_ook_phy.pdf",
+    "url": "https://apmc-mwe.org/mwe2017/pdf/WS_01/FR5B-2_1.pdf",
+    "bytes": 672186,
+    "sha256": "deb2b1afa36b858107d466ac3c706627d5fac9d657585850c7867b9633ef7404",
+    "status": "downloaded",
+    "title": "Lee, Lee (ETRI): Low Complexity PHY for IEEE 802.15.3e Close Proximity Point-to-Point Communication",
+    "date": "2017",
+    "source_type": "会議発表概要・OOK PHY",
+    "used_sections": "p.1（SCへの数値流用はしない）",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S8",
+    "file": "etri_2016_hrcp_trends.pdf",
+    "url": "https://ksp.etri.re.kr/ksp/article/file/15667.pdf",
+    "status": "downloaded",
+    "sha256": "7e12a559cd67658b1e46662c7f179085857bc9864f7511c8124e66a203586989",
+    "bytes": 9857066,
+    "title": "ETRI: 초고속 근접통신 기술동향（超高速近接通信の技術動向）",
+    "date": "2016",
+    "source_type": "標準化途中の技術解説",
+    "used_sections": "§IV（SIFS/RIFS、Stack ACK）、§V",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  },
+  {
+    "id": "S9",
+    "file": "etri_2016_hrcp_overview.pdf",
+    "url": "https://ksp.etri.re.kr/ksp/article/file/5197.pdf",
+    "status": "downloaded",
+    "sha256": "27bbcd0ea34dc6a122cbc45c56f510f2a077a3fc36b4ed64b4cd929b6e616697",
+    "bytes": 1473527,
+    "title": "ETRI: IEEE 802.15.3e 초고속 근접통신 표준기술 동향（標準技術動向）",
+    "date": "2016-02",
+    "source_type": "標準化途中の技術解説",
+    "used_sections": "Fig.11、Table 3a（PDF p.11）",
+    "retrieved_date": "2026-10-28",
+    "normative_standard_text": false
+  }
+]

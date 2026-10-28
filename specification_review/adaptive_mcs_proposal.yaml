@@ -1,0 +1,130 @@
+profile_id: adaptive_mcs_design_v0
+status: proposal_only_not_loaded
+user_confirmed_adaptive_modulation: true
+reference_table: src/comms_sim_pkg/config/MCStable.csv
+reference_rate_definition: unknown
+rssi_reference_plane: null
+reference_plane_candidates:
+- antenna_terminal
+- tjx_input
+data_direction: A_TO_B
+symbol_rate_hz: 1760000000
+symbol_rate_status: lab_assumption_for_3d
+pilot_enabled: false
+standard_conformance: false
+ldpc_matrices_available: false
+profiles:
+- lab_profile_id: AB0
+  rssi_lower_dbm: -68.5
+  rssi_upper_dbm: -65.5
+  table_rate_gbps: 0.5
+  modulation: BPSK
+  bits_per_symbol: 1
+  ldpc_n: 1440
+  ldpc_k: 1056
+  code_rate: 11/15
+  nominal_information_rate_gbps: 1.2906666666666666
+  table_to_nominal_ratio: 0.38739669421487605
+  standard_mcs_id: null
+  assignment_status: 独自仮対応・実機との対応未確認
+- lab_profile_id: AB1
+  rssi_lower_dbm: -65.5
+  rssi_upper_dbm: -62.5
+  table_rate_gbps: 1.1
+  modulation: BPSK
+  bits_per_symbol: 1
+  ldpc_n: 1440
+  ldpc_k: 1344
+  code_rate: 14/15
+  nominal_information_rate_gbps: 1.6426666666666667
+  table_to_nominal_ratio: 0.6696428571428572
+  standard_mcs_id: null
+  assignment_status: 独自仮対応・実機との対応未確認
+- lab_profile_id: AB2
+  rssi_lower_dbm: -62.5
+  rssi_upper_dbm: -58.5
+  table_rate_gbps: 2.15
+  modulation: QPSK
+  bits_per_symbol: 2
+  ldpc_n: 1440
+  ldpc_k: 1056
+  code_rate: 11/15
+  nominal_information_rate_gbps: 2.5813333333333333
+  table_to_nominal_ratio: 0.8329028925619835
+  standard_mcs_id: null
+  assignment_status: 独自仮対応・実機との対応未確認
+- lab_profile_id: AB3
+  rssi_lower_dbm: -58.5
+  rssi_upper_dbm: -54.0
+  table_rate_gbps: 2.7
+  modulation: QPSK
+  bits_per_symbol: 2
+  ldpc_n: 1440
+  ldpc_k: 1344
+  code_rate: 14/15
+  nominal_information_rate_gbps: 3.2853333333333334
+  table_to_nominal_ratio: 0.8218344155844156
+  standard_mcs_id: null
+  assignment_status: 独自仮対応・実機との対応未確認
+- lab_profile_id: AB4
+  rssi_lower_dbm: -54.0
+  rssi_upper_dbm: -50.5
+  table_rate_gbps: 4.6
+  modulation: 16QAM
+  bits_per_symbol: 4
+  ldpc_n: 1440
+  ldpc_k: 1056
+  code_rate: 11/15
+  nominal_information_rate_gbps: 5.1626666666666665
+  table_to_nominal_ratio: 0.8910123966942148
+  standard_mcs_id: null
+  assignment_status: 独自仮対応・実機との対応未確認
+- lab_profile_id: AB5
+  rssi_lower_dbm: -50.5
+  rssi_upper_dbm: null
+  table_rate_gbps: 6.0
+  modulation: 16QAM
+  bits_per_symbol: 4
+  ldpc_n: 1440
+  ldpc_k: 1344
+  code_rate: 14/15
+  nominal_information_rate_gbps: 6.570666666666667
+  table_to_nominal_ratio: 0.9131493506493507
+  standard_mcs_id: null
+  assignment_status: 独自仮対応・実機との対応未確認
+below_minimum: no_supported_data_profile
+control_ab:
+  modulation: BPSK
+  ldpc_n: 1440
+  ldpc_k: 1056
+  status: lab_proposal_not_standard_command_requirement
+control_ba:
+  modulation: pi_over_2_QPSK
+  code_rate: 11/15
+  reference: ITU_R_M2227_2_Table14_MCS0
+  status: lab_selection
+feedback:
+  measurement_source: B_received_AB_frames
+  delivery: Response_and_DATA_ACK
+  cannot_substitute_reverse_rssi: true
+  initial_data_profile: AB0
+  update_after_valid_feedback: true
+  require_profile_in_forward_phy_header: true
+  header_protection: fixed_robust_scheme_not_payload_adaptive
+  profile_announcement_uses_lab_ids_not_standard_mcs_ids: true
+  reserved_response_bytes_proposal: signed_int16_measured_rssi_0.25dB
+  data_ack_body_extension_proposal: '4bytes: signed_rssi16_profile8_flags8; add_FCS_and_recompute_duration'
+  failure_policy: existing_500ms_wait_retained_in_first_comparison_no_implicit_retry_change
+adaptation_rule:
+  base: highest_profile_with_threshold_at_or_below_feedback_rssi
+  hysteresis_db: 0
+  holdoff_frames: 0
+  status: initial_lab_comparison_only
+  stale_feedback_expiry_ms: 500
+validation:
+  compare_fixed_vs_adaptive: true
+  power_and_symbol_rate_constant: true
+  use_soft_llr: true
+  noise_variance_from_esn0_not_information_rate: true
+  missing_ldpc_matrix_action: reject_coded_simulation
+  do_not_apply_table_as_second_rate_limit: true

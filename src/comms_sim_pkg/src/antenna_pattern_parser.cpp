@@ -4,6 +4,7 @@
 #include <algorithm>
 #include <cmath>
 #include <iostream>
+#include <stdexcept>
 
 namespace comms_sim {
 
@@ -42,8 +43,7 @@ void AntennaPatternParser::load_pattern(const std::string& filepath,
                                         double& peak) {
   std::ifstream file(filepath);
   if (!file.is_open()) {
-    std::cerr << "Failed to open file: " << filepath << std::endl;
-    return;
+    throw std::runtime_error("アンテナCSVを開けません: " + filepath);
   }
 
   std::string line;
@@ -81,6 +81,8 @@ void AntennaPatternParser::load_pattern(const std::string& filepath,
             gain_str.replace(pos, 3, "-"); // "−" is 3 bytes in UTF-8
           }
           double gain = std::stod(gain_str);
+          if (!std::isfinite(angle) || !std::isfinite(gain))
+            throw std::runtime_error("非有限値");
           angles.push_back(angle);
           gains.push_back(gain);
           if (gain > peak) peak = gain;
@@ -91,6 +93,8 @@ void AntennaPatternParser::load_pattern(const std::string& filepath,
     }
   }
 
+  if (angles.size() < 2) throw std::runtime_error("アンテナCSVの有効データが不足: " + filepath);
+
   // Sort by angle
   std::vector<std::pair<double, double>> data;
   data.reserve(angles.size());
@@ -99,6 +103,8 @@ void AntennaPatternParser::load_pattern(const std::string& filepath,
   }
   std::sort(data.begin(), data.end());
   for (size_t i = 0; i < data.size(); ++i) {
+    if (i && data[i].first == data[i-1].first)
+      throw std::runtime_error("アンテナCSVの角度が重複: " + filepath);
     angles[i] = data[i].first;
     gains[i] = data[i].second;
   }

@@ -8,8 +8,8 @@ export FASTRTPS_DEFAULT_PROFILES_FILE=/workspace/src/comms_sim_pkg/config/fastdd
 source /opt/ros/humble/setup.bash
 
 # Source workspace if built
-if [ -f /workspace/install/setup.bash ]; then
-    source /workspace/install/setup.bash
+if [ -f /workspace/install/drone/setup.bash ]; then
+    source /workspace/install/drone/setup.bash
 fi
 
 # Execute command

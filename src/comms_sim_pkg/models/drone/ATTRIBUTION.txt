@@ -1,0 +1,17 @@
+Parrot Bebop 2 drone model
+Fuel uploader: MuhammadIrhamArijan
+Original author in model.config: Olivier Crave (Parrot)
+Source: https://app.gazebosim.org/MuhammadIrhamArijan/fuel/models/drone
+Downloaded API: https://fuel.gazebosim.org/1.0/MuhammadIrhamArijan/models/drone/1/drone.zip
+Fuel version: 1
+License reported by Fuel: Creative Commons Attribution 4.0 International (CC BY 4.0)
+License: https://creativecommons.org/licenses/by/4.0/
+Archive SHA256: 025be2d98652523f1b7523faff0f1318d57ff2619fc7d905da104a8ef26af231
+
+Local changes:
+- Retained static=false so Gazebo publishes moving model poses to the GUI.
+- The encounter world disables gravity and prescribes model poses.
+- mesh URI prefix changed from model://parrot_bebop_2/ to model://drone/.
+- launch creates two instances named drone_a and drone_b, with absolute local mesh paths.
+Meshes and thumbnails are unchanged; source_model.sdf preserves the original SDF.
+No endorsement by the original author or uploader is implied.

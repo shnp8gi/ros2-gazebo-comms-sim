@@ -1,0 +1,51 @@
+Gazebo接続済み仮PHY: lab_iq_rect_v0_uncoded
+更新: 2026-10-28
+
+実装した範囲
+・provisional_design_ja.txtのlab_mac80_v0、37 bit仮PHYヘッダー、HCS16、EH(16,11)を使用。
+・Beacon/Request/Response body16 byte、ACK body0、DATA body2048 byteを実際のビット列に変換。
+・RequestがBeaconの16 bit通番を参照。ResponseでRequestのnonceをechoし、ACKで相手の送信通番を確認。
+・DATAはseed/送信UID/ブロック番号から再現できるcounter方式。今回は高速なSplitMix64のmix関数を使用。設計案のSHA-256版とは別方式。
+・AB QPSK、BA π/2回転QPSK。1.76 Gbaud、2 sample/symbolの複素I/QにBox–MullerのGaussian雑音を加算する。
+・受信機IDと絶対sample番号から雑音を決めるため、ブロック分割位置や処理順に依存しない。
+・preamble相関、EH復号、ヘッダーCRC、body CRCで判定。理論PERによる成否抽選は使用しない。
+・受信電力/SNRからEb/N0を求めて、単位信号エネルギーに対する雑音分散へ正規化。RF電力を二重加算しない。
+・送信時間は実際のsample数で決定。DATAの転送量にヘッダー/FCS/paddingを加算しない。
+・受信区間と自機送信区間の重複は、Beacon番号が異なっても失敗する。
+・500 msの接続待ちと接続後の切断を別集計する現行ルールは維持。
+
+規格目標と、今回の実装の違い
+これはTHz-SC/HRCP-SCの完全実装ではなく、規格の解説資料を参考にした独自の試作PHY。
+1. payloadのLDPCは未実装。規定行列を得ずに符号化利得を仮定していない。payload_fecにnone以外を指定すると起動エラー。
+2. パルス整形はunit-energyの矩形2sample/symbolと積分受信。RRC、帯域外成分、ISI、CFO、クロック偏差は未実装。
+3. フレーム到来窓とシンボル位相を与える。窓内のpreamble相関で受信可否を判定するが、連続待受けの探索・誤警報・検出時刻ジッタは未実装。
+   雑音だけの待受け区間は計算していない。この実装だけで「AWGNでRequest送出時刻が遅れて別Beaconと重なる確率」は評価できない。
+4. 伝搬時間はsample単位に切り上げる。誤差は1 sample未満（約0.284 ns）。端数遅延フィルタは未実装。
+5. 制御のIFS/アクセス開始時刻は共通protocol設定で与える。Beacon bodyには仮スロット情報を載せるが、独立した受信スケジューラによる遅延スロット見送りは未実装。
+6. 正式なスクランブラ/プリアンブル系列/MACコマンド構成/CRC条件との照合は未完了。規格互換という名称では記録しない。
+7. I/Q波形は受信判定が必要なフレーム窓だけ生成し保存しない。感度不足・半二重の場合は先に失敗が確定するためprocessed_samples=0。
+8. 同じ無線SNRをフレーム内で一定とする（現行の開始/中間/終端等で得た最小SNR）。反射・マルチパス・Dopplerはモデル外。
+
+設定と起動
+既存drone_params.yamlは従来の統計AWGNを維持。
+新モード: src/comms_sim_pkg/config/drone_lab_phy.yaml（通常40秒、最接近20秒）。
+動作確認: src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml（1.1秒、最接近0.55秒）。
+lab_phy.enabled=trueのとき、awgn.control_frame_bytes、protocol.control_frame_us、protocol.data_frame_usは従来方式用の値として残るが、仮PHYの長さ/送信時間には使わない。
+仮PHYはcontrol body16 byte、ACK0、DATAはlab_phy.data_bytes、送信時間は実際の符号化ビット数から算出する。
+
+Dockerグループでのビルド:
+sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp build'
+テスト:
+sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp sim bash -c "ctest --test-dir build/drone/comms_sim_pkg --output-on-failure"'
+4条件headless動作確認（新しい結果ディレクトリを自動作成）:
+sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp -e DISPLAY= -e GZ_PARTITION=lab_phy_run sim python3 tools/run_drone_scenarios.py --config src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml'
+通常40秒を実行する場合はconfigをdrone_lab_phy.yamlへ変更する。今回確認したのは短時間の動作であり、40秒の4条件比較結果とは異なる。
+
+検証と出力
+単体: CRC既知ベクトル、EH単一bit訂正/二重bit検出、body破損、全フレーム高/低SNR、QPSK理論BERとの一致、奇数sample境界分割一致、更新刻み不変、接続/転送量、500ms待ち、異なるBeaconの半二重重複。
+Gazebo: sim_results/lab_phy_gazebo_20261028_v1/に4条件と故意の重複条件を保存。
+frames.csvの追加列: phy_model、tx_start_sample、tx_samples、rx_start_sample、processed_samples、bit_errors、checked_bits、sync_metric、wire_sequence、wire_reference。
+frame_bitsは仮PHYではbody情報bit数。bit_errors/checked_bitsはpayloadとFCSの復調硬判定の比較。ヘッダーは含まない。
+perはNaN、random_drawは−1。berは比較用の無符号QPSK理論値であり、CRC受信可否は実際の復調結果で決まる。
+ログ専用beacon_indexと、実際にヘッダーへ載せた16 bit通番は区別する。
+詳細な時刻/サンプル整合検証: python3 tools/validate_lab_phy_results.py <結果ディレクトリ> ...

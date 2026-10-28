@@ -1,0 +1,68 @@
+# ドローン2機の異帯域双方向リンク。周波数はHz、電力はmW、速度はkm/h。
+scenario: parallel             # parallel / cross
+antenna_mode: fixed            # fixed / tracking。固定は横向き、十字はA左/B右で交差後の相手側
+drone_a:
+  speed_kmh: 50.0
+  altitude_m: 20.0
+  fixed_elevation_deg: 45.0
+drone_b:
+  speed_kmh: 50.0
+  altitude_m: 30.0
+  fixed_elevation_deg: -45.0
+lateral_separation_m: 10.0     # parallelのみ。crossは平面上で経路が交差。
+encounter_time_s: 20.0         # この時刻に両機が経路中央を通過する
+duration_s: 40.0
+radio_ab:
+  frequency_hz: 272.0e9
+  power_mw: 0.7943282347242815  # -1 dBm。Excel「リンク_4m_1」B11
+  sensitivity_dbm: -68.5
+  tx_antenna_gain_dbi: 24.0
+  rx_antenna_gain_dbi: 24.0
+  tx_insertion_loss_db: 0.0   # Excelの損失は負値、本設定では正値で指定
+  rx_lna_gain_db: 25.0
+  rx_conversion_gain_db: 3.0
+  rx_insertion_loss_db: 3.0
+  noise_temperature_k: 300.0
+  noise_bandwidth_hz: 2.1648e9 # 1.76 Gbaud × (1 + 0.23)。雑音等価帯域の近似
+  receiver_noise_figure_db: 10.0 # アンテナ端換算の受信系等価NFとして採用
+  required_snr_db: null      # 固定SNR閾値なし。AWGN抽選にはSNRを使用する
+radio_ba:
+  frequency_hz: 61.0e9
+  power_mw: 0.15848931924611134 # -8 dBm。Excel「リンク_4m_1」W11
+  sensitivity_dbm: -68.5
+  tx_antenna_gain_dbi: 23.0
+  rx_antenna_gain_dbi: 23.0
+  tx_insertion_loss_db: 3.0
+  rx_lna_gain_db: 0.0
+  rx_conversion_gain_db: 0.0
+  rx_insertion_loss_db: 3.0
+  noise_temperature_k: 300.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 0.0 # ユーザー指定：理想受信機。実測値が分かってから変更
+  required_snr_db: null
+propagation:
+  exponent: 2.0
+  # c=299792458 m/s。Excelの近似値3e8とはPLが約0.006 dB異なる。
+antenna:
+  e_plane: e_plane.csv
+  h_plane: h_plane.csv
+  max_attenuation_db: 30.0
+mcs_table: MCStable.csv         # 両帯域の実測値ではなく既存の比較用テーブル
+awgn:
+  enabled: true                # Gray QPSK・誤り訂正なしの理論BER/PERによるフレーム抽選
+  seed: 20261027               # 再現用。別シードで独立の乱数系列を試せる
+  bit_rate_bps: 3.52e9         # 1.76 Gbaud × 2。AWGN有効時はMCS表を使わない
+  control_frame_bytes: 64      # Beacon/Request/Response/ACK/DATA_ACKの誤り判定対象長（仮定）
+protocol:
+  response_timeout_ms: 500.0
+  ack_timeout_ms: 500.0
+  inactivity_timeout_ms: 500.0
+  # 以下は規格値未確定のモデル仮定。IEEEの規定値とは主張しない。
+  beacon_interval_ms: 0.14     # ユーザー指定：送信開始から次の送信開始まで140 µs
+  control_frame_us: 20.0
+  ifs_us: 10.0
+  data_frame_us: 100.0
+simulation:
+  physics_step_s: 0.0001
+  real_time_factor: 5.0
+  log_interval_s: 0.01

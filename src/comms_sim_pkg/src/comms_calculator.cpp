@@ -4,6 +4,7 @@
 #include <sstream>
 #include <algorithm>
 #include <iostream>
+#include <stdexcept>
 
 namespace comms_sim {
 
@@ -68,9 +69,7 @@ CommsCalculator::CommsCalculator(std::unique_ptr<PropagationModel> model,
 void CommsCalculator::load_mcs_table(const std::string& path) {
   std::ifstream file(path);
   if (!file.is_open()) {
-    std::cerr << "Failed to open MCS table: " << path << std::endl;
-    init_default_mcs_table();
-    return;
+    throw std::runtime_error("MCS表を開けません: " + path);
   }
 
   std::vector<std::pair<double, double>> data;
@@ -84,17 +83,17 @@ void CommsCalculator::load_mcs_table(const std::string& path) {
     std::string t1, t2;
     if (std::getline(ss, t1, ',') && std::getline(ss, t2, ',')) {
       try {
-        data.emplace_back(std::stod(t1), std::stod(t2));
+        double rssi = std::stod(t1), rate = std::stod(t2);
+        if (!std::isfinite(rssi) || !std::isfinite(rate) || rate <= 0)
+          throw std::runtime_error("MCS値が不正");
+        data.emplace_back(rssi, rate);
       } catch (...) {
         // ignore
       }
     }
   }
 
-  if (data.empty()) {
-    init_default_mcs_table();
-    return;
-  }
+  if (data.empty()) throw std::runtime_error("MCS表の有効データがありません: " + path);
 
   std::sort(data.begin(), data.end());
   mcs_rssi_.clear();
@@ -126,7 +125,7 @@ std::pair<double, double> CommsCalculator::calculate_rssi(double distance, doubl
 }
 
 double CommsCalculator::calculate_throughput(double rssi) const {
-  if (rssi <= rssi_min) return 0.0;
+  if (rssi < rssi_min) return 0.0;
   if (rssi >= rssi_max) return mcs_throughput_.back();
 
   auto it = std::upper_bound(mcs_rssi_.begin(), mcs_rssi_.end(), rssi);

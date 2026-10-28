@@ -1,0 +1,20 @@
+項目,採用値または方針,根拠の区分,出典ID,参照箇所,注意,URL
+MAC方式,Pairnet、Beacon→Request→Response→ACK,論文で構造確認,S1,§III/Fig.2,異帯域の方向別PHYは実験拡張,https://arxiv.org/pdf/2011.01683
+272 GHz PHY,"THz-SC、QPSK、LDPC(1440,1056)",論文で選択肢確認,S1,§IV-C/Fig.4,行列・ビット順は未確定,https://arxiv.org/pdf/2011.01683
+3dヘッダー,PHY37 bit / MAC80 bit / HCS16 bit,論文で幅を確認,S1,Fig.4,CRC詳細と拡張Hammingのパラメータは未確定,https://arxiv.org/pdf/2011.01683
+61 GHz PHY,HRCP-SC MCS0、π/2 QPSK、11/15,ITU報告で確認,S2,§8/Table 14,LDPC符号長1440/1056のBA流用は時間見積り専用仮定,https://www.itu.int/dms_pub/itu-r/opb/rep/R-REP-M.2227-2-2017-PDF-E.pdf
+3eレート,2.5813 Gbps、パイロットなし,ITU報告で確認,S2,Table 14,1.76 Gbaudは表から推定。ABへの適用は仮定,https://www.itu.int/dms_pub/itu-r/opb/rep/R-REP-M.2227-2-2017-PDF-E.pdf
+3eプリアンブル,128×26 chip,成立前資料に記載,S9,Fig.11,最終版の系列・極性は未確認,https://ksp.etri.re.kr/ksp/article/file/5197.pdf
+3dプリアンブル,PSP約2.91 µs / PAP約1.89 µs,論文で概数確認,S1,§IV-C,5120/3328 chipへの整数化は仮定,https://arxiv.org/pdf/2011.01683
+周波数,AB272 GHz / BA61 GHz,ユーザー指定,USER,,規定チャネル中心との対応は未確認,
+実験タイマー,Beacon140 µs / 待ち500 ms,ユーザー指定,USER,,規格値と呼ばない。新Beaconで待ち期限更新しない,
+アクセススロット,1個・受信終端+10 µs・幅20 µs,独自仮定,LAB,,スロット方式自体の参考はS1。遅延時挙動は要実機照合,
+MACビット配列,lab_mac80_v0,独自仮定,LAB,,80 bitという長さ以外のフィールドは規格未確認,
+CRC/ヘッダー符号,"CCITT-FALSE / ISO-HDLC / EH(16,11)",独自仮定,LAB,,規格のCRC全条件や符号パラメータではない,
+BAヘッダー,情報133 bit、符号後208 bit,独自仮定,LAB,,ABと同じ長さを借用。3eの実ヘッダー未確認,
+body長,制御16 byte / ACK0 / DATA2048 byte,独自仮定,LAB,,独自bodyフィールドをYAMLに定義,
+パルス整形,RRC α0.23、span10 symbol,独自仮定,LAB,,雑音等価帯域と参照面を検証する,
+RIFS改訂,2017/2023の条件を混ぜない,改訂説明資料,S6,slide24/PDF p.25,記載の142 µsをBeacon140 µsと同一視しない,https://www.kiai.gr.jp/jigyou/R7/PDF/0724p2.pdf
+ACK運用,Stack ACK等の存在,成立前資料に記載,S8,§IV,現行DATA_ACKを規格の完全再現と呼ばない,https://ksp.etri.re.kr/ksp/article/file/15667.pdf
+OOK資料,SCへのパラメータ流用なし,対象範囲のみ確認,S7,p.1,今回のQPSK SCの根拠には使わない,https://apmc-mwe.org/mwe2017/pdf/WS_01/FR5B-2_1.pdf
+IEEE提案資料,本文未取得,HTTP418,S3,,S4/S5も未取得。内容確認済みの根拠にしない,https://mentor.ieee.org/802.15/dcn/15/15-15-0665-00-003e-proposal-for-ieee802-15-3e-sc-phy-draft.docx

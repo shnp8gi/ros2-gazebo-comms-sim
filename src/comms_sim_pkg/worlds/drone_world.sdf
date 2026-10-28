@@ -1,0 +1,92 @@
+<sdf version="1.9">
+  <world name="drone_encounter">
+    <physics name="default" type="ignored">
+      <max_step_size>0.0001</max_step_size>
+      <real_time_factor>5</real_time_factor>
+    </physics>
+    <gravity>0 0 0</gravity>
+    <plugin filename="gz-sim-physics-system" name="gz::sim::systems::Physics" />
+    <plugin filename="gz-sim-user-commands-system" name="gz::sim::systems::UserCommands" />
+    <plugin filename="gz-sim-scene-broadcaster-system" name="gz::sim::systems::SceneBroadcaster" />
+    <light name="sun" type="directional">
+      <pose>0 0 100 0 0 0</pose>
+      <diffuse>0.8 0.8 0.8 1</diffuse>
+      <direction>-0.3 0.2 -1</direction>
+    </light>
+    <scene>
+      <ambient>0.6 0.6 0.6 1</ambient>
+      <background>0.75 0.85 0.95 1</background>
+      <shadows>false</shadows>
+    </scene>
+    <model name="ground">
+      <static>true</static>
+      <link name="ground">
+        <visual name="ground">
+          <geometry>
+            <plane>
+              <normal>0 0 1</normal>
+              <size>1200 1200</size>
+            </plane>
+          </geometry>
+          <material>
+            <ambient>0.3 0.4 0.3 1</ambient>
+            <diffuse>0.3 0.4 0.3 1</diffuse>
+          </material>
+        </visual>
+      </link>
+    </model>
+    <gui fullscreen="false">
+      <plugin filename="MinimalScene" name="3D View">
+        <gz-gui>
+          <title>Drone Encounter</title>
+          <property type="bool" key="showTitleBar">false</property>
+          <property type="string" key="state">docked</property>
+        </gz-gui>
+        <engine>ogre2</engine>
+        <scene>scene</scene>
+        <camera_pose>20 5 25 0 0 3.141592653589793</camera_pose>
+      </plugin>
+      <plugin filename="WorldControl" name="World control">
+        <gz-gui>
+          <property type="bool" key="showTitleBar">false</property>
+          <property type="string" key="state">floating</property>
+          <property type="double" key="width">200</property>
+          <property type="double" key="height">72</property>
+          <property type="double" key="x">10</property>
+          <property type="double" key="y">10</property>
+        </gz-gui>
+        <play_pause>true</play_pause>
+        <step>true</step>
+        <start_paused>false</start_paused>
+        <use_event>true</use_event>
+      </plugin>
+      <plugin filename="GzSceneManager" name="Scene Manager">
+        <gz-gui>
+          <property key="state" type="string">floating</property>
+          <property key="showTitleBar" type="bool">false</property>
+          <property key="resizable" type="bool">false</property>
+          <property key="width" type="double">5</property>
+          <property key="height" type="double">5</property>
+        </gz-gui>
+      </plugin>
+      <plugin filename="InteractiveViewControl" name="Interactive view control">
+        <gz-gui>
+          <property key="state" type="string">floating</property>
+          <property key="showTitleBar" type="bool">false</property>
+          <property key="resizable" type="bool">false</property>
+          <property key="width" type="double">5</property>
+          <property key="height" type="double">5</property>
+        </gz-gui>
+      </plugin>
+      <plugin filename="CameraTracking" name="CameraTracking">
+        <gz-gui>
+          <property key="state" type="string">floating</property>
+          <property key="showTitleBar" type="bool">false</property>
+          <property key="resizable" type="bool">false</property>
+          <property key="width" type="double">5</property>
+          <property key="height" type="double">5</property>
+        </gz-gui>
+      </plugin>
+    </gui>
+  </world>
+</sdf>

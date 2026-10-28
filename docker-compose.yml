@@ -30,8 +30,8 @@ services:
     command: >
       bash -c "
         source /opt/ros/humble/setup.bash &&
-        if [ -f /workspace/install/setup.bash ]; then
-          source /workspace/install/setup.bash
+        if [ -f /workspace/install/drone/setup.bash ]; then
+          source /workspace/install/drone/setup.bash
         fi &&
         echo 'ROS 2 + Gazebo Harmonic environment ready' &&
         bash
@@ -50,7 +50,7 @@ services:
       bash -c "
         source /opt/ros/humble/setup.bash &&
         cd /workspace &&
-        colcon build --symlink-install &&
+        colcon build --build-base build/drone --install-base install/drone --packages-select comms_sim_pkg --symlink-install &&
         echo 'Build completed successfully!'
       "
 

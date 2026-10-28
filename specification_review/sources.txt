@@ -1,0 +1,48 @@
+最新追記（2026-10-28）: ユーザー了承により公開代替資料を用いた仮設計を作成。
+provisional_design_ja.txt / provisional_profile.yaml / evidence.csv / timing_budget.csvを参照。
+PDF6件をローカル保存。references/manifest.jsonにURL・SHA256・使用箇所を記録。
+以下の過去記録の「本文入手後に確定」は規格への正式照合を指す。仮設計を止める条件ではない。
+
+規格フレーム設計の資料確認（2026-10-28）
+最終版本文はまだ未取得。Downloads/とリポジトリ内にPDFは見つからなかった。
+IEEE Xplore: https://ieeexplore.ieee.org/document/10443750
+  JavaScriptによるアクセス確認画面となり、本文を取得できない。
+IEEE 802.15.3-2023（GET Programの無料PDF案内）:
+  https://standards.ieee.org/ieee/802.15.3/10801/
+IEEE 802.15.3e-2017（60GHzのHRCP PHY/MAC概要）:
+  https://standards.ieee.org/ieee/802.15.3e/6131/
+IEEE 802.15.3d-2017（252–325GHzのPHY概要）:
+  https://standards.ieee.org/ieee/802.15.3d/6648/
+TG3e公開の提案・コメント解決資料一覧:
+  https://www.ieee802.org/15/pub/TG3e/3e_table_3.html
+  最終承認版本文の代わりにフィールド幅やタイミングを確定する根拠とはしない。
+本作業では既存通信設定・コードを変更していない。frame_requirements.csvに本文確認事項を整理した。
+
+代替資料一覧:
+S1: Petrov, Kürner, Hosako: IEEE 802.15.3d: First Standardization Efforts for Sub-Terahertz Band Communications towards 6G
+  https://arxiv.org/pdf/2011.01683
+  status=downloaded
+S2: ITU-R M.2227-2: Use of multiple gigabit wireless systems in frequencies around 60 GHz
+  https://www.itu.int/dms_pub/itu-r/opb/rep/R-REP-M.2227-2-2017-PDF-E.pdf
+  status=downloaded
+S3: tg3e_sc_phy_draft_2015.docx
+  https://mentor.ieee.org/802.15/dcn/15/15-15-0665-00-003e-proposal-for-ieee802-15-3e-sc-phy-draft.docx
+  status=unavailable
+S4: tg3e_association_proposal_2015.pptx
+  https://mentor.ieee.org/802.15/dcn/15/15-15-0660-02-003e-proposal-for-ieee802-15-3e-mac-superframe-and-association.pptx
+  status=unavailable
+S5: tg3e_mac_proposal_2015.pptx
+  https://mentor.ieee.org/802.15/dcn/15/15-15-0917-00-003e-15-3e-mac.pptx
+  status=unavailable
+S6: 大野誠司（総務省）: Beyond 5G時代におけるテラヘルツ波の利用に向けた国内外の動向と総務省の取組
+  https://www.kiai.gr.jp/jigyou/R7/PDF/0724p2.pdf
+  status=downloaded
+S7: Lee, Lee (ETRI): Low Complexity PHY for IEEE 802.15.3e Close Proximity Point-to-Point Communication
+  https://apmc-mwe.org/mwe2017/pdf/WS_01/FR5B-2_1.pdf
+  status=downloaded
+S8: ETRI: 초고속 근접통신 기술동향（超高速近接通信の技術動向）
+  https://ksp.etri.re.kr/ksp/article/file/15667.pdf
+  status=downloaded
+S9: ETRI: IEEE 802.15.3e 초고속 근접통신 표준기술 동향（標準技術動向）
+  https://ksp.etri.re.kr/ksp/article/file/5197.pdf
+  status=downloaded

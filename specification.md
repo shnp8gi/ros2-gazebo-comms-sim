@@ -1,633 +1,246 @@
-<!-- filepath: /home/yagi/ros2-gazebo-comms-sim/specification.md -->
+# ドローンすれ違い通信モデル仕様
 
-# 📡 ROS 2/Gazebo 通信シミュレータ 統合システム仕様書
+## 目的と実装範囲
 
-## 変更履歴
+ドローン2機の接近・すれ違い・離脱に伴う、接続失敗と500 msタイムアウトの条件を比較する。
+Gazebo Harmonicのworldプラグイン `DroneEncounterPlugin` が2機の軌道とアンテナ姿勢を更新し、独立したC++通信コア `drone_link` を進める。ROS 2 Humbleへ `/clock` と `/drone_a/pose`、`/drone_b/pose`（`PoseStamped`）をbridgeする。
 
-| 変更日     | バージョン | 改定内容                                                                                                                                                                                                                                                            |
-| :--------- | :--------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| 2025/12/14 | ver 1.0    | 初版                                                                                                                                                                                                                                                                |
-| 2025/12/14 | ver 2.0    | TXのマルチウェイポイント追従と区間速度制御、アンテナゲインの動的参照、通信容量上限による通信停止機能の追加、およびCSVロギング仕様の確定                                                                                                                            |
-| 2025/12/22 | ver 3.0    | MCSテーブルベースのスループット計算への変更、リンク確立時間（Association time）の実装、RSSI閾値の自動取得機能、YAMLベースの完全パラメータ化                                                                                                                         |
-| 2026/01/04 | ver 3.1    | 実装（`sim_params.yaml`/`sim_launch.py`/`comms_node.py`）に合わせて、CSV出力先・ROSインターフェース・パラメータ定義の齟齬を修正                                                                                                                                     |
-| 2026/02/16 | ver 4.0    | MCSテーブル値を現行に更新、アンテナオフセットを3D相対座標`[x,y,z]`に変更、CSV出力列名にbody/antenna/origin区分を追加、座標系説明の追加、`sampling_rate`デフォルト値修正、`rx_pose_topic`インターフェース追加、CSV出力タイミングにmission_complete時を追記 |
-| 2026/04/20 | ver 5.0    | 複数車両設定（マルチTX）への対応、`link_controller_node`による集中スケジューリング（RSSI優先による通信アクセス権の調停）の追加、データ上限到達時の動的なリンク権限譲渡機能、`/cmd_vel`監視による時間軸(`time_s`, `vehicle_time_s`)起点のゼロ化、全ミッション完了時の自動終了、およびログノードの集約と個別CSV分離出力を追加 |
-| 2026/05/01 | ver 6.0    | DockerでのNVIDIA GPUアクセラレーション対応、幾何学スコアや推定受信電力（physical_score_priority）に基づくスケジューリングポリシーの追加、切断時のプロアクティブハンドオーバー機能実装、および高速走行時のスリップ防止用加速度制限制御の追加 |
-| 2026/05/15 | ver 7.0    | カスタムモデルの追加要件（SDF記述ルール）の明文化、タイヤの空転による誤差を排除するGround Truthオドメトリ（`OdometryPublisher`）の採用、`VelocityControl`を用いた物理干渉なしの厳密な加速度制御の導入、複数アンテナ搭載時のロギング終了判定の修正、およびGazebo初期化時の座標ズレを自動修正する「初期位置検証・自己補正機能」の追加 |
-| 2026/05/21 | ver 8.0    | nominal RSSIヒートマップ事前計算に基づく車載アンテナのフィードフォワード制御ポリシー（`feedforward_optimal`）の追加、ロギングレベル5（ヒートマップ出力＋制御ログ）の導入、およびログ保存ディレクトリの3階層フォルダリング（`comms/`, `control/`, `heatmap/`）によるカプセル化（可視性向上）の実装 |
-| 2026/06/08 | ver 9.0    | メインローブフィルタリング機能の追加（ROSパラメータ `filter_main_lobe` およびアンテナ境界設定による足切り制御）、C++およびPythonのアンテナパーサーへのヌル点自動検出とメインローブ判定の移植、ならびに事前ヒートマップ（LUT）生成への連動を実装 |
-| 2026/06/18 | ver 10.0   | UGV制御・通信計算のGazebo C++システムプラグイン（`TxControllerPlugin`）移行に伴うROS 2ノード処理の集約、物理演算周期（`physics_max_step_size`）との同期、`feedforward_optimal` ポリシーにおける複数アンテナの同時割り当ておよび最大同時ペア数（`ff_max_pairs`）制限機能の追加、ログ集約ノード（`sim_logger_node.py`）の集計再計算ロジックへのリファクタリングを記述 |
+接続手順はIEEE 802.15.3eを参考にした抽象モデル。PHYの設計目標はA→B（272 GHz）が802.15.3d、B→A（61 GHz）が802.15.3eである。規格本文との条項単位の適合確認は未実施で、規定PHY波形・フレーム形式、payload FEC、MAC再送・再送上限、チャネル競合、ビーム探索の完全な実装ではない。異帯域を跨ぐ共通接続手順も本実験固有の構成である。
 
----
+参考資料：[IEEE TG3e資料一覧](https://www.ieee802.org/15/pub/TG3e/3e_table_3.html)、[ITU-R M.2227-2](https://www.itu.int/dms_pub/itu-r/opb/rep/R-REP-M.2227-2-2017-PDF-E.pdf)。これらを根拠に、下記の暫定タイミングを規格値とは扱わない。
 
+## 設定別の適用範囲
 
-## 1. プロジェクト概要
+本文の64 byte制御フレーム、20 µs／100 µs送信時間、理論BER/PER抽選は、既定の [drone_params.yaml](src/comms_sim_pkg/config/drone_params.yaml) による統計AWGNモードの仕様である。軌道、電力・熱雑音計算、半二重、140 µs周期Beacon、500 ms待ち、接続前タイムアウトと接続後切断の区別は、試作PHYにも共通する。
 
-Gazebo Simで駆動する複数台の移動車両と固定基地局間の通信品質（RSSI/スループット）を、ROS 2ノード上で数理モデルを用いてシミュレーションし、その挙動を評価する。特にIEEE 802.15.3eなどを想定した、基地局による集中スケジューリングと時分割・優先制御を模擬する。
+| モード | 設定 | 受信判定 |
+|---|---|---|
+| 統計AWGN（既定） | `lab_phy.enabled` 無効／省略、`awgn.enabled: true` | 電力・任意SNR閾値を満たすフレームに理論PER抽選 |
+| 試作I/Q PHY | `lab_phy.enabled: true`、`awgn.enabled: true`、`awgn.bit_rate_bps: 3.52e9` | 電力・任意SNR閾値と半二重を確認後、I/QへのAWGN付加・復調・CRC判定 |
+| 互換モード | `lab_phy.enabled` 無効／省略、`awgn.enabled: false` | 電力・任意SNR閾値、既存MCS表によるレート選択 |
 
----
+試作PHYの詳細は末尾の[試作I/Q PHY](#試作iq-phy)と [実装説明](specification_review/runtime_lab_phy_ja.txt) を参照。`specification_review/` の適応MCSやLDPCを含む提案は、そのまま実装済みの仕様を意味しない。
 
-## 2. 技術スタックと環境構築
+## 軌道と座標
 
-| 分野             | 項目                   | 決定事項                            | 備考                                             |
-| :--------------- | :--------------------- | :---------------------------------- | :----------------------------------------------- |
-| **OS**           | ベースOS               | Ubuntu 22.04 LTS (Dockerコンテナ内) |                                                  |
-| **ROS 2**        | ディストリビューション | **Humble Hawksbill (LTS)**          | サポート期間: 2027年5月まで。                    |
-| **シミュレータ** | 種類                   | **Gazebo Sim (Harmonic)**           | ROS 2との連携、将来性を重視。                    |
-| **開発環境**     | コンテナ               | **Docker** (推奨)                   | 環境の再現性、GUI/CUI切り替えをサポート。        |
-| **実装言語**     | 主言語                 | **Python 3** / **C++**              | 実行制御や集計は Python 3、物理・通信のコアシミュレーションは C++ プラグインで実装。 |
+ワールドはZ上向き。Aが低い機体、Bが高い機体。`v_a`、`v_b` は設定速度km/hを3.6で割ったm/s、`t_c` はすれ違い時刻。
 
----
+- A: `(v_a × (t − t_c), 0, h_a)`、機首は+X。
+- 並行B: `(-v_b × (t − t_c), d_y, h_b)`、機首は−X。
+- 十字B: `(0, v_b × (t − t_c), h_b)`、機首は+Y。
 
-## 3. シミュレーション環境 (World & Models)
+初期値は `h_a=20 m`、`h_b=30 m`、`d_y=10 m`、両機50 km/h、`t_c=20 s`、終了40 s。
+最接近距離は並行で√200 m、十字で10 m。速度を個別に変えても、各機は`t_c`に各経路の中央へ到達する。
 
-| 項目               | 詳細                                                                            | Fuel URI / 構成                                                        |
-| :----------------- | :------------------------------------------------------------------------------ | :--------------------------------------------------------------------- |
-| **ワールド**       | シンプルな無限平面 (Empty World + Ground Plane)。将来的な物体設置は可能とする。 | `minimal_world.sdf`                                                    |
-| **移動車両 (TX)** | SUVモデルに駆動系とセンサをアタッチ。                                           | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/SUV`**     |
-| **基地局**         | 高さのあるアンテナ塔モデル。固定設置。                                          | **Fuel: `https://app.gazebosim.org/OpenRobotics/fuel/models/antenna`** |
-| **モデル参照**     | Gazebo Fuelからローカルにダウンロードし、Dockerでマウントして参照する。         | `GZ_SIM_RESOURCE_PATH` を設定。                                        |
+FuelのParrot Bebop 2モデルを2個配置し、`Model::SetWorldPoseCmd`で理想軌道を指定する。機体とアンテナの原点を通信位置とし、機体形状の遮蔽は計算しない。`gazebo_poses.csv`はPhysics更新後の実位置であり、解析式から再生成した位置ではない。
 
-### 3.1. 座標系とモデル原点
+固定アンテナはAの仰角+45°、Bの仰角−45°。並行ではAが+Y側（方位角+90°）、Bが−Y側（−90°）を向くため、高度差・横間隔が各10 mの最接近時に正対する。十字も横向きの固定搭載とし、Aは機首の左90°（世界方位+90°）、Bは機首の右90°（世界方位0°）を向く。これは交差後に相手のいる側を向く配置。十字の最接近時には相手が真上／真下に来るため、仰角±45°の固定方式では正対しない。追従アンテナは相手方向へ瞬時に向く。機体姿勢とアンテナ姿勢を分離し、Gazeboのpitch符号と仰角の符号を反転して扱う。`off_axis_*_deg` はアンテナ正面軸と相手方向のなす3次元角度。E/H各面の角度とは異なる。
 
-**ワールド座標系**: ENU（East-North-Up）に準拠。
+## 無線計算
 
-| 軸  | 方向      |
-| :-- | :-------- |
-| X   | 前方 (正) |
-| Y   | 左方 (正) |
-| Z   | 上方 (正) |
+参照資料はユーザー提供の `260828_リンクバジェット試算03_5.xlsx`。
+「リンク_4m_1」の構成・送信電力・周波数を採用することをユーザーが選択した。
+受信判定の電力閾値は指定により両方向とも−68.5 dBmを維持する。
+Excelの入力・式・計算済み値と原本SHA256は `src/comms_sim_pkg/test/fixtures/link_budget_workbook.json` に保存。
+4 mは資料の照合距離であり、ドローンの高度差・軌道・最接近距離を4 mに変更するものではない。
 
-**SUVモデル原点**: ホイールベース中央・トレッド中央・地面レベル (z=0)
+| 項目 | A→B | B→A |
+|---|---:|---:|
+| 周波数 | 272 GHz | 61 GHz |
+| 送信電力 | −1 dBm ≈ 0.794328 mW | −8 dBm ≈ 0.158489 mW |
+| 送信側挿入損失 | 0 dB | 3 dB |
+| 送信／受信アンテナ正面利得 | 各24 dBi | 各23 dBi |
+| 受信LNA利得 | 25 dB | 0 dB |
+| 受信変換利得 | 3 dB | 0 dB |
+| 受信側挿入損失 | 3 dB | 3 dB |
+| TJX入力端の電力閾値 | −68.5 dBm | −68.5 dBm |
 
-```
-    前方 (+X)
-      ↑
-FL ●─────● FR      (x=+1.5)
-   │          │
-   │    ★    │  ← ★ = モデル原点 (0,0,0) = 地面レベル
-   │          │
-RL ●─────● RR      (x=-1.5)
-      ↓
-    後方 (-X)
+電力の計算は次の順序で行う。電力はdBm、利得・損失はdB。
+Excelの挿入損失は負値を加える形式だが、YAMLでは正値を指定して減算する。
+
+```text
+Pt = 10 × log10(power_mw)
+EIRP = Pt − Ltx + Gtx
+PL(d) = 20 × log10(4 × π × f × 1m / c)
+        + 10 × n × log10(max(d, 1m) / 1m)
+受信アンテナ端 = EIRP − PL(d) + Grx
+LNA出力 = 受信アンテナ端 + GLNA
+Mixer出力 = LNA出力 + Gconversion
+TJX入力 = Mixer出力 − Lrx
 ```
 
-- chassis リンクは z=+0.5m にオフセット、車体上面は約 z≈2.0m
+`c=299792458 m/s`、初期指数 `n=2`。Excelは `c=300000000 m/s` の近似値を使うため、
+シミュレータのPLは約0.006011 dB大きく、受信電力は同じだけ小さい。
+正対時のTJX入力は A→Bが `72 − PL272(d)`、B→Aが `32 − PL61(d)`。
+LNA等は線形・一定利得のモデルであり、飽和・圧縮・AGCは未実装。
 
-**`antenna_offset`**: エンティティ原点からの3D相対座標 `[x, y, z]` [m]
+アンテナの角度特性には従来の `e_plane.csv`、`h_plane.csv` を使用する。
+`G方向 = 指定した正面利得 + CSV合成利得(角度) − CSV合成利得(0,0)` とし、
+絶対利得を二重加算しない。E/H補間・合成・減衰上限の処理は従来と同じ。
+24/23 dBiは資料由来だが、両帯域の角度特性は共通CSVを使う仮定であり実測校正ではない。
+旧YAMLで正面利得が未指定ならCSVの絶対利得を使用し、回路の利得・損失は0で従来計算を維持する。
 
-| 設置例                | offset値           |
-| :-------------------- | :----------------- |
-| SUV屋根中央にアンテナ | `[0.0, 0.0, 2.23]` |
-| SUV屋根前方にアンテナ | `[1.0, 0.0, 2.23]` |
+`rssi_ab_dbm` / `rssi_ba_dbm` は現在はTJX入力端の**信号電力**を表す。
+実機のRSSI検出器が示す信号＋雑音の総電力と同一とは限らない。
+`gain_a_db` / `gain_b_db` は互換性のため旧CSVの合成利得を保持し、
+実際に適用した方向別利得は `ab_tx_gain_dbi` 等を見る。
+`timeseries.csv` に両方向のPL・EIRP・アンテナ端・LNA後・Mixer後・TJX入力を記録する。
 
-### 3.2. カスタムモデルの追加と要件
+### 熱雑音
 
-本システムは特定の車両モデル（SUVや新幹線）に依存せず、YAMLファイルの `model_uri` 指定によって任意の自作モデルを動的にロード可能である。
-新しいモデルを追加し、TXコントローラーで正常に制御・ロギングさせるためには、モデルの SDF ファイル (`models/<ModelName>/model.sdf`) に以下の要件を満たすプラグインを記述する必要がある。
+資料の300 K、1.76 Gbaud、ロールオフ0.23から、帯域幅を2.1648 GHzとする。
+ここではこの帯域を雑音等価帯域として近似する。受信フィルタの実測等価帯域が分かれば変更する。
 
-1. **速度入力プラグイン (`cmd_vel`)**
-   - 車両を動かすためのプラグイン（`gz::sim::systems::DiffDrive` や `gz::sim::systems::VelocityControl`）を含める。
-   - トピック名は `<topic>cmd_vel</topic>` と固定で記述する（起動時にシステムが各車両専用のネームスペースに自動で書き換える）。
-   - **VelocityControlの利用**: 車輪のスリップを排除し、指定した加速度を100%忠実に再現したい場合は、摩擦をゼロにし `VelocityControl` を採用する。
-
-2. **位置計測プラグイン (`odom`)**
-   - 車両の現在位置をシステムへフィードバックするためのプラグイン（`gz::sim::systems::OdometryPublisher` など）を含める。
-   - トピック名は `<odom_topic>odom</odom_topic>` と固定で記述する。
-   - **Ground Truthの利用**: 物理的な車輪の空転によるオドメトリ誤差を防ぐため、`DiffDrive` のオドメトリトピックを `odom_wheel` 等に退避させ、`OdometryPublisher` を用いて絶対座標系の正しい位置を配信することが推奨される。
-
-## 4. ディレクトリ構成
-
-```
-ros2-gazebo-comms-sim/
-├── config/                        # 設定ファイル
-│   ├── sim_params.yaml            # メインパラメータファイル
-│   ├── e_plane.csv                # Eプレーン（垂直面）アンテナパターン
-│   ├── h_plane.csv                # Hプレーン（水平面）アンテナパターン
-│   └── MCStable.csv               # MCS（変調・符号化方式）テーブル
-│
-├── models/                        # Gazeboモデル
-│   ├── antenna/                  # 基地局アンテナモデル
-│   │   ├── model.config
-│   │   ├── model.sdf
-│   │   ├── meshes/              # 3Dメッシュとテクスチャ
-│   │   └── thumbnails/          # プレビュー画像
-│   └── SUV/                      # 移動車両モデル
-│       ├── model.config
-│       ├── model.sdf
-│       ├── metadata.pbtxt
-│       ├── materials/
-│       ├── meshes/
-│       └── thumbnails/
-│
-├── comms_sim_pkg/                 # ROS 2 / Gazebo パッケージ
-│   ├── CMakeLists.txt
-│   ├── package.xml
-│   ├── setup.py
-│   │
-│   ├── include/comms_sim_pkg/     # C++ ヘッダー
-│   │   ├── antenna_pattern_parser.hpp
-│   │   ├── comms_calculator.hpp
-│   │   └── comms_node.hpp
-│   │
-│   ├── src/                       # C++ ソースコード（GazeboシステムプラグインおよびROS2 C++ノード）
-│   │   ├── TxControllerPlugin.cc  # 物理追従 + 通信品質計算/制御/ログ保存 Gazebo プラグイン
-│   │   ├── antenna_pattern_parser.cpp
-│   │   ├── comms_calculator.cpp
-│   │   └── comms_node.cpp         # ROS 2 C++ 通信ノード（C++プラグイン非使用時のフォールバック用）
-│   │
-│   ├── comms_sim_pkg/             # Pythonモジュール（制御およびロギングノード）
-│   │   ├── __init__.py
-│   │   ├── antenna_parser.py      # アンテナパターン処理（Python版）
-│   │   ├── comms_calculator.py    # 通信品質計算エンジン（Python版）
-│   │   ├── comms_node.py          # 通信シミュレータノード（Python版）
-│   │   ├── link_controller_node.py# 集中通信アクセス調停ノード（Python版）
-│   │   ├── link_scheduling_strategy.py # スケジュール戦略（Python版）
-│   │   ├── sim_logger_node.py     # ミッション完了監視、ログ読み込み＆統計サマリー集計・保存
-│   │   ├── sim_ready_gate_node.py # 全車両の初期化・準備完了を一斉スタート同期するゲートノード
-│   │   └── tx_controller_node.py # TX制御ノード（Python版）
-│   │
-│   ├── launch/                    # 起動ファイル
-│   │   └── sim_launch.py          # メインランチファイル
-│   │
-│   └── resource/                  # リソースファイル
-│       └── minimal_world.sdf      # シミュレーションワールド
-│
-├── comms_sim_msgs/                # メッセージ定義パッケージ
-│   ├── CMakeLists.txt
-│   ├── package.xml
-│   └── msg/
-│       └── CommsQuality.msg       # 通信品質メッセージ
-│
-├── log/                           # colcon/実行ログ
-├── sim_results/                   # CSVログ出力ディレクトリ
-│   └── sweep_<sweep_timestamp>/   # スイープ全体の実行ログフォルダ
-│       ├── sweep_summary.csv      # スイープ全体のサマリーCSV
-│       └── runs/                  # 各個別シミュレーションランの結果
-│           └── run_<run_idx>_y<Y>_a<ANGLE>/ # 個別ランのパラメータフォルダ
-│               ├── comms/         # 通信品質関連の時系列データ (C++プラグインが直接保存)
-│               ├── control/       # 制御およびハンドオーバーイベントデータ
-│               └── heatmap/       # アンテナ制御用事前計算ヒートマップ
-│
-├── docker-compose.yml             # Docker Compose設定
-├── Dockerfile                     # Dockerイメージ定義
-├── entrypoint.sh                  # コンテナエントリポイント
-├── .gitignore
-├── README.md                      # 使用方法ガイド
-├── specification.md               # このファイル（システム仕様書）
-└── prompt.md                      # 開発プロンプト履歴
+```text
+B = 1.76e9 × (1 + 0.23) = 2.1648e9 Hz
+Nthermal = 10 × log10(k × T × B) + 30  [dBm]
+k = 1.380649e−23 J/K
+Ninput = Nthermal + NF
+Grx_chain = GLNA + Gconversion − Lrx
+Ntjx = Ninput + Grx_chain
+SNR = Ptjx − Ntjx = Pantenna − Ninput  [dB]
 ```
 
----
+`Nthermal ≈ −80.473777 dBm`。NF=10 dBなら入力換算雑音は約−70.473777 dBm。
+272 GHzのNF=10 dBはExcelから採用し、アンテナ出力を基準とした受信系全体の等価NFと解釈する。
+61 GHz側のNFはExcelに記載がなく、ユーザー指定で0 dBの理想受信機とする。実測値が分かれば変更する。
+0 dB設定では挿入損失等による実機の雑音劣化まで再現するものではない。
+各段個別のNF・温度によるFriis雑音指数の合成は行わない。
 
-## 5. ロボットとセンサ構成
+`required_snr_db: null` は固定SNR閾値を追加しない設定。現在は後述のAWGNフレーム誤り判定を有効化している。
+数値を設定すると「TJX入力が−68.5 dBm以上、かつSNRが指定値以上」の両方を要求する。
+SNR不足は `SNR_BELOW_REQUIRED` として記録し、`ab_reachable` / `ba_reachable` に反映する。
+`noise_bandwidth_hz: 0` は旧設定との互換用で雑音計算を無効化する。
+Excelの9.8 dBはEb/N0表記であり、ビットレートと帯域の換算条件が未確定なので必要SNRへ自動転用しない。
+Excelの「TJX sensitivity + NF」はそのまま閾値へ転用せず、電力・雑音を同一基準点で比較する。
 
-| エンティティ | センサ/プラグイン       | ROS 2 トピック                               | 用途                                                                                      |
-| :----------- | :---------------------- | :------------------------------------------- | :---------------------------------------------------------------------------------------- |
-| **車両**     | Diff Drive / Velocity Control | `/cmd_vel` (Subscribe)                       | 運動制御。高速走行時のスリップ対策として `VelocityControl` も利用される。 |
-| **車両**     | IMU                     | `/imu/data` (Publish)                        | 姿勢情報 (Roll, Pitch, Yaw) の提供。**アンテナゲイン計算**に利用。                        |
-| **車両**     | OdometryPublisher       | `/odom` (Publish)                            | 位置（ワールド座標系に補正して利用）・速度の提供。車輪の空転に依存しないGround Truth座標を使用。 |
-| **基地局**   | N/A                     | パラメータ/スポーン設定から座標を取得        | 静的なためセンサ不要。                                                                    |
-| **基地局**   | N/A                     | `/rx/pose` (Subscribe、オプション) | 基地局の姿勢をアンテナ方向計算に利用（パラメータ `rx_pose_topic` で変更可能）。 |
+kTBは平均雑音電力を計算する。現在は以下のAWGNモデルで確率的なフレーム誤りを生成する。
+`awgn.enabled: false` の互換モードでは従来の `MCStable.csv` をTJX入力信号電力へ適用する。
+AWGN有効時はMCS表を使わず、QPSKの固定レート3.52Gbpsを使う。
+フェージング、反射・マルチパス、大気吸収、雨、干渉、偏波ずれ、ドップラー、機体遮蔽も未実装。
 
-> 注: `NavSat (GNSS)` / `/gps/fix` は仕様として想定しているが、現状の `sim_params.yaml`（`ros_gz_bridge.bridge_topics`）ではブリッジ設定が未定義のため、実装は `OdometryPublisher` 等による `/odom` を位置入力として用いる。
+## 接続と待ち時間
 
----
+1. Bが61 GHzでBeaconを送信。Aが受信した場合、IFS後に272 GHzでRequest。
+2. BがRequestを受信した場合、IFS後に61 GHzでResponse。
+3. AがResponseを受信した場合、IFS後に272 GHzでACK。
+4. BのACK受信が成功すると論理接続が成立し、A→BのDATAとB→AのDATA_ACKを交互に送る。
+5. DATA_ACKを受信できたデータのみ確認済み転送量に加算する。
 
-## 6. 通信シミュレーション要件 (ROS 2 Node)
+| 設定 | 初期値 | 意味 |
+|---|---:|---|
+| `response_timeout_ms` | 500 ms | Requestの受信完了予定時刻からResponseを待つ期限 |
+| `ack_timeout_ms` | 500 ms | Responseの受信完了予定時刻から接続ACKを待つ期限 |
+| `inactivity_timeout_ms` | 500 ms | 最後のDATA_ACK成功、または接続成立からの無応答期限 |
+| `beacon_interval_ms` | 0.14 ms（140 µs） | BがRequestを受信するまで継続する送信開始間隔。ユーザー指定 |
+| `control_frame_us` | 20 µs | 全制御フレームの送信時間。モデル仮定 |
+| `ifs_us` | 10 µs | フレーム間隔。モデル仮定 |
+| `data_frame_us` | 100 µs | データブロックの送信時間。モデル仮定 |
 
-### 6.1. 通信ノード (`comms_simulator_node`)
+フレーム受信完了は送信時間に開始時の距離/cを加えた時刻。フレーム開始・中間・完了、および `channel_sample_s`（現在はphysics_stepと同値）ごとにリンクを評価し、どれかが感度を下回ればフレーム全体を失敗とする。連続時間で全区間を厳密積分するモデルではない。
 
-| 項目         | 詳細                                                                                                                                      |
-| :----------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
-| **ノード名** | `comms_simulator_node`                                                                                                                    |
-| **実装言語** | Python 3                                                                                                                                  |
-| **役割**     | 複数分散配置される車両ごとで軌道と通信品質を計算する。基地局の調停ノード(`link_controller_node`)からのアクセス許可(`link_grant`)に従い通信状態を維持し、結果をロギングノードへパブリッシュする。<br>**堅牢性(Robustness)**: 起動直後にGazeboから受信したオドメトリとYAMLのスポーン座標を比較し、初期化のラグによる座標ズレ（10m以上）を検知した場合はオフセットを再計算して自己補正を行う初期位置検証機能を持つ。 |
+タイムアウトはイベント時刻で判定する。Gazeboの更新刻みに20 µsや10 µsを丸めない。通信中の短いフレームをphysics_stepだけで見落とさないよう、開始・中間・完了も評価する。データレートはフレーム内のサンプル最小値を用い、`rate[Gbps] × data_frame_s × 125` をMBとしてDATA_ACK成功後に加算する。MAC/PHYヘッダーや符号化の追加オーバーヘッドは含めない。
 
-### 6.1.2. リンクコントローラノード (`link_controller_node`)
+**現在は失敗したフレームの再送を行わず、期限まで待つ。** 期限中にRSSIが回復しても、再送による救済はしない。タイムアウトまたは接続後切断の後に次の周期のBeaconから接続をやり直す。このため再送機能のある実機の発生回数と直接同一視できない。`both_directions_reachable_at_timeout` は判定時の電力/SNR固定閾値が両方向で成立するかを表す。AWGNを含む実際のフレーム受信成功を保証する値ではない。
 
-| 項目         | 詳細                                                                                                                                      |
-| :----------- | :---------------------------------------------------------------------------------------------------------------------------------------- |
-| **ノード名** | `link_controller_node`                                                                                                                    |
-| **役割**     | 基地局として特定のアクセス権(`link_grant`)を一つの車両にのみ割り当てる集中調停ノード。<br> **ポリシー一覧**: <br>- `sequential`: 順次切替 <br>- `round_robin`: 時間単位切替 <br>- `rssi_priority`: RSSI最大優先 <br>- `physical_score_priority`: 推定受信電力（ゲイン-ロス）優先 <br>- `geometric_beam_priority`: 幾何学的アライメント優先 <br>- `geometric_weighted`: 距離とアライメントの重み付け加算優先 <br>- `feedforward_optimal`: 事前計算されたnominal RSSIヒートマップ（LUT）に基づく車載アンテナのフィードフォワード制御ポリシー <br>★さらに、現在の通信局が `DISCONNECTED` 状態になった際、即座に最適な幾何学スコアを持つ後続車両へ通信権を移行させる「**プロアクティブハンドオーバー**」機能を搭載。 |
+接続手順本体とBのBeacon周期送信を別々にスケジュールする（`indexed_beacon_until_request_half_duplex_v1`）。BはRequest受信成功まで140 µs周期で送信し、AのBeacon受信成功だけでは停止しない。AはRequest送信後、最初のResponse待ち500 msを維持し、新しいBeaconを無視する。Request消失時はBのBeacon送信だけが継続する。Response/ACK消失時はRequestを受信済みなのでBeaconは停止したまま、従来の期限到達後に次の周期格子から再探索する。個別端末の全ローカルタイマーを完全に再現するモデルではない。Beaconの受信失敗だけでは待ちタイマーを開始しない。
 
-### 6.2. 通信インターフェース
+A/Bとも半二重として、受信区間（送信開始＋伝搬時間から受信完了まで）と自機の送信区間が一部でも重なると、フレーム全体を `RECEIVER_TRANSMITTING` で失敗させる。異なるBeaconインデックス間でも同様。同時刻の送信終了と受信開始は重複しない。Request受信完了と次Beacon予定時刻が一致する場合は受信完了を先に処理してBeaconを停止する。既に送信済みのBeaconの受信完了イベントは削除せず処理する。
 
-| 項目               | トピック名/パラメータ | メッセージ型                  | 送受信    | 備考                                                                  |
-| :----------------- | :-------------------- | :---------------------------- | :-------- | :-------------------------------------------------------------------- |
-| **車両位置**       | `/odom`               | `nav_msgs/Odometry`           | Subscribe | Gazeboから車両の位置を取得。                                |
-| **車両姿勢**       | `/imu/data`           | `sensor_msgs/Imu`             | Subscribe | Gazeboから車両の姿勢を取得。                                          |
-| **通信結果**       | `/{vehicle}/comms/quality` | カスタム (`CommsQuality.msg`) | Publish   | 計算された通信状態をログ集約ノードへ出力。                                |
-| **アクセス要求**   | `/{vehicle}/link_request` | `std_msgs/Float64`            | Publish   | コントローラへRSSIを報告して通信権限を要求。上限到達時は `-inf` を送信し権限を譲渡。 |
-| **アクセス許可**   | `/{vehicle}/link_grant`   | `std_msgs/Bool`               | Subscribe | コントローラから通信権の付与を受け取る。                             |
-| **ミッション完了** | `/{vehicle}/mission_complete` | `std_msgs/Bool`               | Publish/Sub | TX完走通知。ログ集約ノードが全完了を受信し自動終了をトリガ。 |
-| **基地局姿勢**     | `/rx/pose`  | `geometry_msgs/PoseStamped`   | Subscribe | 基地局の姿勢（オプション）。アンテナ方向計算に利用。                  |
+`beacon_index` は実験内で1始まりの送信連番で、再探索・再接続時も増加し続ける。Request/Response/ACKと接続後DATA/DATA_ACK、待ち・タイムアウト・切断にも起点番号を保持する。`events.csv` と `frames.csv` に記録し、解析で `beacon_requests.csv` と `connections.csv` に対応を出力する。制御64 byteの誤り判定対象長は維持し、インデックスはフレーム内の管理情報に含まれる想定（実際のビット配列は生成しない）。
 
-### 6.3. 伝搬路モデル計算ロジック
+状態図は主接続手順を表し、並行Beaconの成功だけではResponse待ちなどを上書きしない。応答に採用した `BEACON_SELECTED` から手順を復元する。
 
-| 項目               | 詳細                                                                                                                                                                |
-| :----------------- | :------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
-| **計算頻度**       | **可変サンプリングレート** (`sampling_rate` パラメータで調整可能)。デフォルトはYAMLに従う。                                                                         |
-| **パスロス**       | **対数距離減衰モデル** ($PL(d) = 10 \times n \times \log_{10}(4 \pi d/\lambda)$) をベースとする。                                                                   |
-| **RSSI計算**       | $RSSI = P_t - PL(d) + G_a + N$ <br> - $P_t$: 送信電力 [dBm] <br> - $PL(d)$: パスロス [dB] <br> - $G_a$: アンテナゲイン [dBi]（Tx/Rx合成） <br> - $N$: AWGN雑音 [dB] |
-| **雑音 (AWGN)**    | **正規分布に従うAWGN** ($\mathcal{N}(0, \sigma^2)$) を逐一加算。分散 $\sigma^2$ はYAMLで設定可能。                                                                  |
-| **アンテナゲイン** | **CSVファイル**（E面/H面ゲイン）を参照。アンテナ座標系に変換した方向ベクトルから、E面（仰角）/H面（方位角）ゲインを線形補間して取得する。                           |
-| **スループット**   | **MCSテーブル（CSV）を参照し、ステップ関数により決定**。（6.4.項を参照）                                                                                            |
-| **拡張性**         | 伝搬路モデルの計算ロジックは、**Strategyパターン**を適用し、将来のNLOS/反射波モデルへの差し替えを容易にする。                                                       |
-| **メインローブ判定** | 基地局から見た車両（TX）アンテナのオフボアサイト角（仰角・方位角）を算出し、アンテナパターンの第1ヌル点（マージン適用後）の範囲外であれば `in_main_lobe` フラグを `false` に設定。制御層（リンク権の割り当てや事前ヒートマップLUT作成）でこのフラグに基づく足切り（フィルタリング）が可能。 |
+集計定義 `setup_only_v2`: `timeouts` は接続前のResponse/ACK待ちのみ。接続後の無応答期限到達は `DISCONNECTED` / `INACTIVITY_DISCONNECT` として記録し、`disconnections` に数える。初回DATA失敗や初回DATA_ACK失敗で転送量が0 MBの場合も切断側に数える。設定キー `inactivity_timeout_ms` は互換性のため保持する。旧ログの `TIMEOUT / INACTIVITY_TIMEOUT` は同時刻の `DISCONNECTED` と重複するため再解析で除外し、`classification_summary.csv` に新定義を保存する。
 
-#### 6.3.2 メインローブ境界の決定と足切り
+接続後、無応答を待つ500 msも論理接続時間に含める。`connected_time_s`はデータを送れていた時間とは異なる。終了時点で期限未到達なら `pending_waits.csv` に残し、タイムアウトとして数えない。
 
-* **境界の自動検出**: アンテナパターンCSV（E面/H面）のピーク（0°）からスキャンし、ゲインがピークから -3dB 低下する角度（HPBW）を検出し、さらに外側にある最初の局所最小値（ヌル点） $\theta_{null}$ を検出します。メインローブの境界角度は $\theta_{main} = \theta_{null} - \delta$ （$\delta$ はマージン `mainlobe_angle_margin_deg`）と定義されます。
-* **フィルタリング**: `filter_main_lobe: true` が設定されている場合、`in_main_lobe` が `false` であるアンテナはリンク切替やプロアクティブハンドオーバーの候補から即座に除外され、事前ヒートマップのLUT作成時にはその座標におけるRSSIを極小値に設定して除外します。
+## 原因分析のデータ
 
+`events.csv`のRX_FAILEDは受信完了予定時刻に発生する。`failure_sample_s`はフレーム内で最初に受信不能を検出したサンプル時刻。半二重による失敗は受信完了時に確定し、`failure_sample_s` も受信完了時刻とする。RX_FAILED行の観測列はその時刻、TIMEOUT行の観測列はタイムアウト時刻の値である。
 
-### 6.4. スループット決定方式
+- `time_s`：イベント確定時刻。
+- `wait_start_s`、`deadline_s`：タイマー起点と期限。未設定は−1。
+- `observation_time_s`：距離・RSSI・角度の評価時刻。
+- `rssi_dbm`：イベント確定時刻における当該フレーム方向のRSSI。
+- `rssi_ab_dbm` / `rssi_ba_dbm`：観測時刻の両方向RSSI。
+- `margin_ab_db` / `margin_ba_db`：RSSI − 各方向の受信感度。負値は感度不足。
+- `off_axis_a_deg` / `off_axis_b_deg`：各アンテナ正面と相手方向のずれ。
 
-CSVファイル（`MCStable.csv`）を参照する方式
+成功したDATA/DATA_ACKはイベントCSVのサイズを抑えるため個別記録せず、ACK済みデータフレーム数・時系列の累積量へ反映する。失敗、待ち開始、タイムアウトは記録する。
 
-#### MCSテーブル（`MCStable.csv`）の形式
+比較の順序は、まず経路×アンテナ方式の4条件、次にA/B速度・高度差・横間隔・送信電力・受信感度などを一つずつ変更する。回数だけで判断せず、試行数、成立数、Beacon未受信、終了時の未判定待ちを併記する。現在のモデルで扱える原因には、距離・指向性による感度不足、任意SNR閾値不足、半二重の送受信重複、モード別のPHY受信失敗、互換モードのMCS利用不可、および設定した応答期限への到達がある。
 
-```csv
-# RSSI [dBm], Throughput [Gbps]
--50.5, 6.000
--54, 4.600
--58.5, 2.700
--62.5, 2.150
--65.5, 1.100
--68.5, 0.500
+## 再現性と検証
+
+実行設定・入力CSV・モデルの出典情報を保存する。同じ出力先への再実行は拒否する。終了コード0だけで成功と判断せず、`completed`とCSVを検証する。各実験は40 sの同じ観測窓で比較する。
+
+既存の車両・固定基地局シナリオはこのブランチから削除した。共通のアンテナ・伝搬計算とCSVは継承し、旧結果ファイルは保存している。新しいビルド成果物は `build/drone` / `install/drone` を使用する。
+
+## リンク確立時間の集計
+
+解析ツールは `connections.csv` に接続成立ごとの時刻を保存する。
+- `setup_ms`: 成功したBeaconの送信開始から接続用ACK受信完了まで。探索時間を含まない。
+- `after_beacon_rx_ms`: Beacon受信完了から接続用ACK受信完了まで。
+- `since_sim_start_s`: シミュレーション開始（0秒）から接続成立まで。初回は探索待ちを含む。
+未成立なら接続行なし、比較表の平均確立時間・初回成立時刻は空欄（0にしない）。
+既定の制御フレーム20µs×4、IFS10µs×3に各フレームの伝搬遅延を加えるため、
+成功時のsetup_msは約0.11ms。実機の処理遅延・再送・ビーム探索を再現した測定値ではない。
+
+## AWGNによるフレーム誤り
+
+ユーザー了承済みの初期仮定: Gray QPSK、同期は理想、誤り訂正なし、3.52Gbps（1.76Gbaud×2）。
+情報ビット列・I/Q波形は生成せず、AWGN下の理論BERからフレーム誤り率を求め、フレームごとに抽選する。
+これはPHYの統計的な抽象モデルであり、系列・同期捕捉・周波数ずれ・実CRC計算は含まない。
+
+```text
+Eb/N0[dB] = SNR[dB] + 10 log10(B / Rb)
+BER = 0.5 × erfc(sqrt(10^(Eb/N0[dB]/10)))
+PER = 1 − (1 − BER)^N
+U = 一様乱数[0,1)
+フレーム受信失敗 = U < PER
 ```
 
-#### スループット計算ルール
+式の参照: MathWorks「Analytical Expressions Used in berawgn」
+https://www.mathworks.com/help/comm/ug/analytical-expressions-used-in-berawgn-function-and-bit-error-rate-analysis-app.html
 
-RSSIが各MCSレベルの閾値を満たす最大のMCSレベルのスループットをそのまま適用する。
+Bは各方向の雑音帯域2.1648GHz、Rbは3.52e9bit/s。NFを含むSNRを使い、NFを二重加算しない。
+フレーム内でサンプル評価した最小SNRをフレーム全体へ適用する保守的な近似。独立なビット誤りを仮定。
+PER計算は桁落ちを避けるため `-expm1(N * log1p(-BER))` を使う。
 
-| RSSI範囲                         | スループット              | 計算方法                                    |
-| :------------------------------- | :------------------------ | :------------------------------------------ |
-| $RSSI \le RSSI_{min}$            | 0.0 Gbps                  | 通信不可                                    |
-| $RSSI_{min} < RSSI < RSSI_{max}$ | MCSテーブル該当レベルの値 | `numpy.searchsorted` によるステップ関数参照 |
-| $RSSI \ge RSSI_{max}$            | $Throughput_{max}$        | 飽和（最大スループット）                    |
+制御フレーム（Beacon/Request/Response/ACK/DATA_ACK）の誤り判定対象長は64byte=512bit。
+送信時間20µsは維持し、残り時間のプリアンブル等は誤り判定対象として個別には扱わない。
+DATAは100µs×3.52Gbps=352000bit=44000byteで、ヘッダ・誤り訂正等の追加オーバーヘッドは未モデル化。
+1bit以上の誤りでフレーム全体を失敗とする。ACKで確認できた44000byteだけを転送量へ加算する。
 
-**例**: MCSテーブルが上記の場合
-| RSSI範囲 | 適用スループット |
-| :--- | :--- |
-| $RSSI \le -68.5$ | 0.0 Gbps |
-| $-68.5 < RSSI < -65.5$ | 0.500 Gbps |
-| $-65.5 \le RSSI < -62.5$ | 1.100 Gbps |
-| $-62.5 \le RSSI < -58.5$ | 2.150 Gbps |
-| $-58.5 \le RSSI < -54$ | 2.700 Gbps |
-| $-54 \le RSSI < -50.5$ | 4.600 Gbps |
-| $RSSI \ge -50.5$ | 6.000 Gbps |
+電力閾値-68.5dBmと任意の固定SNR閾値を先に判定し、満たすフレームに対してAWGN抽選を1回行う。
+RSSIそのものにGaussian乱数を加える処理ではない。`ab_reachable`等は電力/SNR固定閾値の判定であり、AWGN抽選結果ではない。
+乱数シードは `awgn.seed`（既定20261027）。mt19937_64の上位53bitからUを生成する。
+ログやRadioModel::Evaluateの呼び出し回数によって乱数系列が変わらないよう、抽選は受信完了処理だけで行う。
 
-**重要**:
+`frames.csv`は全フレームの開始/完了、信号電力、最小SNR、Eb/N0、N、BER、PER、U、成否、原因を保存する。
+電力不足等で抽選しなかった場合はU=-1。原因 `AWGN_PACKET_ERROR` がAWGNによる受信失敗。
+この場合のfailure_sample_sは実際のビット誤り時刻ではなく、フレーム受信完了時刻。
+`awgn_trials`は感度等の条件を満たして抽選した回数、`awgn_errors`はその抽選で失敗した回数。
 
-- $RSSI_{min}$ と $RSSI_{max}$ は**CSVファイルから自動取得**される
-- 上記の例では、$RSSI_{min} = -68.5$ dBm、$RSSI_{max} = -50.5$ dBm。
+再送なし・500ms待ちは維持するため、AWGNによる単発の失敗でもResponse待ち/ACK待ち/無応答待ちへ移る。
+1つのシードの結果を平均成功率や実機の性能保証として扱わない。旧結果とはPHYレートも異なるため、
+転送量の差すべてをAWGNだけの影響と解釈しない。
 
-### 6.5. リンク確立時間（Association Time）の実装
+## 試作I/Q PHY
 
-現実の無線通信における**リンク確立遅延**をシミュレート。
+[drone_lab_phy.yaml](src/comms_sim_pkg/config/drone_lab_phy.yaml) は40秒、[drone_lab_phy_smoke.yaml](src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml) は1.1秒の試作PHY実行設定。出力設定の `phy_error_model` は `lab_iq_rect_v0_uncoded`、`protocol_revision` は `indexed_beacon_lab_mac80_v0` となる。
 
-#### リンク状態遷移
+独自のMAC／PHYヘッダー、ヘッダー誤り訂正、CRC、preambleを含むビット系列を生成する。A→BはQPSK、B→Aはπ/2回転QPSK、1.76 Gbaud・2 sample/symbolの矩形パルスを使う。受信フレーム窓に実際のGaussian雑音を加算し、相関・復調・ヘッダー検査・body CRCから成否を決める。理論PERによる抽選は行わない。
 
-```
-DISCONNECTED → ESTABLISHING → CONNECTED
-     ↓              ↓              ↓
-  RSSI < 閾値   リンク確立中    通信可能
-                (待機時間中)
-```
+Beacon／Request／Responseのbodyは16 byte、ACK／DATA_ACKは0 byte、DATAは `lab_phy.data_bytes`（既定2048 byte）。送信時間は実際のサンプル数から算出し、ACK済みのDATA bodyだけを転送量へ加算する。`awgn.control_frame_bytes`、`protocol.control_frame_us`、`protocol.data_frame_us` はこのモードの長さ・時間には使わない。
 
-| 状態             | 条件                             | 通信可否 | 遷移条件                                                           |
-| :--------------- | :------------------------------- | :------- | :----------------------------------------------------------------- |
-| **DISCONNECTED** | $RSSI \le RSSI_{min}$            | 不可     | $RSSI > RSSI_{min}$ で ESTABLISHING へ <br> **※リンク制御側では、この状態を検知した瞬間に即座に他の最適局へ通信権を強制切替（ハンドオーバー）する処理が走ります** |
-| **ESTABLISHING** | $RSSI > RSSI_{min}$ かつ待機中   | 不可     | 設定時間経過 → CONNECTED <br> $RSSI \le RSSI_{min}$ → DISCONNECTED |
-| **CONNECTED**    | $RSSI > RSSI_{min}$ かつ確立済み | 可能     | $RSSI \le RSSI_{min}$ → DISCONNECTED                               |
+`frames.csv` には `phy_model`、送受信サンプル時刻、処理サンプル数、bit誤り数、相関値、実際の16 bit通番と参照番号を追加する。`frame_bits` はbody情報bit数、`per` はNaN、`random_draw` は−1。`ber` は比較用の理論値であり、受信成否を決める抽選確率ではない。感度不足や半二重で先に失敗が決まる場合、`processed_samples` は0となる。
 
-#### パラメータ
+payload FECは `none` のみ。LDPC、RRCパルス整形、連続待受け探索、検出時刻ジッタ、CFO、クロック偏差、正式な規格系列・フレーム形式は未実装または未照合。受信窓とシンボル位相を既知とし、フレーム内SNRを一定とする近似がある。I/Q波形自体は保存しない。実装の詳細・試験範囲は [runtime_lab_phy_ja.txt](specification_review/runtime_lab_phy_ja.txt) に記載する。
 
-| パラメータ名                 | 型    | デフォルト値 | 説明                              |
-| :--------------------------- | :---- | :----------- | :-------------------------------- |
-| `link_establishment_time_ms` | float | 2.0          | リンク確立時間 [ms]。YAMLで設定。 |
+## 未実装の設計案
 
-#### 動作シーケンス例
+[provisional_design_ja.txt](specification_review/provisional_design_ja.txt) と [adaptive_mcs_design_ja.txt](specification_review/adaptive_mcs_design_ja.txt) は規格解説資料を基にした仮設計。適応変調とpayload LDPCは実行コードへ未接続であり、現行の統計AWGN／試作PHYはいずれも固定QPSKを使う。
 
-```
-時刻 t=0.0s: RSSI = -65 dBm (< -61 dBm)
-  状態: DISCONNECTED
-  通信: 不可
-
-時刻 t=1.0s: RSSI = -58 dBm (> -61 dBm)
-  状態: DISCONNECTED → ESTABLISHING
-  通信: 不可（リンク確立待機開始）
-
-時刻 t=1.002s: 2 ms経過
-  状態: ESTABLISHING → CONNECTED
-  通信: 可能（スループット = 3.2853 Gbps）
-
-時刻 t=5.0s: RSSI = -63 dBm (< -61 dBm)
-  状態: CONNECTED → DISCONNECTED
-  通信: 不可
-
-時刻 t=8.0s: RSSI = -55 dBm (> -61 dBm)
-  状態: DISCONNECTED → ESTABLISHING
-  通信: 不可（再度リンク確立待機開始）
-
-時刻 t=8.002s: 2 ms経過
-  状態: ESTABLISHING → CONNECTED
-  通信: 可能（スループット = 5.1627 Gbps）
-```
-
-### 6.6. パラメータ構成
-
-すべてのパラメータは `config/sim_params.yaml` で管理される。
-
-#### 全体シミュレーションパラメータ
-
-| パラメータ | 型 | デフォルト値 | 説明 |
-| :--- | :--- | :--- | :--- |
-| `simulation.logging_level` | int | 5 | ログ記録レベル (1〜5)。<br>1: サマリーのみ<br>2: サマリー + イベントログ<br>3: サマリー + イベント + 時系列 (CONNECTEDのみ)<br>4: サマリー + イベント + 時系列 (常時)<br>5: サマリー + イベント + 時系列 (常時) + アンテナ制御ログ + ヒートマップ |
-| `simulation.headless` | bool | true | ヘッドレスモード (true: GUIなし, false: GUIあり)。 |
-| `simulation.real_time_factor` | float | 5.0 | リアルタイム倍率。 |
-| `simulation.physics_max_step_size` | float | 0.0001 | 物理演算の最大ステップサイズ [s]。通信品質計算および車両制御のサンプリング同期基準となる。 |
-
-#### 通信シミュレータノードパラメータ
-
-| パラメータ                          | 型             | デフォルト値                                  | 説明                                                           |
-| :---------------------------------- | :------------- | :-------------------------------------------- | :------------------------------------------------------------- |
-| `sampling_rate` (廃止)               | float          | -                                             | C++プラグイン移行に伴い廃止（物理ステップに同期）。              |
-| `tx_power`                          | float          | -7.0                                          | 送信電力 [dBm]。                                               |
-| `noise_variance`                    | float          | 1.0                                           | AWGNの分散値 [dB]。                                            |
-| `mcs_table_path`                    | string         | `/workspace/config/MCStable.csv`              | MCSテーブルCSVファイルへのパス。                               |
-| `link_establishment_time_ms`        | float          | 2.0                                           | リンク確立時間 [ms]。                                          |
-| `e_plane_path`                      | string         | `/workspace/config/e_plane.csv`               | E面ゲインCSVファイルへのパス。                                 |
-| `h_plane_path`                      | string         | `/workspace/config/h_plane.csv`               | H面ゲインCSVファイルへのパス。                                 |
-| `comm_data_limit_mb`                | float          | -1.0                                          | 通信データ量の上限 [Mb]。`-1.0`で無制限。                      |
-| `max_antenna_attenuation`           | float          | 30.0                                          | ゲイン低下時の最大減衰量クランプ値 [dB]。                      |
-| `mainlobe_angle_margin_deg`         | float          | 5.0                                           | メインローブの第1ヌル点からの境界角マージン [deg]。             |
-| `mainlobe_e_half_angle_deg`         | float          | -1.0                                          | E面メインローブ半値角の手動指定 [deg] (-1.0 で自動検出)。       |
-| `mainlobe_h_half_angle_deg`         | float          | -1.0                                          | H面メインローブ半値角の手動指定 [deg] (-1.0 で自動検出)。       |
-| `logging_start_trigger`             | string         | `on_movement`                                 | ログ記録開始条件 (`immediate`, `on_movement`, `on_topic`)。    |
-
-| `rx_position`             | list [x, y, z] | `spawn_entities.antenna.pose[0:3]`            | 基地局のワールド座標（スポーン設定から取得して起動時に反映）。 |
-| `rx_antenna_offset`       | list [x, y, z] | `[0.0, 0.0, 3.0]`                             | 基地局モデル原点からのアンテナ位置オフセット [m]。             |
-| `tx_spawn_pose`                    | list [x, y, z] | `spawn_entities.suv.pose[0:3]`                | TXスポーンワールド座標（/odom → ワールド補正に使用）。        |
-| `tx_antenna_offset`                | list [x, y, z] | `[0.0, 0.0, 1.9]`                             | TXモデル原点からのアンテナ位置オフセット [m]。                |
-| `tx_antenna_relative_rpy`          | list [r, p, y] | `spawn_entities.suv.antenna_relative_rpy`     | TXアンテナの相対姿勢 [rad]。                                  |
-| `rx_antenna_relative_rpy` | list [r, p, y] | `spawn_entities.antenna.antenna_relative_rpy` | 基地局アンテナの相対姿勢 [rad]。                               |
-| `rx_pose_topic`           | string         | `/rx/pose`                          | 基地局姿勢トピック名（オプション）。                           |
-
-#### リンクコントローラノードパラメータ
-
-| パラメータ             | 型     | デフォルト値              | 説明                                                                     |
-| :--------------------- | :----- | :------------------------ | :----------------------------------------------------------------------- |
-| `scheduling_policy`    | string | `physical_score_priority` | スケジューリングポリシー。(`sequential`, `round_robin`, `rssi_priority`, `geometric_beam_priority`, `physical_score_priority`, `geometric_weighted`, `feedforward_optimal`) |
-| `heatmap_resolution_m` | float  | 0.2                       | 軌道上の事前計算サンプリング解像度 [m] (`feedforward_optimal` または `logging_level >= 5` で有効)。 |
-| `ff_max_pairs`         | int    | -1                        | `feedforward_optimal` ポリシーにおける最大同時通信アンテナペア数（`-1` で全ペア使用）。 |
-| `time_slot_duration_s` | float  | 10.0                      | `round_robin` 指定時のタイムスロット長 [s]。                             |
-| `rssi_threshold`       | float  | -75                       | `rssi_priority` 指定時の最低RSSI閾値 [dBm]。                             |
-| `beam_gain_threshold`  | float  | 5.0                       | 幾何学ベースポリシー時のアンテナゲイン足切り閾値 [dBi]。                 |
-| `weight_distance`      | float  | 0.7                       | `geometric_weighted` ポリシー時の距離の重み係数。                        |
-| `weight_angle`         | float  | 0.3                       | `geometric_weighted` ポリシー時の角度の重み係数。                        |
-| `filter_main_lobe`     | bool   | true                      | スケジューリングおよびヒートマップ作成時にメインローブ外の候補を足切りするか。 |
-| `mainlobe_angle_margin_deg` | float | 5.0                   | ヒートマップ作成時のメインローブ境界マージン [deg]。                     |
-| `mainlobe_e_half_angle_deg` | float | -1.0                  | ヒートマップ作成時のE面メインローブ半値角 [deg] (-1.0 で自動検出)。      |
-| `mainlobe_h_half_angle_deg` | float | -1.0                  | ヒートマップ作成時のH面メインローブ半値角 [deg] (-1.0 で自動検出)。      |
-
-
-#### パスロスモデルパラメータ
-
-| パラメータ            | 型    | デフォルト値 | 説明                                               |
-| :-------------------- | :---- | :----------- | :------------------------------------------------- |
-| `path_loss.c`         | float | 299792458    | 光速 [m/s]。                                       |
-| `path_loss.frequency` | float | 6.0e10       | 使用周波数 [Hz]。                                  |
-| `path_loss.exponent`  | float | 2.0          | パスロス指数 $n$。自由空間: 2.0、都市部: 2.7-3.5。 |
-
----
-
-## 7. TX制御とシミュレーションシナリオ
-
-### 7.1. TXの動作 (`TxControllerPlugin`)
-
-- **経路設定**: TXは、設定ファイル (`sim_params.yaml`) から読み込んだ**マルチウェイポイントリスト**を順次追従する。
-- **物理・制御エンジンのC++統合**: 以前は独立した Python ノード `tx_controller_node.py` で行っていた UGV の軌道制御（ヘディング追従、PID、加速度制限など）は、現在すべて C++ の `TxControllerPlugin` 上で実行される。これにより物理モデルへの直接的な力/速度の反映がミリ秒未満のステップ精度で行われる。
-- **初期位置検証と自己補正**: 起動直後、Gazeboのスポーン処理による遅延や物理エンジンの荒ぶりが原因で発生する「スポーン座標と実際のオドメトリ座標のズレ」を自動検知する。ズレが10m以上の場合は異常とみなし、ワールド座標系のオフセットを動的に再計算することで、シミュレーションの破綻を未然に防ぐ。
-- **区間速度制御**: 各ウェイポイントは目標直線速度 (`V`) を持ち、TXはその区間の目標速度を維持するように走行する。
-- **スリップ防止（加速度制御）**: 高速走行（50km/h等）時の急加速によるタイヤの空転やオドメトリ誤差を防ぐため、`max_acceleration` により速度指令（`/cmd_vel`）の変化率に制限をかける。
-  - ウェイポイントデータ形式: **`[X, Y, Z, V]`** (4要素)
-
-#### ウェイポイントパラメータ例
-
-```yaml
-tx_controller_node:
-  ros__parameters:
-    waypoints:
-      - [-20.0, 0.0, 0.0, 2.78] # 10 km/h
-      - [20.0, 0.0, 0.0, 0.0] # 停止
-    waypoint_tolerance: 2.0 # [m]
-    control_rate: 10.0 # [Hz]
-    max_angular_velocity: 1.0 # [rad/s]
-    heading_gain: 1.5 # 比例ゲイン
-```
-
-### 7.2. シミュレーション制御と終了条件
-
-| 項目             | 詳細                                                                                                                                                                           |
-| :--------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| **全体終了条件** | シミュレーションに参加する**全車両 (`base_vehicle_names`) が全てのウェイポイントに到達したタイミング**をもって、`sim_logger_node`がCSVデータの強制書き出しとシステムプロセスの安全なシャットダウン(Sys.exit)を呼び出す。複数アンテナを持つ車両の場合でも、個別のアンテナ単位ではなく、1台のベース車両（実体）単位で完了を監視・集約する。 |
-| **通信停止と譲渡** | 個別車両の送信データ累計 (`TotalDataTransmission`) が `comm_data_limit_mb` に達した場合、その車両は状態を `DISCONNECTED` に変更し、基地局調停ノードへの送信要求 (RSSI) を `-inf` に落とすことで、自動的に他車両へ通信権(`link_grant`)を譲る協調動作を行う。 |
-
----
-
-## 8. ログ出力仕様
-
-シミュレーション中の通信ログおよび制御ログは、以下の二段階のプロセスで安全・確実に保存および集計される。
-
-| 項目 | 詳細 |
-| :--- | :--- |
-| **保存エンジン** | コアログ（通信品質時系列、イベント、フィードフォワード制御、ヒートマップ）は、**`TxControllerPlugin` (C++) が直接ディスクへ高速書き込み**を行う。これによりROSトピックの詰まりや損失の影響を回避する。<br>統計サマリー（`sweep_summary.csv`）は、全車両のミッション完了を検知した **`sim_logger_node.py` (Python) がC++出力のCSVを直接ロードし、データ欠損のない正確な数値を再集計・追記**して保存する。 |
-| **出力タイミング** | 各車両プラグイン：設定されたウェイポイントを完走した（ミッション完了）タイミング、またはシミュレーション終了時。<br>`sim_logger_node`：全車両のミッション完了通知（`/mission_complete`）が揃ってから約1秒後（ファイル書き込み猶予時間）。 |
-| **出力ディレクトリ** | `/workspace/sim_results/`（コンテナ内の所有権はホストマウント権限に自動追従して可読・編集可能化される。スイープ実行時：`sim_results/sweep_<sweep_timestamp>/`、単一実行時：`sim_results/run_<timestamp>/`） |
-| **ファイル出力形式** | 3階層フォルダリング（`comms/`, `control/`, `heatmap/`）により整理して出力。ファイル名から重複するタイムスタンプを排除。<br>- **サマリー**: `sweep_summary.csv` または `sweep_summary_run*.csv`<br>- **通信時系列**: `comms/{vehicle_name}_connected.csv` (`logging_level` 3) または `comms/{vehicle_name}_full.csv` (`logging_level` 4以上)<br>- **イベント**: `control/events.csv` (`logging_level` 2以上)<br>- **制御ログ**: `control/feedforward_log.csv` (`logging_level` 5のみ)<br>- **ヒートマップ**: `heatmap/rssi_heatmap.csv` (`logging_level` 5のみ) |
-| **時間軸の起点**     | プラグインおよびノードが車両の動き出しを監視し、**いずれかの車両が最初に動き出した瞬間**を `time_s = 0.0` とする。また、**各車両ごとの個別開始時間**も `vehicle_time_s = 0.0` として計算される。距離への換算を容易にするための仕様。 |
-
-### CSV出力項目
-
-各座標カラムの意味:
-- **`tx_x_m`, `tx_y_m`, `tx_z_m`**: TXアンテナ位置座標（絶対座標）
-- **`bs_x_m`, `bs_y_m`, `bs_z_m`**: 基地局アンテナ位置座標（絶対座標）
-
-#### 1. 通信品質時系列CSV (`comms/{vehicle_name}_full.csv` または `_connected.csv`)
-
-| 項目名 | 単位 | 説明 |
-| :--- | :--- | :--- |
-| `time_s` | [s] | シミュレーション時刻（最初の車両が移動を開始した瞬間を 0.0 とする） |
-| `vehicle_time_s` | [s] | 車両別時刻（その車両自身が移動を開始した瞬間を 0.0 とする、`full.csv`のみ） |
-| `vehicle_name` | string | 車両（または車載アンテナ）名 |
-| `has_link_grant` | bool | 基地局からの通信権（Grant）付与フラグ（`full.csv`のみ） |
-| `distance_m` | [m] | アンテナ間3D距離 |
-| `rssi_dBm` | [dBm] | 受信信号強度 |
-| `throughput_Gbps` | [Gbps] | 瞬時スループット |
-| `total_data_MB` | [MB] | 累積送信データ量 |
-| `path_loss_dB` | [dB] | パスロス |
-| `e_gain_dB` | [dBi] | E面アンテナゲイン |
-| `h_gain_dB` | [dBi] | H面アンテナゲイン |
-| `comm_active` | bool | 通信可否フラグ（`full.csv`のみ） |
-| `in_main_lobe` | bool | メインローブ判定フラグ |
-| `off_boresight_e_deg` | [deg] | E面オフボアサイト角度 |
-| `off_boresight_h_deg` | [deg] | H面オフボアサイト角度 |
-| `tx_x_m`, `tx_y_m`, `tx_z_m` | [m] | TXアンテナ位置座標 |
-| `bs_x_m`, `bs_y_m`, `bs_z_m` | [m] | 基地局アンテナ位置座標 |
-| `link_state` | - | リンク状態 (`DISCONNECTED` / `ESTABLISHING` / `CONNECTED`、`full.csv`のみ) |
-
-
-#### 2. イベントCSV (`control/events.csv`)
-
-| 項目名 | 単位 | 説明 |
-| :--- | :--- | :--- |
-| `time_s` | [s] | 経過時間（最初の車両が移動を開始した瞬間を 0.0 とする） |
-| `vehicle_name` | string | 対象車両の名前 |
-| `link_state` | - | 新しいリンク状態 |
-| `has_link_grant` | bool | 通信権付与フラグ |
-| `rssi_dBm` | [dBm] | イベント発生時の受信信号強度 |
-| `distance_m` | [m] | イベント発生時のアンテナ間距離 |
-
-#### 3. nominal RSSI ヒートマップ (`heatmap/rssi_heatmap.csv`)
-
-| 項目名 | 単位 | 説明 |
-| :--- | :--- | :--- |
-| `x_m`, `y_m`, `z_m` | [m] | 軌道上のサンプル座標 |
-| `yaw_rad` | [rad] | サンプル座標における車両の進行方向（Yaw） |
-| `rssi_{bs_name}_{antenna_name}` | [dBm] | 各地上局アンテナと車載アンテナペアにおける nominal RSSI (アンテナ個数に基づき動的に列数が変動) |
-| `optimal_antenna` | string | その座標における nominal RSSI が最大となる車載アンテナ名 |
-| `max_rssi` | [dBm] | その座標における最大の nominal RSSI |
-
-#### 4. フィードフォワード制御ログ (`control/feedforward_log.csv`)
-
-| 項目名 | 単位 | 説明 |
-| :--- | :--- | :--- |
-| `time_s` | [s] | 経過時間 |
-| `tx_x_m`, `tx_y_m`, `tx_z_m` | [m] | 現在の TX アンテナ位置座標 |
-| `rssi_{antenna_name}` | [dBm] | 各車載アンテナの現在の実測 RSSI (車両アンテナ構成に基づき動的に列数が変動) |
-| `selected_antenna` | string | 現在選択（Grant付与）されている車載アンテナ名 |
-| `rssi_optimal_dBm` | [dBm] | 現在位置に対応するヒートマップ上（LUT）の nominal optimal RSSI |
-
-### CSV出力例
-
-#### 通信品質時系列CSV例 (`comms/shinkansen_front_full.csv`)
-```csv
-time_s,vehicle_time_s,vehicle_name,has_link_grant,distance_m,rssi_dBm,throughput_Gbps,total_data_MB,path_loss_dB,e_gain_dB,h_gain_dB,comm_active,tx_x_m,tx_y_m,tx_z_m,bs_x_m,bs_y_m,bs_z_m,link_state
-15.0,15.0,shinkansen_front,True,20.42,-55.2,4.6,1.2,65.2,8.5,6.2,True,-20.0,0.0,0.0,0.0,3.0,0.0,CONNECTED
-```
-
-#### イベントCSV例 (`control/events.csv`)
-```csv
-time_s,vehicle_name,link_state,has_link_grant,rssi_dBm,distance_m
-15.0,shinkansen_front,CONNECTED,True,-55.2,20.42
-```
-
-#### ヒートマップCSV例 (`heatmap/rssi_heatmap.csv`)
-```csv
-x_m,y_m,z_m,yaw_rad,rssi_antenna_bs_front,rssi_antenna_bs_mid,rssi_antenna_bs_rear,optimal_antenna,max_rssi
--1000.0,0.0,0.0,0.0,-85.2,-90.1,-95.3,front,-85.2
-```
-
-#### フィードフォワード制御ログ例 (`control/feedforward_log.csv`)
-```csv
-time_s,tx_x_m,tx_y_m,tx_z_m,rssi_shinkansen_front,rssi_shinkansen_mid,rssi_shinkansen_rear,selected_antenna,rssi_optimal_dBm
-15.0,-20.0,0.0,0.0,-55.2,-60.1,-65.3,shinkansen_front,-55.2
-```
-
----
-
-## 9. インターフェース
-
-| 項目               | 詳細                                                                                                                           |
-| :----------------- | :----------------------------------------------------------------------------------------------------------------------------- |
-| **GUIモード**      | ホスト側のXサーバーを利用する**X11 Forwarding**を設定し、GazeboのGUI（クライアント）と物理サーバーを起動。                     |
-| **Headlessモード** | Gazeboを**Headlessモード (`gz sim -s`)**で起動し、GUI表示を省略。計算速度を優先する。YAMLの `simulation.headless` で切り替え。 |
-
----
-
-## 10. 設計パターンと実装方針
-
-### 10.1. Strategy パターン（伝搬路モデル）
-
-**目的**: 伝搬路モデルの交換可能性を確保。
-
-**実装**:
-
-```python
-class PropagationModel(ABC):
-    @abstractmethod
-    def calculate_path_loss(self, distance: float) -> float:
-        pass
-
-class LogDistancePathLossModel(PropagationModel):
-    def calculate_path_loss(self, distance: float) -> float:
-        return 10 * self.exponent * np.log10(4 * pi * distance / lambda)
-
-class TwoRayGroundModel(PropagationModel):
-    def calculate_path_loss(self, distance: float) -> float:
-        # 実装...
-```
-
-### 10.2. 状態管理パターン
-
-**目的**: リンク確立状態の明示的な管理。
-
-**実装**:
-
-```python
-class LinkState(Enum):
-    DISCONNECTED = 0
-    ESTABLISHING = 1
-    CONNECTED = 2
-
-def _update_link_state(self, rssi: float, current_time: float) -> bool:
-    if self.link_state == LinkState.DISCONNECTED:
-        if rssi > self.rssi_threshold:
-            self.link_state = LinkState.ESTABLISHING
-            # ...
-    elif self.link_state == LinkState.ESTABLISHING:
-        # ...
-```
-
----
-
-## 11. テストと検証
-
-### 11.1. 単体テスト
-
-| 対象                   | テスト項目                                                                                    |
-| :--------------------- | :-------------------------------------------------------------------------------------------- |
-| `CommsCalculator`      | - MCSテーブル読み込み <br> - RSSI計算の正確性 <br> - スループットステップ関数 <br> - 飽和処理 |
-| `AntennaPatternParser` | - CSV読み込み <br> - 角度計算 <br> - 線形補間                                                 |
-| `CommsSimulatorNode`   | - リンク状態遷移 <br> - データ量管理 <br> - CSVロギング                                       |
-
-### 11.2. 統合テスト
-
-| シナリオ         | 確認項目                                                 |
-| :--------------- | :------------------------------------------------------- |
-| **基本動作**     | TXが移動し、通信品質が計算され、CSVに出力される。       |
-| **リンク確立**   | RSSI閾値を超えてから2ms後に通信が開始される。            |
-| **データ量制限** | 設定された上限に達したら通信が停止する。                 |
-| **再接続**       | RSSI低下後、再び閾値を超えたら再度リンク確立が行われる。 |
-
----
-
-## 12. 今後の拡張予定
-
-| 項目                   | 概要                                    |
-| :--------------------- | :-------------------------------------- |
-| **NLOS伝搬モデル**     | 障害物による遮蔽を考慮。                |
-| **複数基地局**         | ハンドオーバーのシミュレーション。      |
-| **リアルタイム可視化** | RViz2またはGazebo GUIでの通信品質表示。 |
-| **ビームフォーミング** | 指向性制御のシミュレーション。          |
-| **干渉モデル**         | 複数送信機による干渉の考慮。            |
-
----
-
-**Document Version**: 10.0<br>
-**Last Updated**: 2026年06月18日<br>
-**Status**: Active Development
-
+`MCStable.csv` の各行とMCSの対応、速度がPHYレートか実効速度か、RSSIの参照面は未確定。試作PHYのgoodputと表の値を参考比較しても、適応変調の性能を検証したことにはならない。提案YAMLは `config_file` に渡す実行設定ではない。

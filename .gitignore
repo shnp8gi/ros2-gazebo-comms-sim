@@ -152,3 +152,11 @@ core.*
 
 # Test outputs
 test_output/
+
+# ローカルの作業引き継ぎメモ・一時キーリング
+/RESUME_NOTES.txt
+/temp_keyring.gpg
+
+# 出典資料の取得キャッシュ。URL・SHA256はmanifest.jsonで管理する。
+/specification_review/references/*.pdf
+/specification_review/references/*.txt

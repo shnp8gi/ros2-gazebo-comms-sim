@@ -1,119 +1,45 @@
-cmake_minimum_required(VERSION 3.8)
+cmake_minimum_required(VERSION 3.16)
 project(comms_sim_pkg)
-
-if(CMAKE_COMPILER_IS_GNUCXX OR CMAKE_CXX_COMPILER_ID MATCHES "Clang")
-  add_compile_options(-Wall -Wextra -Wpedantic)
+set(CMAKE_CXX_STANDARD 17)
+set(CMAKE_CXX_STANDARD_REQUIRED ON)
+if(NOT CMAKE_BUILD_TYPE)
+  set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
-
-# =============================================================================
-# Find dependencies
-# =============================================================================
+add_compile_options(-Wall -Wextra -Wpedantic)
 find_package(ament_cmake REQUIRED)
-find_package(ament_cmake_python REQUIRED)
-find_package(rclcpp REQUIRED)
 find_package(Eigen3 REQUIRED)
 find_package(yaml_cpp_vendor REQUIRED)
-find_package(rclpy REQUIRED)
-find_package(std_msgs REQUIRED)
-find_package(sensor_msgs REQUIRED)
-find_package(geometry_msgs REQUIRED)
-find_package(nav_msgs REQUIRED)
-find_package(comms_sim_msgs REQUIRED)
-
-# Gazebo Harmonic (gz-sim8)
+find_package(yaml-cpp REQUIRED)
 find_package(gz-sim8 REQUIRED)
 find_package(gz-plugin2 REQUIRED)
 find_package(gz-transport13 REQUIRED)
 find_package(gz-msgs10 REQUIRED)
-find_package(gz-math7 REQUIRED)
-
-# C++ executable
-add_executable(comms_node_cpp
-  src/comms_node.cpp
-  src/antenna_pattern_parser.cpp
-  src/comms_calculator.cpp
-)
-target_include_directories(comms_node_cpp PUBLIC
-  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-  ${EIGEN3_INCLUDE_DIR}
-)
-ament_target_dependencies(comms_node_cpp
-  rclcpp std_msgs sensor_msgs geometry_msgs nav_msgs
-  comms_sim_msgs yaml_cpp_vendor
-)
-target_compile_options(comms_node_cpp PRIVATE -O3)
-
-install(TARGETS comms_node_cpp
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-# =============================================================================
-# Gazebo Plugins
-# =============================================================================
-add_library(TxControllerPlugin SHARED
-  src/TxControllerPlugin.cc
-  src/antenna_pattern_parser.cpp
-  src/comms_calculator.cpp
-)
-target_include_directories(TxControllerPlugin PRIVATE
-  ${CMAKE_CURRENT_SOURCE_DIR}/include
-  ${EIGEN3_INCLUDE_DIR}
-)
-target_link_libraries(TxControllerPlugin
-  gz-sim8::gz-sim8
-  gz-plugin2::gz-plugin2
-  gz-transport13::gz-transport13
-  gz-msgs10::gz-msgs10
-  gz-math7::gz-math7
-)
-ament_target_dependencies(TxControllerPlugin
-  yaml_cpp_vendor
-)
-set_target_properties(TxControllerPlugin PROPERTIES PREFIX "")
-
-install(TARGETS TxControllerPlugin
-  DESTINATION lib/${PROJECT_NAME}/plugins
-)
-
-# =============================================================================
-# Install Python modules
-# =============================================================================
-ament_python_install_package(${PROJECT_NAME})
-
-# =============================================================================
-# Install Python executables
-# =============================================================================
-install(PROGRAMS
-  comms_sim_pkg/comms_node.py
-  comms_sim_pkg/tx_controller_node.py
-  comms_sim_pkg/link_controller_node.py
-  comms_sim_pkg/sim_logger_node.py
-  comms_sim_pkg/sim_ready_gate_node.py
-  comms_sim_pkg/link_scheduling_strategy.py
-  DESTINATION lib/${PROJECT_NAME}
-)
-
-# =============================================================================
-# Install launch and resource files
-# =============================================================================
-install(DIRECTORY
-  launch
-  config
-  models
-  worlds
-  DESTINATION share/${PROJECT_NAME}
-)
-
-# =============================================================================
-# Testing
-# =============================================================================
+add_library(drone_link_core STATIC src/drone_link.cpp src/awgn.cpp src/lab_phy.cpp src/antenna_pattern_parser.cpp src/comms_calculator.cpp)
+set_target_properties(drone_link_core PROPERTIES POSITION_INDEPENDENT_CODE ON)
+target_include_directories(drone_link_core PUBLIC include)
+target_link_libraries(drone_link_core PUBLIC Eigen3::Eigen yaml-cpp)
+add_executable(link_budget_report src/link_budget_report.cpp)
+target_link_libraries(link_budget_report PRIVATE drone_link_core)
+install(TARGETS link_budget_report DESTINATION lib/${PROJECT_NAME})
+add_library(DroneEncounterPlugin SHARED src/DroneEncounterPlugin.cc)
+target_link_libraries(DroneEncounterPlugin PRIVATE drone_link_core gz-sim8::gz-sim8 gz-plugin2::gz-plugin2 gz-transport13::gz-transport13 gz-msgs10::gz-msgs10)
+set_target_properties(DroneEncounterPlugin PROPERTIES PREFIX "")
+install(TARGETS DroneEncounterPlugin DESTINATION lib/${PROJECT_NAME}/plugins)
+install(DIRECTORY launch config models worlds DESTINATION share/${PROJECT_NAME})
 if(BUILD_TESTING)
-  find_package(ament_lint_auto REQUIRED)
-  ament_lint_auto_find_test_dependencies()
+  enable_testing()
+  add_executable(drone_link_tests test/drone_link_tests.cpp)
+  target_link_libraries(drone_link_tests PRIVATE drone_link_core)
+  add_test(NAME drone_link_tests COMMAND drone_link_tests ${CMAKE_CURRENT_SOURCE_DIR}/config)
+  add_executable(link_budget_tests test/link_budget_tests.cpp)
+  target_link_libraries(link_budget_tests PRIVATE drone_link_core)
+  add_test(NAME link_budget_tests COMMAND link_budget_tests ${CMAKE_CURRENT_SOURCE_DIR}/config
+    ${CMAKE_CURRENT_SOURCE_DIR}/test/fixtures/link_budget_workbook.json)
+  add_executable(lab_phy_tests test/lab_phy_tests.cpp)
+  target_link_libraries(lab_phy_tests PRIVATE drone_link_core)
+  add_test(NAME lab_phy_tests COMMAND lab_phy_tests)
+  add_executable(awgn_tests test/awgn_tests.cpp)
+  target_link_libraries(awgn_tests PRIVATE drone_link_core)
+  add_test(NAME awgn_tests COMMAND awgn_tests)
 endif()
-
-# =============================================================================
-# Export and finalize
-# =============================================================================
 ament_package()

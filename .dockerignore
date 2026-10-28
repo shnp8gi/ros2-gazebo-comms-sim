@@ -1,0 +1,13 @@
+# Dockerfileはentrypoint.shだけをCOPYし、ソースは実行時に/workspaceへマウントする。
+# ビルド成果物・実験結果・取得資料をイメージのビルドコンテキストへ含めない。
+.git/
+build/
+install/
+log/
+sim_results/
+specification_review/references/
+**/__pycache__/
+**/*.py[cod]
+.venv/
+venv/
+temp_keyring.gpg

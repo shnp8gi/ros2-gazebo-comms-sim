@@ -1,0 +1,172 @@
+profile_id: paper_based_dual_phy_design_v0
+status: design_only_not_loaded_by_simulator
+conformance_claim: false
+standard_editions: [IEEE_802.15.3d_2017, IEEE_802.15.3e_2017]
+# 各値はevidence.csvの根拠/仮定に対応。既存launch/configには接続しない。
+roles:
+  A: PRDEV
+  B: PRC
+experiment_constraints:
+  frequency_ab_hz: 272000000000
+  frequency_ba_hz: 61000000000
+  tx_power_ab_dbm: -1
+  tx_power_ba_dbm: -8
+  sensitivity_dbm: -68.5
+  beacon_period_us: 140
+  response_timeout_ms: 500
+  ack_timeout_ms: 500
+  disconnect_timeout_ms: 500
+  a_ignores_beacons_while_waiting: true
+  half_duplex: true
+  count_disconnect_as_timeout: false
+  on_air_beacon_index_extension: false
+phy_targets:
+  ab:
+    family: THz_SC
+    modulation: QPSK
+    payload_ldpc_n: 1440
+    payload_ldpc_k: 1056
+    phy_header_fields_bits:
+      mcs: 4
+      bandwidth: 3
+      pilot_word: 1
+      scrambler_seed_id: 4
+      prre: 2
+      reserved: 1
+      frame_length: 22
+    phy_header_bits: 37
+    mac_header_bits: 80
+    hcs_bits: 16
+    target_header_code: extended_hamming
+    ldpc_matrix_file: null
+    on_air_mcs_id: null
+    on_air_bandwidth_id: null
+  ba:
+    family: HRCP_SC
+    modulation: pi_over_2_QPSK
+    payload_code_rate: [11, 15]
+    target_mcs_id: 0
+    phy_header_bits: null
+    mac_header_bits: 80
+    hcs_bits: null
+    ldpc_matrix_file: null
+    target_header_code: null
+  nominal_channel_bandwidth_hz: 2160000000
+  # 2.16GHzのチャネル幅と、既存熱雑音計算の2.1648GHzを同一視しない。
+  legacy_noise_bandwidth_hz: 2164800000
+  symbol_rate_hz: 1760000000
+  symbol_rate_status: S2_rates_inference_and_legacy_assumption_for_ab
+  samples_per_symbol: 2
+  mimo_streams: 1
+  pilot_word_enabled: false
+
+# 数値プレビュー専用の仮置き。IEEE互換のビット列を意味しない。
+lab_timing_assumptions:
+  header_information_bits_ab: 133  # 37 + 80 + 16、S1 Fig.4の情報ビット数
+  header_information_bits_ba: 133  # ABと同じ長さを借用した仮定。3eの確認値ではない。
+  header_code_n: 16
+  header_code_k: 11
+  header_code_status: lab_extended_hamming_16_11_not_verified_standard
+  header_bits_per_symbol: 1
+  header_modulation: BPSK_assumption
+  preamble_chips:
+    ab_setup: 5120  # S1の約2.91usに近い整数長として仮置き。規定系列長は未確認。
+    ab_data: 3328
+    ba_setup: 3328  # S9 Fig.11のドラフト由来。最終版との差は未確認。
+    ba_data: 3328
+  pulse_shape: root_raised_cosine
+  rolloff: 0.23
+  filter_span_symbols: 10
+  tx_extra_symbols: 10  # 時間見積りのため送信フィルタ過渡を両端合計10symbol確保する仮定
+  payload_crc_bits_if_body_present: 32
+  payload_codeword_padding: zero_fill_to_k_bits
+  control_body_bytes:
+    BEACON: 16
+    REQUEST: 16
+    RESPONSE: 16
+    ACK: 0
+    DATA_ACK: 0
+  data_body_bytes: 2048
+  data_payload_bits_per_symbol: 2
+  setup_ack_preamble: long  # 本文未確認。現状ACK受信を成立点とする実験定義に合わせる仮定。
+  ifs_us: 10  # 既存の仮定を維持。規格のSIFS値との同一視禁止。
+  access_slots:
+    count: 1
+    offset_from_beacon_rx_end_us: 10
+    width_us: 20
+    late_decode_policy: skip_slot_and_resume_scan
+    status: lab_assumption_for_two_drones
+  # LDPC長による時間見積りのみ。行列不明のまま誤り訂正性能を模擬してはいけない。
+  timing_budget_modes: [uncoded_debug, ldpc_length_budget_only]
+  numeric_budget_valid_for_per: false
+
+# 未確認MACフィールドの仮案。規格MACとして実装/公表しない。
+lab_mac_layout:
+  profile_name: lab_mac80_v0
+  total_bits: 80
+  fields_bits:
+    version: 2
+    frame_type: 3
+    ack_policy: 2
+    reserved: 1
+    source_id: 8
+    destination_id: 8
+    tx_sequence: 16
+    last_rx_sequence: 16
+    body_length_bytes: 16
+    flags: 8
+  integer_bit_order: msb_first_lab_convention
+  sequence_modulus: 65536
+  source_id_a: 1
+  source_id_b: 2
+  frame_type_codes: {BEACON: 0, REQUEST: 1, RESPONSE: 2, ACK: 3, DATA: 4, DATA_ACK: 5}
+  # 管理用64bit beacon_indexはログだけ。受信機に正解を渡さない。
+  beacon_trace_uid_bits: 64
+  request_reference_beacon_seq_bits: 16
+  session_nonce_bits: 64
+  stale_reference_policy: reject_outside_active_window
+lab_body_layouts:
+  BEACON:
+    period_ns: 32
+    access_offset_ns: 32
+    slot_width_ns: 32
+    slot_count: 8
+    reserved: 24
+  REQUEST:
+    referenced_beacon_sequence: 16
+    requested_data_body_bytes: 16
+    capabilities: 32
+    session_nonce: 64
+  RESPONSE:
+    echoed_session_nonce: 64
+    status: 16
+    accepted_data_body_bytes: 16
+    referenced_request_sequence: 16
+    reserved: 16
+  ACK: {}
+  DATA_ACK: {}
+lab_bit_generation:
+  preamble_generator: recursive_golay_pair_128_lab_not_standard_sequences
+  header_crc: {name: CRC16_CCITT_FALSE_lab, width: 16, polynomial: 0x1021, init: 0xffff, refin: false, refout: false, xorout: 0, check_123456789: 0x29b1}
+  payload_crc: {name: CRC32_ISO_HDLC_lab, width: 32, polynomial: 0x04c11db7, init: 0xffffffff, refin: true, refout: true, xorout: 0xffffffff, check_123456789: 0xcbf43926}
+  scrambler: disabled_in_debug_until_standard_seed_and_polynomial_are_known
+  fec_debug_payload: none
+  # 任意行列を規格LDPCと呼んだり、理想符号化利得だけを足したりしない。
+  fec_target_missing_matrix_action: configuration_error
+  payload_generator: counter_based_reproducible_bits
+  awgn_generator: counter_based_per_receiver_absolute_sample
+  awgn_to_delay_random_offset: false
+  initial_cfo_hz: 0
+  initial_clock_error_ppm: 0
+  initial_processing_jitter_us: 0
+validation_requirements:
+  - no_missing_or_duplicated_sample_indices
+  - streamed_and_single_block_decoding_agree
+  - different_gazebo_update_intervals_agree
+  - preamble_and_crc_across_chunk_boundary
+  - delayed_request_overlapping_later_beacon_half_duplex
+  - corrupted_header_never_supplies_ground_truth_to_receiver
+  - old_response_and_sequence_wrap_rejected
+  - receive_window_includes_noise_only_intervals
+  - tx_duration_equals_actual_emitted_sample_count
+  - insufficient_compute_slows_wall_clock_without_skipping

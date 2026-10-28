@@ -1,722 +1,275 @@
-# ROS 2 Gazebo Communication Simulator
+# ドローン2機のすれ違い通信シミュレータ
 
-ROS 2 Humble と Gazebo Harmonic を用いた、移動車両（TX/SUV）と固定基地局間の無線通信品質シミュレータです。
+Ubuntu 22.04 / ROS 2 Humble / Gazebo Harmonic向け。
+2機のドローンが飛行し、方向別の無線リンクと接続手順を計算する。接続失敗・無応答タイムアウトが起きる条件の比較を目的とする。
 
-## 📋 概要
+## 案内
 
-本シミュレータは、Gazebo Sim上で駆動する移動車両と固定基地局間の通信品質（RSSI/スループット）を、ミリ秒未満の物理計算ステップに同期させてシミュレーションします。
+- [起動](#起動)：Dockerで単独条件・4条件比較・GUIを実行する。
+- [設定とPHYモード](#設定とphyモード)：既定の統計AWGNと試作I/Q PHYを選ぶ。
+- [結果の読み方](#結果の読み方)・[作図](#プロトコル状態とrssi滞在割合の作図)：検証と解析の手順。
+- [ビルドとテスト](#ビルドとテスト)：開発時の確認手順。
+- [リポジトリ構成](#リポジトリ構成)：コード・資料・生成物の役割。
+- [specification.md](specification.md)：計算式、接続手順、ログの定義とモデルの制約。
 
-### 主な機能
+## シミュレーションの概要
 
-- **物理エンジン・通信計算のC++統合**: 移動車両（UGV）の追従制御、および無線伝搬路計算を Gazebo システムプラグイン (`TxControllerPlugin`) に移植し、ROS 2 メッセージングによるジッターやパケット損失を完全に排除。
-- **物理ステップサイズ (`physics_max_step_size`) 同期**: 計算周期を Gazebo の物理更新周期（例：10kHz）と完全に同期。
-- **リアルタイム通信品質計算**: RSSI、スループット、パスロスを動的に計算。
-- **MCSテーブルベースのスループット推定**: CSVファイルから読み込み、ステップ関数によるMCSインデックス選択。
-- **リンク確立時間のシミュレーション**: Association time（デフォルト2ms）を考慮した現実的な通信開始。
-- **指向性アンテナモデル**: E面/H面パターンCSVに基づく指向性ゲイン計算（Tx/Rx合成）。
-- **動的伝搬路モデル**: 対数距離減衰モデル + AWGN雑音（C++のStrategyパターンで差し替え可能）。
-- **マルチ車両・高密度・マルチウェイポイント追従**: 複数台のTXによる同期待機、C++プラグインによる厳密な区間速度制御（スリップ防止用加速度制御対応）、および自動経路追従。
-- **集中スケジューリングとマルチアンテナ・ペアリング**: 基地局側で通信アクセス権（Grant）を排他的に付与。RSSI優先、幾何学スコア、推定受信電力ベースに加え、事前計算された nominal RSSI ヒートマップに基づくフィードフォワード制御ポリシー（`feedforward_optimal`）を搭載。
-- **複数ペア同時通信**: `feedforward_optimal` ポリシーにおいて、同時通信に使用する最大アンテナペア数（`ff_max_pairs`）を設定可能。デフォルトでは利用可能な全ペアで並行通信をサポート。
-- **プロアクティブハンドオーバーと自律的権限譲渡**: 通信データ上限到達時の自律的な譲渡のほか、リンク切断（DISCONNECTED）時に即座に最適な幾何学スコアを持つ後続車両へ通信権を強制切替する機能。
-- **GPUアクセラレーション対応**: Docker Composeでの NVIDIA GPU リソース割り当てにより、GUIモードでの高速なGazeboレンダリングをサポート。
-- **ミッション完了時の自動終了と集計**: 全車両のミッション完了を検知して安全に自動終了。プラグインがログCSVを直接保存した後、`sim_logger_node.py` がファイルを直接パースして正確なサマリー（`sweep_summary.csv`）を再集計・保存。
+| 条件 | 初期設定 |
+|---|---|
+| A → B | 272 GHz、−1 dBm（約0.794 mW）、データ／Request／ACK |
+| B → A | 61 GHz、−8 dBm（約0.158 mW）、Beacon／Response／データACK |
+| 速度 | A・B各50 km/h、個別変更可能 |
+| 並行すれ違い | 逆方向飛行、高度差10 m、横間隔10 m |
+| 十字すれ違い | 直交する経路、高度差10 m、同時に平面交点を通過 |
+| 固定アンテナ | 低いAは仰角+45°、高いBは−45°、並行では相手側の真横、十字ではAの左側／Bの右側（交差後の相手側） |
+| 追従アンテナ | 両機が常に相手を向く理想追従 |
+| 待ち期限 | Response待ち・ACK待ちは500 msのタイムアウト。接続後の無応答は500 msで切断し、別集計 |
+| 実行時間 | 40 s、20 sですれ違い、初期高度A=20 m／B=30 m |
 
-## 🛠️ 技術スタック
+接続は `Beacon → Request → Response → ACK → DATA → DATA_ACK`。
+**IEEE規格に完全準拠した実装ではない。** 接続手順は802.15.3eを参考にした抽象モデル。PHYの設計目標はA→Bが802.15.3d、B→Aが802.15.3eだが、現在の実装は下記の統計モデルと独自の試作PHYである。フレーム長・周期、アンテナ特性の共用などの仮定は [specification.md](specification.md) に記載する。
 
-| 項目         | バージョン/詳細           |
-| ------------ | ------------------------- |
-| OS           | Ubuntu 22.04 LTS (Docker) |
-| ROS 2        | Humble Hawksbill          |
-| シミュレータ | Gazebo Sim (Harmonic)     |
-| 言語         | Python 3 / C++            |
-| 開発環境     | Docker / Docker Compose (NVIDIA GPU対応) |
+## 電力計算
 
-## 📁 ディレクトリ構造
+ユーザー提供Excel「リンク_4m_1」のアンテナ利得、LNA、変換利得、挿入損失を反映。
+受信判定の信号電力はTJX入力端とし、閾値は両方向−68.5 dBmを維持する。
+熱雑音は300 K・2.1648 GHzで計算し、NFは272 GHz側10 dB、61 GHz側0 dB（ユーザー指定の理想受信機、実測後に変更）。
+既定設定はQPSK・誤り訂正なしの統計AWGNフレーム誤り判定を有効化。固定3.52Gbps、制御フレーム64byteの仮定。
+`required_snr_db: null` は固定SNR閾値を追加しない意味で、AWGN判定は `awgn.enabled` で制御する。
+式・測定基準点・仮定は [specification.md](specification.md#無線計算) を参照。
 
-```
-ros2-gazebo-comms-sim/
-├── config/                          # 設定ファイル
-│   ├── sim_params.yaml             # メインパラメータファイル
-│   ├── e_plane.csv                 # E面（垂直面）アンテナパターン
-│   ├── h_plane.csv                 # H面（水平面）アンテナパターン
-│   └── MCStable.csv                # MCS（変調・符号化方式）テーブル
-│
-├── models/                          # Gazeboモデル
-│   ├── antenna/                    # 基地局アンテナモデル
-│   │   ├── model.config
-│   │   ├── model.sdf
-│   │   └── meshes/
-│   └── SUV/                        # 移動車両モデル
-│       ├── model.config
-│       ├── model.sdf
-│       └── meshes/
-│
-├── comms_sim_pkg/                   # ROS 2 / Gazebo パッケージ
-│   ├── include/comms_sim_pkg/       # C++ ヘッダー
-│   │   ├── antenna_pattern_parser.hpp
-│   │   ├── comms_calculator.hpp
-│   │   └── comms_node.hpp
-│   ├── src/                         # C++ ソースコード
-│   │   ├── TxControllerPlugin.cc    # 制御、通信、調停、ログ書き込みを統合したGazeboプラグイン
-│   │   ├── antenna_pattern_parser.cpp
-│   │   ├── comms_calculator.cpp
-│   │   └── comms_node.cpp           # ROS 2 C++ノード (C++プラグイン非使用時のフォールバック用)
-│   ├── comms_sim_pkg/               # Pythonモジュール（制御およびロギングノード）
-│   │   ├── antenna_parser.py
-│   │   ├── comms_calculator.py
-│   │   ├── comms_node.py
-│   │   ├── link_controller_node.py
-│   │   ├── link_scheduling_strategy.py
-│   │   ├── sim_ready_gate_node.py   # 全プラグイン準備完了を同期してシミュレーションを開始するゲート
-│   │   ├── sim_logger_node.py       # ミッション完了時のログ収集、サマリー集計・CSV保存
-│   │   └── tx_controller_node.py
-│   ├── launch/
-│   │   └── sim_launch.py          # Gazebo起動/スポーン/ブリッジ/ノード起動
-│   ├── resource/
-│   │   └── minimal_world.sdf
-│   ├── CMakeLists.txt
-│   └── package.xml
-│
-├── comms_sim_msgs/                   # メッセージ定義パッケージ
-│   └── msg/
-│       └── CommsQuality.msg
-│
-├── sim_results/                      # ログ出力ディレクトリ
-│   └── sweep_<timestamp>/            # スイープ実行時の出力フォルダ
-│       ├── sweep_summary_run*.csv    # スイープ各回の要約CSV
-│       └── runs/                     # 各パラメータ実行別の出力フォルダ
-│           └── run_<run_idx>_y<Y>_a<ANGLE>/
-│               ├── comms/            # 通信品質の時系列CSVファイル ({vehicle_name}_connected.csv / {vehicle_name}_full.csv)
-│               ├── control/          # 制御・イベントのCSVファイル (events.csv, feedforward_log.csv)
-│               └── heatmap/          # アンテナ制御用事前計算ヒートマップ (rssi_heatmap.csv)
-│
-├── docker-compose.yml
-├── docker-compose.gpu.yml            # GPU設定オーバーライド
-├── Dockerfile
-├── entrypoint.sh
-├── start.sh                          # コンテナ自動起動・GPU判定スクリプト
-├── README.md
-├── specification.md
-└── .gitignore
-```
-
-## 🌐 座標系
-
-本シミュレータは**ENU（East-North-Up）座標系**を採用しています。
-
-| 軸  | 方向      |
-| --- | --------- |
-| X   | 前方 (正) |
-| Y   | 左方 (正) |
-| Z   | 上方 (正) |
-
-**SUVモデル原点**: ホイールベース中央・トレッド中央・地面レベル (z=0)
-
-```
-    前方 (+X)
-      ↑
-FL ●─────● FR      (x=+1.5)
-   │     │
-   │  ★  │  ← ★ = モデル原点 (0,0,0) = 地面レベル
-   │     │
-RL ●─────● RR      (x=-1.5)
-      ↓
-    後方 (-X)
-```
-
-**`antenna_offset`**: エンティティ原点からアンテナ位置への3D相対座標 `[x, y, z]` [m]
-
-| 設置例                | offset値           |
-| --------------------- | ------------------ |
-| SUV屋根中央にアンテナ | `[0.0, 0.0, 2.23]` |
-| SUV屋根前方にアンテナ | `[1.0, 0.0, 2.23]` |
-
-## 🚀 クイックスタート
-
-### 前提条件
-
-- X11サーバー（GUIモード使用時、Linux/WSL2）
-
-### 初期セットアップ
-
-#### 1. Gitのインストール
-
-Ubuntu / WSL2 の場合:
-```bash
-sudo apt update
-sudo apt install git
-```
-Windows の場合は [Git for Windows](https://gitforwindows.org/) などをインストールしてください。
-
-#### 2. GitHubアカウントとSSHキーの準備
-
-本リポジトリのクローンにSSH接続を利用するため、アカウントとキーの登録を行います。
-
-1. **GitHubアカウントの作成**
-   - [GitHub登録ページ](https://github.com/signup) よりアカウントを作成してください。
-2. **SSHキーの生成** (Ubuntu/WSL2 もしくは Git Bash 等のターミナルで実行):
-   ```bash
-   ssh-keygen -t ed25519 -C "your_email@example.com"
-   ```
-   - 保存先やパスフレーズを聞かれますが、そのままEnterを押して進めて問題ありません。
-3. **公開鍵（Public key）の取得**:
-   ```bash
-   cat ~/.ssh/id_ed25519.pub
-   ```
-   - 表示された `ssh-ed25519 ...` から始まる文字列全体をコピーします。
-4. **GitHubへの鍵登録**:
-   - GitHubの [SSH keys 設定ページ](https://github.com/settings/keys) にアクセスします。
-   - 「New SSH key」をクリックし、タイトル（例: `My PC`）を入力してソースの枠内にコピーした公開鍵を貼り付け、「Add SSH key」で保存します。
-
-#### 3. Dockerのインストール
-
-Docker公式の手順に従って Docker をインストールしてください（`docker compose` コマンドが使用できるよう構成してください）。
-
-- [Docker Engine インストール手順 (Ubuntu)](https://docs.docker.com/engine/install/ubuntu/)
-- [Docker Desktop for Windows](https://docs.docker.com/desktop/install/windows-install/)
-
-### 4. リポジトリのクローン
-
-SSHを利用してリポジトリをクローンします。
+Gazeboを起動せず、同じ通信コアで距離別の正対リンクバジェットをCSV出力できる。
+ビルド後のROS環境で実行する：
 
 ```bash
-git clone git@github.com:your-username/ros2-gazebo-comms-sim.git
-cd ros2-gazebo-comms-sim
+ros2 run comms_sim_pkg link_budget_report src/comms_sim_pkg/config/drone_params.yaml
 ```
 
-### 5. ワークスペースのビルド（初回およびコード変更時）
+旧結果は電力・周波数・受信回路の設定が異なるため、新設定の結果と区別する。
 
-#### 1. イメージのビルド（初回のみ必須）
-```bash
-docker compose build
-```
+## 起動
 
-#### 2. コンテナの起動とビルドの実行
-専用のビルドコンテナを使ってパッケージをビルドします。（イメージは自動でビルドされます）
-```bash
-docker compose run --rm build
-```
-
-## 📺 シミュレータの実行
-
-### コンテナの起動（自動GPU判定）
-
-`start.sh` を使用してコンテナをバックグラウンドで起動します。スクリプトが自動的にNVIDIA GPUの有無を判定し、最適な設定（CPU/GPU）で起動します。同時にX11のアクセス許可も行われます。
-
-#### Linux / WSL2
+Docker EngineとCompose pluginを導入したホストで、リポジトリのルートから実行する。
+通常は以下のスクリプトだけで起動できる。`start.sh`を先に実行する必要はない。
 
 ```bash
-./start.sh
+# 並行・固定（初期設定）。イメージとプログラムをビルドして起動
+bash tools/start_headless.sh
+
+# 指定の4条件を順次実行し、位置・集計を検証して比較表と図を生成
+bash tools/start_headless.sh --all
+
+# 十字・追従、A=40 km/h / B=60 km/h
+bash tools/start_headless.sh scenario:=cross antenna_mode:=tracking speed_a_kmh:=40 speed_b_kmh:=60
+
+# 4条件すべてを独立速度で実行
+bash tools/start_headless.sh --all --speed-a-kmh 40 --speed-b-kmh 60
 ```
 
-コンテナが起動したら、以下のコマンドでコンテナ内のシェルに接続します。
+Dockerグループに追加済みでも現在のシェルへ反映されていない場合は、再ログインするか以下を使う。
 
 ```bash
-docker compose exec sim bash
+sg docker -c 'bash tools/start_headless.sh --all'
 ```
 
-以下コンテナ内
-
-##### ワークスペースのセットアップ
-
-新しく開いたシェルにビルド済みのパッケージを認識させます。（※コードを修正した場合は、ここで `colcon build --symlink-install` を実行して再ビルドすることも可能です）
+初回のDocker導入に管理者権限が必要な場合は、管理者が以下を実行する。Dockerグループはホストのroot相当の操作が可能になるため、登録するユーザーを確認する。
 
 ```bash
-source install/setup.bash
+sudo bash tools/setup_docker_host.sh rosgazebo
 ```
 
-##### シミュレーション起動
-
-X11 Forwarding経由でもサーバー側のGPUを使って高速描画を行うため、**`vglrun -d egl`** を先頭につけてシミュレーションを実行します。（※ホスト上にXサーバーが無くても、EGLバックエンドにより直接GPUにアクセスできます）
+CPUのみでヘッドレス実行できる。イメージ作成後、デスクトップ上へGUIを出す場合は以下を実行する（初回のイメージ作成だけを行う場合は `docker compose -f docker-compose.yml build sim`）。Xauthorityを読み取り専用で渡し、DockerのGPU連携がなくてもソフトウェア描画で表示する。最接近で自動的に一時停止し、画面の再生ボタンで続行できる。
 
 ```bash
-vglrun -d egl ros2 launch comms_sim_pkg sim_launch.py
+# 最接近で一時停止して配置を確認
+sg docker -c 'bash tools/start_gui.sh scenario:=parallel antenna_mode:=fixed'
+
+# 最初から最後まで通して再生
+sg docker -c 'bash tools/start_gui.sh scenario:=parallel antenna_mode:=fixed pause_at_encounter:=false'
 ```
 
-#### Windows (WSL2 + X Server)
-
-1. VcXsrv等のXサーバーをインストール・起動
-   - **【重要】** VcXsrv (XLaunch) の起動時（Extra settings画面）は、必ず **「Disable access control」** にチェックを入れてください。設定が漏れるとDockerからの画面描画が拒否されます。
-2. WSL2のDISPLAY変数を設定
+Docker内または同じ依存関係を導入したROS環境で直接起動する場合：
 
 ```bash
-export DISPLAY=$(cat /etc/resolv.conf | grep nameserver | awk '{print $2}'):0.0
+source /opt/ros/humble/setup.bash
+source install/drone/setup.bash
+ros2 launch comms_sim_pkg sim_launch.py headless:=false scenario:=cross antenna_mode:=tracking
 ```
 
-3. 上記Linuxと同様の手順でコンテナを起動
+`config_file:=...` で設定ファイルを指定できる。Docker内ではホストのリポジトリルートが `/workspace` になる。出力先の指定は `output_dir:=/workspace/sim_results/my_run`。既存結果があるディレクトリへの上書きは拒否する。
 
-### CUIモード（Headless）
+比較時に変えた条件を追跡できるよう、実行時設定と入力CSVのコピー、入力CSVのSHA256を結果フォルダへ保存する。
 
-GUIなしで高速にシミュレーションを実行します。GUI起動時と同様に `start.sh` で起動し `docker compose exec sim bash` で中に入った後、以下のコマンドを実行します。
+### コンテナとシミュレーションの起動を分ける
 
-```bash
-ros2 launch comms_sim_pkg sim_launch.py headless:=true
-```
+`bash start.sh` は開発用の常駐コンテナを起動する。GPU利用の可否だけを判定し、シミュレーションは開始しない。コンテナ起動時にheadlessを選ぶ必要はなく、`DISPLAY`の有無でも自動選択しない。
 
-### GUI / CUI 切り替え
+| 入口 | 用途 |
+|---|---|
+| `bash tools/start_headless.sh` | ビルド後、`headless:=true`で実験を実行 |
+| `bash tools/start_gui.sh` | ビルド後、Xauthorityを渡して`headless:=false`で実行（ソフトウェア描画） |
+| `bash start.sh` | 開発用コンテナを起動。`docker compose -f docker-compose.yml exec sim bash`で入る |
+| `ros2 launch comms_sim_pkg sim_launch.py` | ROS環境から直接実行。`headless`の既定値は`true` |
 
-| モード | コマンド                                                 | 用途                 |
-| ------ | -------------------------------------------------------- | -------------------- |
-| GUI    | `ros2 launch comms_sim_pkg sim_launch.py`                | 可視化・デバッグ     |
-| CUI    | `ros2 launch comms_sim_pkg sim_launch.py headless:=true` | 高速実行・バッチ処理 |
+常駐コンテナ内からGUIを直接起動する場合は、別途X11の認証設定が必要。ホストのデスクトップへ表示するときは `tools/start_gui.sh` を使う。
 
-## 📊 アンテナ角度・位置スイープシミュレーション (sweep_sim.py)
+## 設定とPHYモード
 
-大量のパラメータ条件（基地局の配置位置、アンテナ角度）を一括で自動実行し、各条件における通信品質やスループットの統計データを収集・集計するためのツール `tools/sweep_sim.py` が用意されています。
-
-### 1. 実行方法
-コンテナ内に入り、以下のコマンドで実行します：
-```bash
-python3 tools/sweep_sim.py [オプション]
-```
-
-### 2. コマンドライン引数 (CUIオプション)
-`tools/sweep_sim.py` は、以下のオプションを指定して実行できます（指定しない場合は `tools/lib/sweep_config.py` のデフォルト値が使用されます）：
-
-| オプション | 型 | デフォルト値 | 説明 |
-|---|---|---|---|
-| `-j`, `--concurrency` | int | `0` (自動) | 並列ワーカー数。`0`で自動検出（CPU・メモリから最適値を算出） |
-| `--start-angle` | float | `0.0` | スイープする角度の開始値 [deg] (西: `0`, 南: `90`, 東: `180`) |
-| `--end-angle` | float | `180.0` | スイープする角度の終了値 [deg] |
-| `--step-angle` | float | `1.0` | スイープする角度の刻み幅 [deg] |
-| `--y-positions` | str | `3.0` | 基地局のY位置（カンマ区切りで複数指定可） |
-| `--base-station-yaw` | float | `-90.0` | 基地局本体自体の向き（ヨー角） [deg] (南向き: `-90.0`, 北向き: `90.0`) |
-| `--num-runs` | int | `1` | 各設定条件（タスク）を繰り返しシミュレーションする回数 |
-| `--rtf` | float | `1.0` | スイープ時のシミュレーション加速倍率 (Real-Time Factor) |
-| `--timeout` | int | `1200` | 1シミュレーションランあたりの最大待機時間 [秒] |
-| `--resume` | str (省略可) | `None` | 中断したシミュレーションを再開。引数なしで直近の実行を自動検出。タイムスタンプやディレクトリパスの指定も可能 |
-| `--no-build` | flag | - | 起動時の自動 `colcon build` をスキップ |
-| `--manifest` | str | `None` | 分散実行用のマニフェストJSONファイルパス |
-
-**実行例:**
-```bash
-# 角度 80° から 100° まで 1°刻みで、各条件を 5回ずつ、加速倍率 8.0倍で実行
-python3 tools/sweep_sim.py --start-angle 80 --end-angle 100 --step-angle 1.0 --num-runs 5 --rtf 8.0
-
-# 並列数を手動で4に指定して実行
-python3 tools/sweep_sim.py -j 4
-
-# 途中で中断したスイープを再開（直近の実行を自動検出）
-python3 tools/sweep_sim.py --resume
-
-# 特定のスイープ（タイムスタンプ指定）を途中から再開
-python3 tools/sweep_sim.py --resume 20260526_145419
-```
-
-### 3. スイープ設定ファイル (`tools/lib/sweep_config.py`)
-スイープのデフォルトパラメータは `tools/lib/sweep_config.py` に定義されています。引数なしで実行した場合、これらのデフォルト値が適用されます。
-
-```python
-# 基地局のY位置リスト (m)
-Y_POSITIONS = [3.0]
-
-# 基地局自体の向き (ヨー角) (deg)
-RX_YAW_DEG = -90.0
-
-# 角度スイープの設定 (下限, 上限, 刻み幅)
-START_ANGLE = 0.0    # 下限 (deg)
-END_ANGLE = 180.0    # 上限 (deg)
-STEP_ANGLE = 1.0     # 刻み幅 (deg)
-
-# パラメータスイープを繰り返す回数 (ラン数)
-NUM_RUNS = 1
-
-# 1タスクあたりの最大待機時間 [秒]
-TASK_TIMEOUT_SEC = 1200
-
-# スイープ時の加速倍率 (ヘッドレス時のみ有効.1.0=リアルタイム)
-SWEEP_REAL_TIME_FACTOR = 1.0
-```
-
-### 4. 並列化アーキテクチャ
-
-スイープシミュレーションは複数のGazeboインスタンスを並列実行して高速化します。
-
-#### 自動並列数の算出
-`-j 0`（デフォルト）では、CPUコア数とメモリ容量から最適な並列数を自動算出します：
-
-```
-最適並列数 = min(
-    floor(CPUコア数 × 0.9 / 1シムあたりCPU消費),  ← CPU制約
-    floor(利用可能メモリ × 0.8 / 1シムあたりメモリ消費),  ← メモリ制約
-)
-```
-
-- 初回タスク実行時にリソースプロファイリングを行い、1インスタンスあたりのCPU/メモリ消費量を実測
-- プロファイリング完了後、最適並列数を自動で再計算
-- 各ワーカーは `ROS_DOMAIN_ID`, `GZ_PARTITION`, `GZ_PORT` で完全に分離
-
-#### プロセス分離
-各並列ワーカーは以下の環境変数で分離されており、DDSやGazeboのクロストークを防止します：
-
-| 環境変数 | 値 | 目的 |
+| 設定ファイル | PHY・用途 | 実行時間／すれ違い時刻 |
 |---|---|---|
-| `ROS_DOMAIN_ID` | `10 + worker_id` | ROS2 DDSドメインの分離 |
-| `GZ_PARTITION` | `comms_sim_partition_{worker_id}` | Gazebo通信パーティションの分離 |
-| `GZ_PORT` | `11345 + worker_id` | Gazeboサーバーポートの分離 |
-
-### 5. 実行進捗の監視
-スイープシミュレーションの実行中は、別ターミナルから以下のコマンドを実行することで、進捗状況（完了したタスク数、予測残り時間など）をリアルタイムで確認できます。
-```bash
-python3 ./tools/sweep_progress.py --watch
-```
-
-### 6. 複数PCでの分散実行と結果のマージ (`tools/sweep_dist.py`)
-
-大規模なスイープシミュレーション（多数のパラメータ条件）を複数のPCに分割して実行し、最終的にデータを安全に結合（マージ）するためのユーティリティツールが用意されています。
-
-#### ① タスクの分割 (メインPC)
-メインのPCで以下のコマンドを実行し、タスクを分割します（例として3分割する場合）。
-```bash
-python3 tools/sweep_dist.py split --splits 3
-```
-実行すると、`sim_results/dist_sweep_YYYYMMDD_HHMMSS/` 内に以下が作成されます。
-- `manifest_chunk_0.json`, `manifest_chunk_1.json`, `manifest_chunk_2.json` (各PC用のタスク定義ファイル)
-- `instructions.txt` (分散実行・統合の手順書)
-
-#### ② 各PCでのシミュレーション実行 (各PC)
-生成されたマニフェストJSONファイルをそれぞれのPCのワークスペースにコピーし、以下のコマンドで実行します。
-```bash
-python3 tools/sweep_sim.py --manifest manifest_chunk_X.json
-```
-- ※マニフェストに記録されたスイープ設定（RTF、ラン数など）とタスク割り当てが自動で読み込まれます。
-- ※結果は `sim_results/sweep_{スイープID}/` 内に出力され、ファイル名は `sweep_summary_run{run_idx}_chunk{chunk_idx}.csv` のように他のPCと衝突しない名前で出力されます。
-- ※実行途中で中断した場合も、`--resume` オプションで再開可能です。
-
-> #### 実行環境に関する注意 
-> sv12以外のサーバーで実行する場合、処理落ち等の影響によりデータ欠損が発生し、正常にデータを取得できない可能性があります。実行環境には十分ご注意ください。
-
-
-#### ③ データの収集と統合 (メインPC)
-1. 各PCでの実行完了後、生成されたフォルダ（例: `sim_results/sweep_{スイープID}/`）内のファイルをすべてメインPCの同じフォルダにコピーしてまとめます（個別の詳細データが入る `runs/` ディレクトリ配下も名前が衝突しないように設計されています）。
-2. メインPCで結合先のフォルダパスを指定して、以下のコマンドを実行します。
-```bash
-python3 tools/sweep_dist.py merge --sweep-dir sim_results/sweep_{スイープID}
-```
-マージツールは自動的に各チャンクCSVをランごとのCSVに結合し、全体の平均値（`sweep_summary.csv`）を再集計・保存します。マージ完了後、不要となったチャンク別のCSVは自動でクリーンアップされます。
-
-## ⚙️ パラメータ設定
-
-### config/sim_params.yaml
-
-主要なパラメータは `config/sim_params.yaml` で設定します。ランチファイル `comms_sim_pkg/launch/sim_launch.py` がこのYAMLを読み込み、Gazebo起動、モデルスポーン、ros_gz_bridge、各ノード起動に反映します。
-
-#### 全体シミュレーションパラメータ
-
-```yaml
-simulation:
-  logging_level: value        # ログ記録レベル (1〜5) (default: 5)
-                              # 1: サマリーのみ
-                              # 2: サマリー + イベントログ
-                              # 3: サマリー + イベント + 時系列 (CONNECTED時のみ)
-                              # 4: サマリー + イベント + 時系列 (常時記録)
-                              # 5: サマリー + イベント + 時系列 (常時記録) + アンテナ制御ログ + ヒートマップ
-  headless: value             # ヘッドレスモード (true: GUIなし, false: GUIあり) (default: true)
-  real_time_factor: value     # リアルタイム倍率 (default: 5.0)
-  physics_max_step_size: value # 物理演算の最大ステップサイズ [s]。通信品質計算周期と完全同期 (default: 0.0001)
-```
-
-#### 通信シミュレーションパラメータ（プラグイン内ロード）
-
-```yaml
-comms_simulator_node:
-  ros__parameters:
-    noise_variance: value # AWGN分散 [dB] (default: 0.0)
-    e_plane_path: value # E面アンテナCSV (default: "/workspace/config/e_plane.csv")
-    h_plane_path: value # H面アンテナCSV (default: "/workspace/config/h_plane.csv")
-    mcs_table_path: value # MCSテーブル (default: "/workspace/config/MCStable.csv")
-    link_establishment_time_ms: value # リンク確立時間 [ms] (default: 2.0)
-    comm_data_limit_mb: value # データ上限 [Mb] (default: -1.0, -1.0: 無制限)
-    max_antenna_attenuation: value # アンテナ最大減衰量 [dB] (default: 30.0)
-    logging_start_trigger: value # ログ記録開始トリガー (immediate, on_movement, on_topic) (default: "on_movement")
-
-    path_loss:
-      frequency: value # 使用周波数 [Hz] (default: 6.0e10)
-      c: value # 光速 [m/s] (default: 299792458)
-      exponent: value # パスロス指数 (default: 2.0)
-
-    tx_power: value # 送信電力 [dBm] (default: -7.0)
-```
-
-#### リンク制御パラメータ（集中スケジューラ / プラグイン内ロード）
-
-```yaml
-link_controller_node:
-  ros__parameters:
-    scheduling_policy: value # スケジューリングポリシー (例: sequential, round_robin, rssi_priority, geometric_beam_priority, physical_score_priority, geometric_weighted, feedforward_optimal)
-    heatmap_resolution_m: value # 軌道上の事前計算サンプリング解像度 [m] (feedforward_optimal または logging_level >= 5 で有効) (default: 0.2)
-    ff_max_pairs: value # 同時通信に使用する最大アンテナペア数 (-1で全ペア使用) (default: -1)
-    time_slot_duration_s: value # round_robin時のスロット長 [s] (default: 10.0)
-    rssi_threshold: value # rssi_priority時の閾値 [dBm] (default: -75)
-    beam_gain_threshold: value # geometric_beam_priority用の最小ゲイン閾値 [dBi] (default: 5.0)
-    weight_distance: value # geometric_weighted用の距離重み係数 (default: 0.7)
-    weight_angle: value # geometric_weighted用の角度重み係数 (default: 0.3)
-```
-
-※ 通信距離はワールド座標で計算されます。`/odom`（相対座標）からワールド座標へ変換するため、通常は `spawn_entities.suv.pose` と同じ値を指定します（launch が自動で渡します）。
-
-#### UGV制御・追従パラメータ（プラグイン内ロード）
-
-```yaml
-tx_controller_common:
-  waypoint_tolerance: value # ウェイポイント到達判定距離 [m] (default: 3.0)
-  control_rate: value # 制御ループ周波数 [Hz] (default: 100.0)
-  max_angular_velocity: value # 最大角速度 [rad/s] (default: 0.3)
-  heading_gain: value # 方向制御ゲイン (default: 0.6)
-  max_acceleration: value # 最大加速度 [m/s^2] (default: 10.0)
-```
-
-> **Note**: `vehicles` 以下の各車両パラメータに定義される `waypoints`（ワールド座標 `[X, Y, Z, V]`）を順次追従します。
-
-#### エンティティスポーン設定
-
-```yaml
-spawn_entities:
-  antenna:
-    model_uri: value # モデルURI (default: "models://antenna")
-    name: value # エンティティ名 (default: "antenna")
-    pose: [x, y, z, roll, pitch, yaw] # (default: [0.0, 6.0, 0.0, 0.0, 0.0, 0.0])
-    static: value # 静的オブジェクト (default: true)
-    antenna_height_offset: value # アンテナ高さ [m] (default: 3.0)
-    antenna_relative_rpy: [r, p, y] # アンテナ相対角度 [rad] (default: [0.0, 0.0, -1.5708])
-
-  suv:
-    model_uri: value # モデルURI (default: "models://SUV")
-    name: value # エンティティ名 (default: "suv")
-    pose: [x, y, z, roll, pitch, yaw] # (default: [-20.0, 0.0, 0.0, 0.0, 0.0, 0.0])
-    static: value # 静的オブジェクト (default: false)
-    antenna_height_offset: value # アンテナ高さ [m] (default: 1.9)
-    antenna_relative_rpy: [r, p, y] # アンテナ相対角度 [rad] (default: [0.0, 0.0, 0.0])
-```
-
-## 📊 出力データ
-
-シミュレーション実行中に収集したログは、以下のディレクトリにCSVとして出力されます。
-
-- 出力先: `sim_results/`（`/workspace/sim_results/` に保存）
-- 保存タイミング: **ミッション完了通知受信時**（全ウェイポイント到達時）およびノード終了時
-
-### 出力ディレクトリおよびファイル構造
-
-ロギングレベルおよび実行モード（スイープ等）に応じて、以下の3階層構造で出力されます。
-個々のCSVファイル名からタイムスタンプの重複を排除し、フォルダ階層によって結果をカプセル化（可視化・分類）しています。
-
-```
-sim_results/
-└── sweep_<sweep_timestamp>/                 # スイープ全体の実行ログフォルダ（単一実行時は run_<run_timestamp>）
-    ├── sweep_summary_run<run_idx>.csv       # スイープ実行各回の要約結果サマリー
-    └── runs/                                # 各個別シミュレーションランの結果
-        └── run_<run_idx>_y<Y>_a<ANGLE>/     # 個別ランのパラメータフォルダ
-            ├── comms/                       # 通信品質関連の時系列データ
-            │   ├── {vehicle_name}_connected.csv  # 接続時（CONNECTED状態）のみ記録 (logging_level: 3)
-            │   └── {vehicle_name}_full.csv       # 未接続時含む全期間記録 (logging_level: 4以上)
-            ├── control/                     # 制御およびハンドオーバーイベントデータ
-            │   ├── events.csv               # リンク状態やGrant権限の変更イベントログ (logging_level: 2以上)
-            │   └── feedforward_log.csv      # フィードフォワード制御のリアルタイム決定ログ (logging_level: 5のみ)
-            └── heatmap/                     # 事前計算ヒートマップデータ (logging_level: 5のみ)
-                └── rssi_heatmap.csv         # 軌道上の各座標における nominal RSSI 事前計算値
-```
-
-### 各ファイルの項目定義
-
-#### 1. サマリーCSV (`sweep_summary_run*.csv` / `sweep_summary.csv`)
-各車両の通信総量、接続率等を要約したデータです。
-- `run_id`: シミュレーション実行タイムスタンプ
-- `y_position`: 基地局のY軸配置位置 [m]
-- `antenna_angle`: 基地局アンテナの方向（Yaw） [rad]
-- `vehicle_name`: 車両（または車載アンテナ）名、もしくは `shinkansen_total`
-- `total_data_MB`: 累積送信データ量 [MB]
-- `connected_time_s`: 接続確立（CONNECTED）の総時間 [s]
-- `average_throughput_Gbps`: 接続状態における平均スループット [Gbps]
-- `average_rssi_dBm`: 接続状態における平均受信信号強度 [dBm]
-- `handover_count`: ハンドオーバー（接続再確立）回数
-
-#### 2. 通信品質時系列CSV (`comms/{vehicle_name}_connected.csv` または `_full.csv`)
-車両ごとの時系列通信パラメータを記録します。
-※ `vehicle_time_s`, `has_link_grant`, `comm_active`, `link_state` は `logging_level: 4` 以上（`_full.csv`）でのみ記録されます。
-- `time_s`: 最初の車両が走行を開始した時点を0とした経過時間 [s]
-- `vehicle_time_s`: 対象車両が走行を開始した時点を0とした経過時間 [s]
-- `vehicle_name`: 車両（または車載アンテナ）名
-- `has_link_grant`: 基地局からの通信権（Grant）付与フラグ
-- `distance_m`: アンテナ間3D距離 [m]
-- `rssi_dBm`: 受信信号強度 [dBm]
-- `throughput_Gbps`: 瞬時スループット [Gbps]
-- `total_data_MB`: 累積送信データ量 [MB]
-- `path_loss_dB`: パスロス [dB]
-- `e_gain_dB`: E面アンテナゲイン [dBi]
-- `h_gain_dB`: H面アンテナゲイン [dBi]
-- `comm_active`: 通信可否フラグ
-- `tx_x_m`, `tx_y_m`, `tx_z_m`: TXアンテナ位置座標 [m]
-- `bs_x_m`, `bs_y_m`, `bs_z_m`: 基地局アンテナ位置座標 [m]
-- `link_state`: リンク状態 (`DISCONNECTED` / `ESTABLISHING` / `CONNECTED`)
-
-#### 3. イベントCSV (`control/events.csv`)
-リンク権や通信状態の変化があった瞬間を記録します。
-- `time_s`: 経過時間 [s]
-- `vehicle_name`: 対象車両の名前
-- `link_state`: 新しいリンク状態
-- `has_link_grant`: 通信権付与フラグ
-- `rssi_dBm`: イベント発生時の受信信号強度 [dBm]
-- `distance_m`: イベント発生時のアンテナ間距離 [m]
-
-#### 4. nominal RSSI ヒートマップ (`heatmap/rssi_heatmap.csv`)
-シミュレーション起動時に、車両軌道上のサンプル座標ごとに基地局と各車載アンテナの組み合わせで計算される nominal RSSI の分布図です。
-- `x_m`, `y_m`, `z_m`: 軌道上のサンプル座標 [m]
-- `yaw_rad`: サンプル座標における車両の進行方向（Yaw） [rad]
-- `rssi_{bs_name}_{antenna_name}`: 基地局アンテナと車載アンテナの各ペアにおける nominal RSSI [dBm]
-- `optimal_antenna`: 最大の RSSI を示す車載アンテナ名
-- `max_rssi`: その座標における最大 RSSI [dBm]
-
-#### 5. フィードフォワード制御ログ (`control/feedforward_log.csv`)
-`feedforward_optimal` ポリシー稼働中の、リアルタイムなアンテナ選択決定の履歴です。
-- `time_s`: 経過時間 [s]
-- `tx_x_m`, `tx_y_m`, `tx_z_m`: 現在の TX アンテナ位置座標 [m]
-- `rssi_{antenna_name}`: 各車載アンテナの現在の実測 RSSI [dBm]
-- `selected_antenna`: 現在選択（Grant付与）されている車載アンテナ名
-- `rssi_optimal_dBm`: 現在位置に対応するヒートマップ上（LUT）の nominal optimal RSSI [dBm]
-
-## 🔌 ROSインターフェース
-
-### トピック
-
-| トピック名           | メッセージ型                  | 方向    | 説明                                                          |
-| -------------------- | ----------------------------- | ------- | ------------------------------------------------------------- |
-| `/imu/data`          | `sensor_msgs/Imu`             | Sub     | TX姿勢情報（ros_gz_bridge経由）                              |
-| `/odom`              | `nav_msgs/Odometry`           | Sub     | TXオドメトリ（ros_gz_bridge経由）                            |
-| `/cmd_vel`           | `geometry_msgs/Twist`         | Pub     | 速度指令（ros_gz_bridge経由でGazeboへ送信）                   |
-| `/comms/quality`     | `comms_sim_msgs/CommsQuality` | Pub     | 通信品質                                                      |
-| `/link_request`      | `std_msgs/Float64`            | Pub     | 基地局へRSSIをスコアとして報告し通信権限を要求                |
-| `/link_grant`        | `std_msgs/Bool`               | Sub     | 完了局からのアクセス許可(TDMA的スケジューリング)              |
-| `/mission_complete`  | `std_msgs/Bool`               | Pub     | TX完走通知（全車完了で`sim_logger_node`が自動終了を実行）    |
-| `/rx/pose` | `geometry_msgs/PoseStamped`   | Sub     | 基地局姿勢（オプション、アンテナ方向計算に使用）              |
-| `/clock`             | `rosgraph_msgs/Clock`         | Sub     | シミュレーション時間（use_sim_time=true時）                   |
-
-### カスタムメッセージ: CommsQuality
-
-```
-std_msgs/Header header
-float64 distance              # TX-基地局間距離 [m]
-float64 rssi                  # 受信信号強度 [dBm]
-float64 throughput            # 瞬時スループット [Gbps]
-float64 total_data_transmitted # 累計伝送データ量 [Mb]
-float64 tx_x                 # TX位置X [m]
-float64 tx_y                 # TX位置Y [m]
-float64 tx_z                 # TX位置Z [m]
-float64 rx_x        # 基地局位置X [m]
-float64 rx_y        # 基地局位置Y [m]
-float64 rx_z        # 基地局アンテナ位置Z [m]
-float64 antenna_gain_e_plane   # E面ゲイン [dBi]
-float64 antenna_gain_h_plane   # H面ゲイン [dBi]
-float64 path_loss              # パスロス [dB]
-bool comm_active               # 通信アクティブフラグ
-```
-
-## 🔧 伝搬路モデルの拡張（Strategy Pattern）
-
-本シミュレータは **Strategy パターン** を採用しており、伝搬路モデルを容易に拡張・切り替えできます。
-
-### 既存モデル
-
-1. **LogDistancePathLossModel**: 対数距離減衰モデル（デフォルト）
-2. **TwoRayGroundModel**: 2波モデル
-
-### 新規モデルの追加方法
-
-#### 1. 抽象基底クラスを継承
-
-```python
-# comms_sim_pkg/comms_calculator.py
-
-from abc import ABC, abstractmethod
-
-class PropagationModel(ABC):
-    """伝搬路モデルの抽象基底クラス"""
-
-    @abstractmethod
-    def calculate_path_loss(self, distance: float, frequency_ghz: float = 60.0) -> float:
-        """パスロスを計算"""
-        pass
-
-    @property
-    @abstractmethod
-    def model_name(self) -> str:
-        """モデル名を返す"""
-        pass
-```
-
-#### 2. 具象クラスを実装
-
-```python
-class NLOSModel(PropagationModel):
-    """NLOS（見通し外）伝搬モデルの例"""
-
-    def __init__(self, additional_loss: float = 20.0):
-        self.additional_loss = additional_loss
-
-    def calculate_path_loss(self, distance: float, frequency_ghz: float = 60.0) -> float:
-        # 基本的な自由空間伝搬損失 + 追加損失
-        fspl = 20 * np.log10(distance) + 20 * np.log10(frequency_ghz) + 92.45
-        return fspl + self.additional_loss
-
-    @property
-    def model_name(self) -> str:
-        return "NLOS Propagation Model"
-```
-
-#### 3. モデルを切り替え
-
-```python
-# comms_node.py で使用
-from .comms_calculator import CommsCalculator, NLOSModel
-
-# モデルのインスタンス化
-nlos_model = NLOSModel(additional_loss=25.0)
-
-# 計算機に設定
-calculator = CommsCalculator(propagation_model=nlos_model)
-
-# または動的に切り替え
-calculator.set_propagation_model(nlos_model)
-```
-
-## 🔍 トラブルシューティング
-
-### Gazeboが起動しない
+| [drone_params.yaml](src/comms_sim_pkg/config/drone_params.yaml) | 既定。QPSKの理論BER/PERからフレーム成否を抽選する統計AWGN | 40 s／20 s |
+| [drone_lab_phy.yaml](src/comms_sim_pkg/config/drone_lab_phy.yaml) | 試作I/Q PHY。ビット系列、矩形パルス、AWGN、復調、CRC判定 | 40 s／20 s |
+| [drone_lab_phy_smoke.yaml](src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml) | 同じ試作PHYの短時間動作確認用 | 1.1 s／0.55 s |
+
+試作PHYは `lab_phy.enabled: true` で選択し、payload FECは未実装。制御フレーム長と送信時間は実際のビット／サンプル数から計算するため、統計AWGN用の64 byte・20 µs・100 µs設定を適用しない。制約とログの意味は [試作PHYの実装説明](specification_review/runtime_lab_phy_ja.txt) を参照。
 
 ```bash
-# GZ_SIM_RESOURCE_PATHを確認
-echo $GZ_SIM_RESOURCE_PATH
+# 試作PHYの短時間4条件比較（ホストから実行）
+bash tools/start_headless.sh --all --config src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml
 
-# モデルパスを明示的に設定
-export GZ_SIM_RESOURCE_PATH=/workspace/models
+# 試作PHYの通常設定を単独実行
+bash tools/start_headless.sh config_file:=/workspace/src/comms_sim_pkg/config/drone_lab_phy.yaml
 ```
 
-### X11 Forwarding エラー
+単独実行はROSの `config_file:=...`、`--all` は実行ツールの `--config ...` を使う。前者のDocker内パスではリポジトリルートが `/workspace` になる。YAML内のアンテナCSVとMCS表の相対パスは、そのYAMLの所在ディレクトリが基準。設定を別ディレクトリへコピーするときはCSVの参照も合わせて変更する。
+
+両モードとも固定QPSKであり、[適応MCS案](specification_review/adaptive_mcs_design_ja.txt) は実行コードへ未接続。`MCStable.csv` は統計AWGNと試作PHYではレート選択に使わない。`lab_phy.enabled: false`（または省略）かつ `awgn.enabled: false` の互換モードで使用する。
+
+短時間設定と40秒設定は観測する軌道区間が異なる。結果を比較するときは、実行時間・PHYモード・seed・電力設定を確認する。
+
+## 結果の読み方
+
+通常の保存先は `sim_results/drone_日時_ID/`。4条件実行では `sim_results/drone_four_日時_ID/` 配下に各条件のフォルダ、実行ログ、`manifest.json`、`comparison.csv` を作る。
+
+| ファイル | 内容 |
+|---|---|
+| `config.yaml` / `world.sdf` / `provenance.json` / `inputs/` | 実際に使った設定・world・モデル情報・入力CSVとハッシュ |
+| `timeseries.csv` | 10 msごとの位置、両方向RSSI、感度との差、指向ずれ、接続状態、確認済み転送量 |
+| `events.csv` | 制御フレーム送受信、受信失敗、待ち開始、タイムアウト、切断、Beacon選択／無視／停止。beacon_indexで対応付け |
+| `frames.csv` | AWGN有効時の全フレームのBER/PER・乱数値・受信成否・失敗理由 |
+| `connections.csv` | 成功接続ごとのBeacon開始／受信・ACK受信時刻、リンク確立時間、開始からの待ち時間 |
+| `gazebo_poses.csv` | Gazeboで更新された2機・2アンテナの実際の位置姿勢（50 Hz） |
+| `summary.csv` | 試行数、接続数、接続前タイムアウト数、接続後切断数、接続時間、確認済み転送量 |
+| `completed` | 実行時間に到達し、CSV保存が成功した印 |
+| `conditions.csv` | 実験条件を1行にした表（解析時に生成） |
+| `beacon_requests.csv` | Requestごとに起点Beaconの番号・送受信時刻、Request成否、成立／タイムアウトを対応付け |
+| `timeouts.csv` | 接続前のタイムアウト1件1行。失敗時と判定時の距離・RSSI・指向ずれを別々に記録 |
+| `disconnections.csv` | 接続後の切断1件1行。タイムアウト件数には含めない |
+| `classification_summary.csv` | 新定義のタイムアウト数と切断数。旧ログ再解析時も原本summary.csvは保持 |
+| `pending_waits.csv` | 実験終了時点で判定時刻に達していない待ち。タイムアウト0件と区別する |
+| `timeout_counts.csv` | 種類別回数、Beacon受信失敗数、接続試行数・成立数 |
+| `timeline.png` | すれ違い時刻基準のRSSI・指向ずれ・転送量と、失敗／タイムアウトの時刻 |
+
+4条件実行では検証・解析を自動実行する。単独実行の結果も、ROSコンテナ内で以下から検証・解析できる。
 
 ```bash
-# Xサーバーへのアクセスを許可
-xhost +local:docker
+python3 tools/validate_drone_results.py sim_results/my_run
+python3 tools/analyze_drone_results.py sim_results/my_run
 
-# DISPLAY変数を確認
-echo $DISPLAY
+# 試作I/Q PHYの場合は、サンプル時刻・フレーム長・転送量も追加検証
+python3 tools/validate_lab_phy_results.py sim_results/my_run
 ```
 
-### ビルドエラー
+4条件実行の自動検証は `validate_drone_results.py` による共通検証。試作PHY固有の検証は各条件のフォルダに対して上記を追加実行する。
+
+`timeouts.csv` の `wait_start_s` は500 msの起点、`failure_sample_s` はフレーム内で受信不可を検出した最初のサンプル時刻、`timeout_s` は待ち切れた時刻。`margin_ab_db` / `margin_ba_db` は受信感度との差で、負なら受信できない。
+
+Beaconは140 µs周期（送信開始間隔）で、BがRequestを受信するまで継続する。AはRequest送信後、新しいBeaconを無視して最初のResponseを500 ms待ち、期限を更新しない。BがRequestを受信した時点でBeaconを停止する。A/Bとも送信中は受信できず、異なるBeacon番号のフレーム間でも送受信区間が重なれば `RECEIVER_TRANSMITTING` として失敗する。
+
+`beacon_index` は実験内で1から連番とし、再接続でリセットしない。Request・Response・ACK・接続後DATAにも起点の番号を引き継ぐ。`BEACON_SELECTED` は応答対象の選択、`BEACON_IGNORED` はAが処理中のため無視、`BEACON_STOPPED` はBによるRequest受信を表す。状態図のResponse待ち中でもBはBeaconを送信し得る。
+
+`timeouts` は接続前のResponse/ACK待ちだけを数える。接続成立後のDATA/DATA_ACK無応答は `disconnections` に数え、初回DATA失敗で転送量が0 MBでもタイムアウトに含めない。500 msの無応答期限は維持する。
+
+**タイムアウト0件でも接続できているとは限らない。** Beaconを一度も受信できない条件では、接続試行もタイムアウトも0件になる。必ず試行数・成立数・Beacon受信失敗数と併せて読む。AWGN有効時はフレームごとに確率的な誤りを抽選する。同じseedでは同じ結果になるため、独立試行にはseedを変える。
+
+## ドローンモデル
+
+ユーザー指定の [MuhammadIrhamArijan / drone](https://app.gazebosim.org/MuhammadIrhamArijan/fuel/models/drone)（Fuel version 1、Parrot Bebop 2）を [models/drone](src/comms_sim_pkg/models/drone) に保存済み。起動時にFuelへ接続する必要はない。
+
+Fuel記載ライセンスは **CC BY 4.0**。`model.config` の作者は Olivier Crave (Parrot)。出典、取得ファイルのハッシュ、ローカル変更点は [ATTRIBUTION.txt](src/comms_sim_pkg/models/drone/ATTRIBUTION.txt) に保存。メッシュとサムネイルは原本を使用し、参照URIを変更した。重力なしのworldで可動モデルへ指定軌道を与える。ローター駆動・空力・姿勢安定化・風のシミュレーションは含めない。黄色の線と先端がアンテナ正面方向を示す。
+
+## ビルドとテスト
+
+古い成果物と混在しないよう、ビルド先は `build/drone`、インストール先は `install/drone`。通常のビルド対象は `comms_sim_pkg` のみで、現在のドローン実験は `comms_sim_msgs` に依存しない。
 
 ```bash
-# クリーンビルド
-cd /workspace
-rm -rf build install log
-colcon build --symlink-install
+# Docker内、または同じROS/Gazebo依存関係を導入した環境
+source /opt/ros/humble/setup.bash
+colcon build --build-base build/drone --install-base install/drone --packages-select comms_sim_pkg --symlink-install
+ctest --test-dir build/drone/comms_sim_pkg --output-on-failure
 ```
 
-### トピックが見つからない
+ホストから既存のDockerイメージでビルド・テストだけを実行する場合：
 
 ```bash
-# 利用可能なトピックを確認
-ros2 topic list
-
-# Gazeboのトピックを確認
-gz topic -l
+docker compose -f docker-compose.yml run --rm --no-deps --user "$(id -u):$(id -g)" -e HOME=/tmp build
+docker compose -f docker-compose.yml run --rm --no-deps --user "$(id -u):$(id -g)" -e HOME=/tmp sim \
+  ctest --test-dir build/drone/comms_sim_pkg --output-on-failure
 ```
+
+CTestは `drone_link_tests`、`link_budget_tests`、`awgn_tests`、`lab_phy_tests` の4件。通信コアのテストは、両機の速度・最接近距離・追従方向・周波数別損失・接続順序・500 ms境界・ACK前の転送量非加算・物理更新刻みによらないイベント処理を検証する。4条件の実行ツールは、Gazebo実位置と理想軌道、アンテナ方向、時系列とサマリーの一致も検証する。
+
+## プロトコル状態とRSSI滞在割合の作図
+
+4条件を実行した親ディレクトリを指定する。以下の `sim_results/my_four_runs` は実際の保存先に置き換える。Python依存はPyYAML・NumPy・Matplotlib（Dockerイメージに導入済み）。日本語フォントはNoto Sans CJK JPを使用する。Dockerfileには日本語フォントの導入が含まれていないため、日本語が欠ける場合は作図する環境に `fonts-noto-cjk` を導入する。
+
+```bash
+python3 tools/plot_protocol_occupancy.py sim_results/my_four_runs
+```
+
+`protocol_analysis/` に状態遷移の全体図・接続手順の拡大図・RSSI滞在割合図をPNG/PDFで保存する。
+状態区間はイベントログから復元し、RSSIは10msログを時間加重して5dB刻みで集計する。
+`--bin-db 1` で刻みを変更できる。RSSIは全時間と接続中（切断待ち除外）を別々に集計し、
+未成立条件の接続中割合は分母なしとして空欄にする。数値CSVと集計方法の説明も同じ場所に保存する。
+
+RSSI帯を分母にした「そのRSSIのとき、どの状態にいたか」は次で作図する。
+
+```bash
+python3 tools/plot_state_by_rssi.py sim_results/my_four_runs
+```
+
+`state_by_rssi.png/pdf/csv` と境界拡大図、接続境界のログ図を保存。各RSSI帯の中で状態割合の合計が100%になる。
+
+試作I/Q PHYの短時間4条件ログでは、信号帯別のgoodputと既存MCS表の参考比較も作図できる。
+
+```bash
+python3 tools/plot_throughput_by_signal.py sim_results/my_lab_phy_smoke_runs
+```
+
+`signal_throughput/` にSNR・Eb/N0・RSSI別のPNG/PDF/CSVを保存する。ACKで確認したpayloadを各信号帯の滞在時間（待機を含む）で割った値であり、PHYレートとは異なる。現在のツールは試作PHYのDATA/ACK通番を必要とし、図題も1.1秒の短時間設定向け。MCS表の速度定義とRSSI参照面は未確定のため、適応変調の実測結果として扱わない。
+
+## リポジトリ構成
+
+| パス | 役割 |
+|---|---|
+| `src/comms_sim_pkg/src/`・`include/` | C++通信コア、統計AWGN、試作PHY、Gazeboプラグイン、リンクバジェット出力 |
+| `src/comms_sim_pkg/launch/` | 設定・入力の保存、world生成、GazeboとROS bridgeの起動 |
+| `src/comms_sim_pkg/config/` | 実行設定、共通アンテナCSV、MCS表、Fast DDS設定 |
+| `src/comms_sim_pkg/models/`・`worlds/` | 同梱モデルとworld。モデルの出典は `models/drone/ATTRIBUTION.txt` |
+| `src/comms_sim_pkg/test/` | 通信・電力計算・PHYのC++テストと照合用データ |
+| `src/comms_sim_msgs/` | 旧通信品質メッセージ定義。現在のドローン実験では未使用 |
+| `tools/` | ホスト設定・起動、4条件実行、結果検証、解析・作図 |
+| `specification.md` | 実装仕様と集計定義 |
+| `specification_review/` | 規格照合、設計案、試作PHYの実装説明、出典資料。各資料の実装状況に注意 |
+| `RESUME_NOTES.txt` | ローカルの作業引き継ぎメモ（Git管理対象外）。古い未実装状態や変更前の条件も含む |
+| `sim_results/` | 実験ごとの設定・CSV・図。Git管理対象外（管理用ファイルを除く） |
+| `build/`・`install/`・`log/` | colconの生成物。Git管理対象外 |
+| `Dockerfile`・`docker-compose*.yml`・`entrypoint.sh` | 実行環境とソースのマウント設定 |
+
+実行条件は各結果の `config.yaml`、入力の由来は `provenance.json` で確認する。`specification_review/` の提案YAMLは実行設定ではない。資料を更新するときは、実装済みの内容を `specification.md` とREADMEへ反映し、検討中の案と区別する。
+
+`.dockerignore` はビルド成果物・実験結果・取得資料などをDockerのビルドコンテキストから除外する。ファイルの削除や、実行時の `/workspace` マウントには影響しない。
+
+`specification_review/references/` の取得PDFと抽出テキストはローカルキャッシュとしてGit管理対象外。出典URL・SHA256・使用箇所は [manifest.json](specification_review/references/manifest.json) に記録し、設計案・根拠の対応表とともに管理する。
+
+## ブランチの使い分け
+
+`main` は現在のドローン2機の通信実験を開発する基準とする。進行中の車両HO（ハンドオーバー）研究は別系統で保持する。
+
+| ブランチ | 内容 |
+|---|---|
+| `feat/urban-2lane` | 都市道路・車両HO、評価・リプレイ・資料整備 |
+| `feat/production-sim-two-phase` | 10台×3 RSUの二相評価 |
+| `imp-var` | KKFによる予測HOと評価基盤 |
+
+HO系統の変更はドローン版へ一括マージせず、共通で必要な修正を内容ごとに検討する。取り込み済みの一時ブランチは整理し、独自変更の残るブランチは保持する。

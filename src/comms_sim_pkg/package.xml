@@ -1,56 +1,24 @@
 <?xml version="1.0"?>
-<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
 <package format="3">
   <name>comms_sim_pkg</name>
-  <version>1.0.0</version>
-  <description>
-    ROS 2 Communication Simulation Package for Gazebo Harmonic.
-    Simulates wireless communication quality (RSSI/Throughput) between
-    a mobile TX and a fixed rx station using path loss models.
-  </description>
-  
+  <version>2.0.0</version>
+  <description>Two-drone encounter simulation with asymmetric 272 GHz / 61 GHz links.</description>
   <maintainer email="s.yagi.504@stn.nitech.ac.jp">Developer</maintainer>
   <license>Apache-2.0</license>
-  
-  <author email="s.yagi.504@stn.nitech.ac.jp">Developer</author>
-  
-  <!-- Build dependencies -->
   <buildtool_depend>ament_cmake</buildtool_depend>
-  <buildtool_depend>ament_cmake_python</buildtool_depend>
-  
-  <!-- Runtime dependencies -->
-  <depend>rclpy</depend>
-  <depend>rclcpp</depend>
-  <depend>std_msgs</depend>
-  <depend>sensor_msgs</depend>
-  <depend>geometry_msgs</depend>
-  <depend>nav_msgs</depend>
-  <depend>comms_sim_msgs</depend>
-  
-  <depend>eigen3_cmake_module</depend>
-  <build_depend>yaml_cpp_vendor</build_depend>
-  <exec_depend>yaml_cpp_vendor</exec_depend>
-  
-  <!-- Gazebo and ROS-GZ bridge -->
+  <depend>eigen</depend>
+  <depend>yaml_cpp_vendor</depend>
+  <depend>gz-sim8</depend>
+  <depend>gz-plugin2</depend>
+  <depend>gz-transport13</depend>
+  <depend>gz-msgs10</depend>
   <exec_depend>ros_gz_sim</exec_depend>
   <exec_depend>ros_gz_bridge</exec_depend>
-  <exec_depend>ros_gz_interfaces</exec_depend>
-  
-  <!-- Python libraries -->
-  <exec_depend>python3-numpy</exec_depend>
-  <exec_depend>python3-scipy</exec_depend>
-  <exec_depend>python3-pandas</exec_depend>
+  <exec_depend>geometry_msgs</exec_depend>
+  <exec_depend>rosgraph_msgs</exec_depend>
   <exec_depend>python3-yaml</exec_depend>
-  
-  <!-- Launch dependencies -->
+  <exec_depend>ament_index_python</exec_depend>
   <exec_depend>launch</exec_depend>
   <exec_depend>launch_ros</exec_depend>
-  
-  <!-- Test dependencies -->
-  <test_depend>ament_lint_auto</test_depend>
-  <test_depend>ament_lint_common</test_depend>
-  
-  <export>
-    <build_type>ament_cmake</build_type>
-  </export>
+  <export><build_type>ament_cmake</build_type></export>
 </package>
