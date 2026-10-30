@@ -6,6 +6,8 @@
 #include <fstream>
 #include <sstream>
 #include <iomanip>
+#include <unistd.h>
+#include <yaml-cpp/yaml.h>
 using namespace comms_sim;
 void check(bool value, const char *message) { if (!value) throw std::runtime_error(message); }
 void near_at(int line, double a, double b, double tolerance = 1e-9) {
@@ -19,6 +21,39 @@ LinkSample good(double) { return {0, -40, -40, 1, 20, 20, true, true}; }
 int main(int argc, char **argv) {
   try {
     check(argc == 2, "設定ディレクトリが必要です");
+    // 無効時は基準距離・正面利得を使ったExpected RSSI計算を必要としない。
+    auto hrcp_file=std::filesystem::path(argv[1])/"drone_hrcp_fspl.yaml";
+    check(!ScenarioConfig::Load(hrcp_file.string()).protocol.hrcp.expected_rssi_admission_enabled,"今回の設定で期待RSSIが有効です");
+    auto hrcp_yaml=YAML::LoadFile(hrcp_file.string());
+    for(const char*key:{"e_plane","h_plane"})hrcp_yaml["antenna"][key]=std::filesystem::absolute(hrcp_file.parent_path()/hrcp_yaml["antenna"][key].as<std::string>()).string();
+    hrcp_yaml["mcs_table"]=std::filesystem::absolute(hrcp_file.parent_path()/hrcp_yaml["mcs_table"].as<std::string>()).string();
+    auto loader_file=std::filesystem::temp_directory_path()/("hrcp-admission-"+std::to_string(getpid())+".yaml");
+    auto load_hrcp=[&](){ {std::ofstream out(loader_file);out<<hrcp_yaml;}return ScenarioConfig::Load(loader_file.string()); };
+    hrcp_yaml["radio_ba"].remove("tx_antenna_gain_dbi");hrcp_yaml["hrcp"]["association_reference_distance_m"]=-1;
+    check(!load_hrcp().protocol.hrcp.expected_rssi_admission_enabled,"無効時に期待RSSI計算へ依存しています");
+    hrcp_yaml["hrcp"]["expected_rssi_admission_enabled"]=true;
+    bool rejected_admission=false;try{load_hrcp();}catch(const std::invalid_argument&){rejected_admission=true;}
+    check(rejected_admission,"有効時に不正な基準距離を受理しています");
+    hrcp_yaml["hrcp"].remove("expected_rssi_admission_enabled");
+    hrcp_yaml["hrcp"]["association_reference_distance_m"]=30;hrcp_yaml["radio_ba"]["tx_antenna_gain_dbi"]=24;
+    check(load_hrcp().protocol.hrcp.expected_rssi_admission_enabled,"旧設定の期待RSSI動作が変わっています");
+    hrcp_yaml["hrcp"]["expected_rssi_admission_enabled"]=false;
+    hrcp_yaml["antenna"]["max_attenuation_db"]=YAML::Null;
+    for(const char*direction:{"radio_ab","radio_ba"})
+      for(const char*gain:{"tx_antenna_gain_dbi","rx_antenna_gain_dbi"})hrcp_yaml[direction].remove(gain);
+    const auto raw_config=load_hrcp();
+    check(std::isinf(raw_config.attenuation_limit_db)&&raw_config.attenuation_limit_db>0,"nullで減衰打切りを解除できません");
+    check(!raw_config.ab.tx_antenna_gain_dbi&&!raw_config.ab.rx_antenna_gain_dbi&&
+          !raw_config.ba.tx_antenna_gain_dbi&&!raw_config.ba.rx_antenna_gain_dbi,"CSV利得の設定に正面補正が残っています");
+    hrcp_yaml["duration_s"]=.01;
+    bool rejected_short=false;try{load_hrcp();}catch(const std::invalid_argument&){rejected_short=true;}
+    check(rejected_short,"明示指定なしで最接近前終了を受理しています");
+    hrcp_yaml["simulation"]["allow_pre_encounter_end"]=true;
+    const auto short_config=load_hrcp();
+    check(short_config.allow_pre_encounter_end&&short_config.duration_s==.01,"最接近前の再生記録を設定できません");
+    near((geometry(short_config,.005).a-geometry(raw_config,.005).a).norm(),0);
+    near((geometry(short_config,.005).b-geometry(raw_config,.005).b).norm(),0);
+    std::filesystem::remove(loader_file);
     ScenarioConfig c;
     auto g = geometry(c, 20);
     near((g.a-g.b).norm(), std::sqrt(200));
@@ -75,6 +110,17 @@ int main(int argc, char **argv) {
     auto base = calc.calculate_all(Eigen::Vector3d::Zero(),Eigen::Vector3d::UnitX(),0,false);
     auto threshold = calc.calculate_all(Eigen::Vector3d::Zero(),Eigen::Vector3d::UnitX(), -68.5-base.rssi,false);
     near(threshold.throughput, 0.5);
+    // 閾値モードではCSVの各段階を選び、DATA方向の速度をACK確認分だけ加算。
+    for(const auto &entry:std::vector<std::pair<double,double>>{{-68.5,.5},{-65.5,1.1},{-62.5,2.15},{-58.5,2.7},{-54,4.6},{-50.5,6}}){
+      auto value=calc.calculate_all(Eigen::Vector3d::Zero(),Eigen::Vector3d::UnitX(),entry.first-base.rssi,false);
+      near(value.throughput,entry.second);
+    }
+    auto below=calc.calculate_all(Eigen::Vector3d::Zero(),Eigen::Vector3d::UnitX(),-68.5001-base.rssi,false);
+    near(below.throughput,0);
+    ProtocolConfig table_config;table_config.data_from_prc=true;
+    LinkProtocol table_link(table_config,[](double t){auto s=good(t);s.rate_ab_gbps=.5;s.rate_ba_gbps=6;return s;});
+    table_link.Advance(249e-6);near(table_link.Stats().delivered_mb,0);
+    table_link.Advance(250e-6);near(table_link.Stats().delivered_mb,.075);
     ProtocolConfig p;
     std::vector<LinkEvent> events;
     LinkProtocol link(p, good, [&](const LinkEvent &e){events.push_back(e);});
@@ -188,9 +234,11 @@ int main(int argc, char **argv) {
     // ログ間隔で割り切れない時間でもサマリーと完了判定を保存する。
     auto temp = std::filesystem::temp_directory_path()/"drone_link_test_results";
     std::filesystem::remove_all(temp);
+    c.preview_mode=true;
     c.output_dir=temp.string(); c.duration_s=.023; c.encounter_s=.01;
     { DroneRun run(c); run.Advance(.023); run.Finish(); }
     check(std::filesystem::exists(temp/"completed"),"完了マーカー");
+    check(std::filesystem::exists(temp/"monitor_replay.jsonl"),"閾値モデルのモニター記録");
     bool duplicate=false; try { DroneRun run(c); } catch (const std::runtime_error &) { duplicate=true; }
     check(duplicate,"既存結果を上書きしない");
     std::filesystem::remove_all(temp);

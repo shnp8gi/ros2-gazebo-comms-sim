@@ -1,4 +1,5 @@
 #include "comms_sim_pkg/drone_link.hpp"
+#include "comms_sim_pkg/hrcp_signal_monitor.hpp"
 #include <yaml-cpp/yaml.h>
 #include <algorithm>
 #include <cmath>
@@ -23,6 +24,8 @@ void positive(double value, const char *name) {
 ScenarioConfig ScenarioConfig::Load(const std::string &path) {
   auto y = YAML::LoadFile(path);
   ScenarioConfig c;
+  c.preview_mode=y["preview_mode"]&&y["preview_mode"].as<bool>();
+  c.monitor_only=y["monitor_only"]&&y["monitor_only"].as<bool>();
   c.scenario = y["scenario"].as<std::string>();
   c.antenna_mode = y["antenna_mode"].as<std::string>();
   auto drone = [&](const char *key, DroneConfig &d) {
@@ -53,12 +56,19 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
   c.duration_s = number(y, "duration_s", c.duration_s);
   c.lateral_separation_m = number(y, "lateral_separation_m", c.lateral_separation_m);
   c.path_loss_exponent = number(y["propagation"], "exponent", c.path_loss_exponent);
-  c.attenuation_limit_db = number(y["antenna"], "max_attenuation_db", c.attenuation_limit_db);
+  // 明示的なnullは減衰の打切りなし。省略時は従来の30 dBを維持する。
+  const auto attenuation_limit = y["antenna"]["max_attenuation_db"];
+  c.attenuation_limit_db = attenuation_limit && attenuation_limit.IsNull()
+      ? std::numeric_limits<double>::infinity()
+      : number(y["antenna"], "max_attenuation_db", c.attenuation_limit_db);
   auto sim = y["simulation"];
+  c.allow_pre_encounter_end = sim["allow_pre_encounter_end"] && sim["allow_pre_encounter_end"].as<bool>();
   c.physics_step_s = number(sim, "physics_step_s", c.physics_step_s);
   c.real_time_factor = number(sim, "real_time_factor", c.real_time_factor);
   c.log_interval_s = number(sim, "log_interval_s", c.log_interval_s);
   auto p = y["protocol"];
+  c.protocol.data_from_prc = p["data_from_prc"] && p["data_from_prc"].as<bool>();
+  c.protocol.hrcp.data_from_prc = c.protocol.data_from_prc;
   c.protocol.beacon_interval_s = number(p, "beacon_interval_ms", 0.14) / 1000;
   c.protocol.control_frame_s = number(p, "control_frame_us", 20) / 1e6;
   c.protocol.ifs_s = number(p, "ifs_us", 10) / 1e6;
@@ -88,6 +98,27 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
     if (lab["payload_fec"] && lab["payload_fec"].as<std::string>() != "none")
       throw std::invalid_argument("規定LDPC行列が未設定です。仮PHYはpayload_fec: noneのみ使用できます");
   }
+  auto hrcp = y["hrcp"];
+  if (hrcp && hrcp["enabled"] && hrcp["enabled"].as<bool>()) {
+    auto &h = c.protocol.hrcp; h.enabled = true; h.seed = c.protocol.awgn.seed;
+    h.noise_enabled=c.protocol.awgn.enabled;h.monitor_only=c.monitor_only;
+    h.data_bytes = hrcp["data_bytes"] ? hrcp["data_bytes"].as<unsigned>() : 2048;
+    h.atp_ms = hrcp["atp_ms"] ? hrcp["atp_ms"].as<unsigned>() : 500;
+    h.setup_timeout_ms = hrcp["setup_timeout_ms"] ? hrcp["setup_timeout_ms"].as<unsigned>() : 0;
+    h.requested_atp_ms = hrcp["requested_atp_ms"] ? hrcp["requested_atp_ms"].as<unsigned>() : h.atp_ms;
+    h.reference_distance_m = number(hrcp, "association_reference_distance_m", 30);
+    if (hrcp["expected_rssi_admission_enabled"])
+      h.expected_rssi_admission_enabled = hrcp["expected_rssi_admission_enabled"].as<bool>();
+    if (h.expected_rssi_admission_enabled) {
+      positive(h.reference_distance_m, "association_reference_distance_m");
+      if (!c.ba.tx_antenna_gain_dbi) throw std::invalid_argument("Expected RSSI計算にはBA送信正面利得が必要です");
+      const double pl0 = 20*std::log10(4*pi*c.ba.frequency_hz/299792458.);
+      h.expected_rssi_dbm = 10*std::log10(c.ba.power_mw)-c.ba.tx_insertion_loss_db
+        + *c.ba.tx_antenna_gain_dbi-pl0-10*c.path_loss_exponent*std::log10(h.reference_distance_m);
+    }
+    h.bandwidth_ab_hz=c.ab.noise_bandwidth_hz;h.bandwidth_ba_hz=c.ba.noise_bandwidth_hz;
+    h.channel_sample_s=c.physics_step_s;
+  }
   c.protocol.awgn.bandwidth_ab_hz = c.ab.noise_bandwidth_hz;
   c.protocol.awgn.bandwidth_ba_hz = c.ba.noise_bandwidth_hz;
   auto resolve = [&](const std::string &name) {
@@ -100,7 +131,27 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
   c.e_plane = resolve(y["antenna"]["e_plane"].as<std::string>());
   c.h_plane = resolve(y["antenna"]["h_plane"].as<std::string>());
   c.mcs_table = resolve(y["mcs_table"].as<std::string>());
+  auto empirical=y["empirical_phy"];
+  if(empirical && empirical["enabled"] && empirical["enabled"].as<bool>()){
+    auto &e=c.protocol.hrcp.empirical;e.enabled=true;
+    e.table=resolve(empirical["table"].as<std::string>());
+    e.metric=empirical["metric"].as<std::string>();
+    if(empirical["per_length_policy"])e.per_length_policy=empirical["per_length_policy"].as<std::string>();
+    if(empirical["seed"])e.seed=empirical["seed"].as<uint64_t>();
+    if(empirical["control_mcs"])e.control_mcs=empirical["control_mcs"].as<unsigned>();
+    e.offset_ab_db=number(empirical,"rssi_offset_ab_db",0);
+    e.offset_ba_db=number(empirical,"rssi_offset_ba_db",0);
+    if(empirical["mcs_by_rate_gbps"]){e.mcs_by_rate.clear();
+      for(const auto &entry:empirical["mcs_by_rate_gbps"])e.mcs_by_rate.emplace(entry.first.as<double>(),entry.second.as<unsigned>());}
+  }
   c.output_dir = y["output_dir"] ? y["output_dir"].as<std::string>() : "";
+  if (hrcp && hrcp["monitor_enabled"]) c.protocol.hrcp.monitor_enabled=hrcp["monitor_enabled"].as<bool>();
+  if (hrcp && hrcp["monitor_waveforms"]) c.protocol.hrcp.monitor_waveforms=hrcp["monitor_waveforms"].as<bool>();
+  if (hrcp && hrcp["noise_threads"]) c.protocol.hrcp.noise_threads=hrcp["noise_threads"].as<unsigned>();
+  if (hrcp && hrcp["decode_threads"]) c.protocol.hrcp.decode_threads=hrcp["decode_threads"].as<unsigned>();
+  if (hrcp && hrcp["monitor_rssi_interval_s"]) c.protocol.hrcp.monitor_rssi_interval_s=hrcp["monitor_rssi_interval_s"].as<double>();
+  if (hrcp && hrcp["monitor_rssi_window_s"]) c.protocol.hrcp.monitor_rssi_window_s=hrcp["monitor_rssi_window_s"].as<double>();
+  if (c.protocol.hrcp.monitor_enabled) c.protocol.hrcp.monitor_path=(std::filesystem::path(c.output_dir)/"live_signals.json").string();
   c.Validate();
   return c;
 }
@@ -113,7 +164,8 @@ void ScenarioConfig::Validate() const {
   positive(a.speed_kmh, "drone_a.speed_kmh"); positive(b.speed_kmh, "drone_b.speed_kmh");
   positive(a.altitude_m, "drone_a.altitude_m"); positive(b.altitude_m, "drone_b.altitude_m");
   positive(duration_s, "duration_s"); positive(encounter_s, "encounter_time_s");
-  if (encounter_s >= duration_s) throw std::invalid_argument("すれ違い時刻は実行時間の内側に設定してください");
+  if (encounter_s >= duration_s && !allow_pre_encounter_end)
+    throw std::invalid_argument("すれ違い時刻は実行時間の内側に設定してください");
   if (a.altitude_m >= b.altitude_m) throw std::invalid_argument("Aを低い機体、Bを高い機体に設定してください");
   positive(lateral_separation_m, "lateral_separation_m");
   for (const auto &r : {ab, ba}) {
@@ -135,7 +187,8 @@ void ScenarioConfig::Validate() const {
     if (!std::isfinite(angle) || std::abs(angle) > 90) throw std::invalid_argument("仰角は-90～90度です");
   positive(physics_step_s, "physics_step_s"); positive(real_time_factor, "real_time_factor");
   positive(log_interval_s, "log_interval_s"); positive(path_loss_exponent, "exponent");
-  positive(attenuation_limit_db, "max_attenuation_db");
+  if (attenuation_limit_db != std::numeric_limits<double>::infinity())
+    positive(attenuation_limit_db, "max_attenuation_db");
   positive(protocol.beacon_interval_s, "beacon_interval");
   positive(protocol.control_frame_s, "control_frame"); positive(protocol.ifs_s, "ifs");
   positive(protocol.data_frame_s, "data_frame");
@@ -143,6 +196,20 @@ void ScenarioConfig::Validate() const {
   positive(protocol.ack_timeout_s, "ack_timeout");
   positive(protocol.inactivity_timeout_s, "inactivity_timeout");
   positive(protocol.channel_sample_s, "channel_sample");
+  if(protocol.hrcp.empirical.enabled){
+    if(!protocol.hrcp.enabled||protocol.awgn.enabled||protocol.lab_phy.enabled||preview_mode||monitor_only)
+      throw std::invalid_argument("実測モデルはhrcp有効、AWGN/lab_phy/preview_mode/monitor_only無効で使用してください");
+    if(protocol.hrcp.expected_rssi_admission_enabled||protocol.hrcp.monitor_waveforms)
+      throw std::invalid_argument("実測モデルはExpected RSSIと波形モニターを無効にしてください");
+    if(ab.required_snr_db||ba.required_snr_db)throw std::invalid_argument("実測モデルではrequired_snr_dbをnullにしてください");
+    EmpiricalPhy check(protocol.hrcp.empirical);
+  }
+  if (protocol.hrcp.enabled) {
+    if (protocol.lab_phy.enabled)
+      throw std::invalid_argument("HRCPモードではlab_phyを無効にしてください");
+    if (std::abs(protocol.beacon_interval_s-.000140)>1e-12)
+      throw std::invalid_argument("今回のHRCP実験プロファイルはBeacon140us固定です");
+  }
   if (protocol.lab_phy.enabled) {
     LabPhy phy(protocol.lab_phy);
     if (!protocol.awgn.enabled || protocol.awgn.bit_rate_bps != 3.52e9)
@@ -254,11 +321,16 @@ LinkSample RadioModel::Evaluate(double time) const {
           ab.rssi >= config_.ab.sensitivity_dbm && snr_ab_ok,
           ba.rssi >= config_.ba.sensitivity_dbm && snr_ba_ok,
           off_axis(g.b-g.a, g.antenna_a_rpy), off_axis(g.a-g.b, g.antenna_b_rpy),
-          budget_ab, budget_ba, snr_ab_ok, snr_ba_ok};
+          budget_ab, budget_ba, snr_ab_ok, snr_ba_ok,
+          config_.protocol.awgn.enabled ? config_.protocol.awgn.bit_rate_bps / 1e9 : ba.throughput};
 }
 
 LinkProtocol::LinkProtocol(ProtocolConfig config, Evaluate evaluate, Log log)
   : config_(config), awgn_sampler_(config.awgn.seed), evaluate_(std::move(evaluate)), log_(std::move(log)) {
+  if (config.hrcp.enabled) {
+    hrcp_ = std::make_unique<HrcpPairnet>(config.hrcp,evaluate_,log_);
+    return;
+  }
   for (double v : {config.beacon_interval_s, config.control_frame_s, config.ifs_s,
        config.data_frame_s, config.response_timeout_s, config.ack_timeout_s,
        config.inactivity_timeout_s, config.channel_sample_s}) positive(v, "protocol timing");
@@ -289,6 +361,7 @@ void LinkProtocol::Integrate(double until) {
   accounted_ = until;
 }
 void LinkProtocol::Advance(double time) {
+  if (hrcp_) { hrcp_->Advance(time); return; }
   if (!std::isfinite(time) || time + 1e-12 < accounted_)
     throw std::invalid_argument("シミュレーション時刻は単調増加である必要があります");
   if(config_.lab_phy.enabled && time*3.52e9>0x1.0p52)
@@ -436,7 +509,7 @@ bool LinkProtocol::EvaluateFrame() {
     const bool ok = frame_.ab ? s.ab_ok : s.ba_ok;
     if (!ok && (frame_.failure < 0 || t < frame_.failure)) frame_.failure = t;
     success = success && ok;
-    frame_.rate = std::min(frame_.rate, s.rate_ab_gbps);
+    frame_.rate = std::min(frame_.rate, frame_.ab ? s.rate_ab_gbps : s.rate_ba_gbps);
     if (config_.awgn.enabled) {
       double snr = frame_.ab ? s.budget_ab.snr_db : s.budget_ba.snr_db;
       if (!std::isfinite(snr)) throw std::runtime_error("AWGN判定に必要なSNRが計算されていません");
@@ -552,8 +625,8 @@ void LinkProtocol::Process() {
     case Action::Request: ++stats_.attempts; BeginFrame("REQUEST", true, config_.control_frame_s); break;
     case Action::Response: BeginFrame("RESPONSE", false, config_.control_frame_s); break;
     case Action::Ack: BeginFrame("ACK", true, config_.control_frame_s); break;
-    case Action::Data: BeginFrame("DATA", true, config_.data_frame_s); break;
-    case Action::DataAck: BeginFrame("DATA_ACK", false, config_.control_frame_s); break;
+    case Action::Data: BeginFrame("DATA", !config_.data_from_prc, config_.data_frame_s); break;
+    case Action::DataAck: BeginFrame("DATA_ACK", config_.data_from_prc, config_.control_frame_s); break;
     case Action::FrameEnd: FinishFrame(); break;
     case Action::ResponseTimeout: Restart("RESPONSE_TIMEOUT"); break;
     case Action::AckTimeout: Restart("ACK_TIMEOUT"); break;
@@ -561,7 +634,13 @@ void LinkProtocol::Process() {
   }
 }
 
-struct DroneRun::Output { std::ofstream samples, events, frames; };
+struct DroneRun::Output {
+  std::ofstream samples, events, frames;
+  std::unique_ptr<HrcpSignalMonitor> preview;
+  HrcpSignalMonitor::Status preview_status;
+  bool preview_connected=false;
+  bool preview_setup_started=false;
+};
 DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(config_) {
   config_.Validate();
   std::filesystem::create_directories(config_.output_dir);
@@ -570,13 +649,25 @@ DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(c
     if (std::filesystem::exists(std::filesystem::path(config_.output_dir) / name))
       throw std::runtime_error("出力先には既存結果があります。別のディレクトリを指定してください");
   output_ = std::make_unique<Output>();
+  if(config_.monitor_only){
+    if(!config_.protocol.hrcp.enabled||!config_.protocol.hrcp.monitor_enabled)
+      throw std::invalid_argument("monitor_onlyには詳細HRCPモニターが必要です");
+    protocol_=std::make_unique<LinkProtocol>(config_.protocol,[this](double t){return radio_.Evaluate(t);},LinkProtocol::Log{});
+    return;
+  }
+  if(config_.preview_mode){
+    if(config_.protocol.hrcp.enabled||config_.protocol.lab_phy.enabled)
+      throw std::invalid_argument("簡易モニターは受信電力閾値または統計AWGNモデルの設定で使用してください");
+    output_->preview=std::make_unique<HrcpSignalMonitor>(config_.output_dir+"/live_signals.json",0,0,true,false);
+    output_->preview_status.admission_enabled=false;
+  }
   output_->samples.open(config_.output_dir + "/timeseries.csv");
   output_->events.open(config_.output_dir + "/events.csv");
-  if (config_.protocol.awgn.enabled) {
+  if (config_.protocol.awgn.enabled || config_.protocol.hrcp.enabled) {
     output_->frames.open(config_.output_dir + "/frames.csv");
     if (!output_->frames) throw std::runtime_error("フレームログを開けません");
     output_->frames << std::setprecision(17)
-      << "frame_start_s,frame_end_s,frame,direction,success,reason,rssi_at_end_dbm,minimum_snr_db,eb_no_db,frame_bits,ber,per,random_draw,beacon_index,phy_model,tx_start_sample,tx_samples,rx_start_sample,processed_samples,bit_errors,checked_bits,sync_metric,wire_sequence,wire_reference\n";
+      << "frame_start_s,frame_end_s,frame,direction,success,reason,rssi_at_end_dbm,minimum_snr_db,eb_no_db,frame_bits,ber,per,random_draw,beacon_index,phy_model,tx_start_sample,tx_samples,rx_start_sample,processed_samples,bit_errors,checked_bits,sync_metric,wire_sequence,wire_reference,mcs,empirical_curve,lookup_rssi_dbm\n";
   }
   if (!output_->samples || !output_->events) throw std::runtime_error("CSV出力先を開けません");
   output_->samples << std::fixed << std::setprecision(9);
@@ -593,14 +684,35 @@ DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(c
   protocol_ = std::make_unique<LinkProtocol>(config_.protocol,
     [this](double t) { return radio_.Evaluate(t); },
     [this](const LinkEvent &e) {
+      if(output_->preview){
+        auto &m=*output_->preview;auto &s=output_->preview_status;
+        const auto sample=static_cast<uint64_t>(std::llround(e.time*3.52e9));
+        const bool ab=e.direction=="A_TO_B";
+        if(e.type=="TX")(ab?s.tx_a:s.tx_b)=e.frame;
+        if(e.type=="TX"&&e.frame=="BEACON"&&!output_->preview_setup_started)m.ObserveStage(sample,"BEACON");
+        if(e.type=="TX"&&(e.frame=="REQUEST"||e.frame=="RESPONSE"||e.frame=="ACK")){
+          output_->preview_setup_started=true;m.ObserveStage(sample,e.frame);
+        }
+        const bool frame_result=e.type=="FRAME_RESULT"||(!config_.protocol.awgn.enabled&&(e.type=="RX_OK"||e.type=="RX_FAILED"));
+        if(frame_result&&e.frame=="REQUEST")m.ObserveStage(sample,"RESPONSE");
+        if(e.type=="CONNECTED"){output_->preview_connected=true;m.SetupConnected(sample,true);m.ObserveStage(sample,"DATA");}
+        if(e.type=="DISCONNECTED"||e.type=="TIMEOUT"){output_->preview_connected=false;output_->preview_setup_started=false;m.ResetSetup(sample);m.ObserveStage(sample,"BEACON");}
+        const bool control=e.frame=="BEACON"||e.frame=="REQUEST"||e.frame=="RESPONSE"||e.frame=="ACK";
+        if(frame_result&&control&&!output_->preview_connected){
+          const bool ok=e.type!="RX_FAILED"&&e.detail.empty();auto &r=ab?s.ab:s.ba;
+          r={true,ok,sample,e.frame,e.detail};(ab?s.rx_b:s.rx_a)=e.frame+(ok?" / OK":" / "+e.detail);
+          m.SetupResult(sample,ab,ok,e.frame,e.detail);
+          if(!ok)m.MarkFailure(static_cast<uint64_t>(std::llround(e.frame_start_s*3.52e9)),sample,ab,e.rssi,e.frame,e.detail);
+        }
+      }
       if (e.type == "FRAME_RESULT") {
         output_->frames << e.frame_start_s << ',' << e.time << ',' << e.frame << ',' << e.direction
           << ',' << e.detail.empty() << ',' << e.detail << ',' << e.rssi << ',' << e.minimum_snr_db
           << ',' << e.eb_no_db << ',' << e.frame_bits << ',' << e.ber << ',' << e.per << ',' << e.random_draw << ',' << e.beacon_index
-          << ',' << (config_.protocol.lab_phy.enabled?"lab_iq_rect_v0_uncoded":"statistical_qpsk")
+          << ',' << (config_.protocol.hrcp.empirical.enabled?"empirical_packet_v1":config_.protocol.hrcp.enabled?"hrcp_iq_continuous_ldpc_v1":config_.protocol.lab_phy.enabled?"lab_iq_rect_v0_uncoded":"statistical_qpsk")
           << ',' << e.tx_sample << ',' << e.tx_samples << ',' << e.rx_sample << ',' << e.processed_samples
           << ',' << e.bit_errors << ',' << e.checked_bits << ',' << e.sync_metric
-          << ',' << e.wire_sequence << ',' << e.wire_reference << '\n';
+          << ',' << e.wire_sequence << ',' << e.wire_reference << ',' << e.mcs << ',' << e.empirical_curve << ',' << e.lookup_rssi_dbm << '\n';
         return;
       }
       output_->events << e.time << ',' << e.type << ',' << e.frame
@@ -621,6 +733,7 @@ void DroneRun::Advance(double time) {
   time = std::min(time, config_.duration_s);
   if (!std::isfinite(time) || time + 1e-12 < time_)
     throw std::invalid_argument("実験時刻は単調増加である必要があります");
+  if(config_.monitor_only){protocol_->Advance(time);time_=time;return;}
   while (next_log_ <= time + 1e-12) {
     protocol_->Advance(next_log_);
     auto g = geometry(config_, next_log_); auto r = radio_.Evaluate(next_log_);
@@ -643,10 +756,28 @@ void DroneRun::Advance(double time) {
       : std::min((++log_index_) * config_.log_interval_s, config_.duration_s);
   }
   protocol_->Advance(time); time_ = time;
+  if(output_->preview){
+    const auto r=radio_.Evaluate(time);auto &s=output_->preview_status;
+    s.delivered_mb=Stats().delivered_mb;s.connections=Stats().connections;
+    s.timeouts=Stats().timeouts;s.disconnections=Stats().disconnections;
+    const auto sample=static_cast<uint64_t>(std::llround(time*3.52e9));
+    s.rssi_a_dbm=r.rssi_ba;s.rssi_b_dbm=r.rssi_ab;s.channel_sample=sample;
+    s.state_a=s.state_b=protocol_->Connected()?"ASSOCIATED":"SCANNING";
+    const auto state=protocol_->State();
+    s.protocol_stage=protocol_->Connected()?"DATA":state=="ACK"||state=="WAIT_ACK"?"ACK":
+      state=="RESPONSE"||state=="WAIT_RESPONSE"?"RESPONSE":state=="REQUEST"||state=="BEACON"?"REQUEST":"BEACON";
+    if(!protocol_->Connected()&&protocol_->State()!="SCANNING"){
+      s.state_a="WAIT_RESPONSE";
+      if(protocol_->State()=="ACK"||protocol_->State()=="WAIT_ACK"){s.state_a="ASSOCIATED";s.state_b="WAIT_ACK";}
+    }
+    auto&m=*output_->preview;m.ObserveTime(sample?sample-1:0);m.PushRssi(sample,r.rssi_ba,r.rssi_ab);
+    if(m.Due())m.Publish(s);
+  }
 }
 void DroneRun::Finish() {
   if (finished_) return;
   if (time_ + 1e-9 < config_.duration_s) throw std::runtime_error("完了時刻に到達していません");
+  if(config_.monitor_only){std::ofstream done(config_.output_dir+"/completed");done<<"completed\n";done.close();if(!done)throw std::runtime_error("完了記録に失敗");finished_=true;return;}
   std::ofstream summary(config_.output_dir + "/summary.csv");
   if (!summary) throw std::runtime_error("サマリーを保存できません");
   auto s = Stats();
@@ -658,10 +789,11 @@ void DroneRun::Finish() {
     << ',' << s.awgn_trials << ',' << s.awgn_errors << ',' << s.disconnections << '\n';
   summary.flush(); output_->samples.flush(); output_->events.flush();
   if (!summary || !output_->samples || !output_->events) throw std::runtime_error("CSV書き込みに失敗しました");
-  if (config_.protocol.awgn.enabled) {
+  if (config_.protocol.awgn.enabled || config_.protocol.hrcp.enabled) {
     output_->frames.flush();
     if (!output_->frames) throw std::runtime_error("フレームログの書き込みに失敗しました");
   }
+  if(output_->preview)output_->preview->Publish(output_->preview_status,true);
   std::ofstream done(config_.output_dir + "/completed"); done << "completed\n"; done.close();
   if (!done) throw std::runtime_error("完了マーカーを書き込めません");
   finished_ = true;

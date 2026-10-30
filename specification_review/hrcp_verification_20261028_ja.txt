@@ -1,0 +1,33 @@
+HRCP新実装の動作確認（2026-10-28）
+
+対象:新しいhrcp.enabled通信コア。4条件すべてGazebo headlessで正常終了。
+各2ms、最接近時刻1ms。40秒のすれ違い全体や500ms遮断を評価した結果ではない。
+速度: A/Bとも50km/h、高度20/30m。並行:横10m差、十字:高さ10m差。
+固定:横向き+45/-45度。追従:理想的に常時対向。
+搬送波: A→B271.08GHz/-1dBm、B→A60.48GHz/-8dBm。
+熱雑音300K/2.1648GHz、等価雑音指数A→B10dB/B→A0dB、seed20261027。
+基準距離30m、Expected RSSI広告値-85dBm。PHY固定RSSI gateは使用しない。
+Beacon140us、4slots×10.5us、SIFS2.5us、ATP500ms（同段階の初回TX_ENDから、再送非延長）。
+DATA2048byte、MCS0〜3、LDPC(1440,1056)/(1440,1344)。受信機は連続I/Q+AWGN。
+
+条件                 Bの一意受領量[MB]  接続数  初回Request→接続[us]  Beacon開始→接続[us]
+parallel_fixed       0.256000       1       111.134               149.004
+parallel_tracking    0.256000       1       111.134               149.004
+cross_fixed          0.000000       0       未成立                   未成立
+cross_tracking       0.274432       1       111.120               148.976
+
+並行の固定/追従が同じ結果なのは、最接近付近2msではほぼ対向しているため。全走行で同じとは言えない。
+十字固定はこの区間でBeaconを復号できず、Requestも開始していない。全15 Beaconが未受信。
+したがって十字固定のtimeout=0は「問題なし」を意味せず、接続試行未開始である。
+全条件でsetup timeout/接続後切断=0。ただし観測2msなので500msタイマーの性能評価には使えない。
+
+検査: CTest 8/8 PASS（最後の実行6.35秒）。既存4試験と新規4試験を含む。
+新規試験: 符号行列/独立parity fixture、短縮、AWGN訂正、HCS/FCS、連続受信/雑音だけの探索、QPSK理論BER。
+接続試験: Request再送、Response再送、DATA回復、chunk分割不変、ATP満了、確定ATP採用、切断分類、旧IDへの切断通知。
+タイマーのFSM試験はATPを試験内で1msに短縮。500msは整数deadlineと既定値を確認。
+Gazeboの機体/アンテナ位置・方向、終端時刻、CSV集計を検証。位置誤差最大1.11e-10m。
+ビルド成功、Python構文検査成功、git diff --check成功。
+
+制約・参照・再実行コマンド: specification_review/runtime_hrcp_ja.txt。
+結果: sim_results/hrcp_gazebo_20261028_v3/comparison.csv と各条件のframes/events/timeseries/connections CSV。
+過去のv1/v2は開発途中の結果。最新確認はv3を使用。

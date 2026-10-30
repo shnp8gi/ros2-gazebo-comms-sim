@@ -7,6 +7,7 @@ import os
 from pathlib import Path
 from datetime import datetime
 import uuid
+import tempfile
 import xml.etree.ElementTree as ET
 import yaml
 from ament_index_python.packages import get_package_share_directory, get_package_prefix
@@ -35,6 +36,9 @@ def setup(context):
     for key in ("e_plane", "h_plane"):
         config["antenna"][key] = str((config_path.parent / config["antenna"][key]).resolve())
     config["mcs_table"] = str((config_path.parent / config["mcs_table"]).resolve())
+    empirical=config.get("empirical_phy", {})
+    if empirical.get("enabled",False):
+        empirical["table"]=str((config_path.parent / empirical["table"]).resolve())
     output = Path(arg("output_dir") or f"sim_results/drone_{datetime.now():%Y%m%d_%H%M%S}_{uuid.uuid4().hex[:6]}").resolve()
     # 存在する結果・設定を上書きしない。空のディレクトリだけ再利用できる。
     if output.exists() and any(output.iterdir()):
@@ -44,6 +48,8 @@ def setup(context):
     config["geometry_revision"] = "both_scenarios_sideways_fixed_v3"
     config["timeout_counting_revision"] = "setup_only_v2"
     config["protocol_revision"] = "indexed_beacon_until_request_half_duplex_v1"
+    config["endpoint_roles"] = {"A":"PRDEV", "B":"PRC"}
+    config["data_direction"] = "B_TO_A" if config["protocol"].get("data_from_prc",False) else "A_TO_B"
     chain_fields = ("tx_antenna_gain_dbi", "rx_antenna_gain_dbi", "tx_insertion_loss_db",
                     "rx_insertion_loss_db", "rx_lna_gain_db", "rx_conversion_gain_db", "noise_bandwidth_hz")
     config["power_model_revision"] = ("rf_chain_thermal_v1" if any(
@@ -57,19 +63,77 @@ def setup(context):
         config["phy_limitations"] = ["nonstandard_lab_codec", "payload_fec_none",
             "rectangular_pulse_not_rrc", "frame_window_known_no_blind_scan",
             "no_detection_time_jitter", "propagation_ceil_to_sample"]
-    inputs = output / "inputs"
-    inputs.mkdir()
-    provenance = {}
-    for label, mapping, key in (("e_plane.csv", config["antenna"], "e_plane"),
-                                ("h_plane.csv", config["antenna"], "h_plane"),
-                                ("MCStable.csv", config, "mcs_table")):
-        source = Path(mapping[key])
-        target = inputs / label
-        shutil.copyfile(source, target)
-        provenance[label] = {"source": str(source), "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
-        mapping[key] = str(target)
-    provenance["drone_model"] = json.loads((share / "models/drone/fuel_metadata.json").read_text())
-    (output / "provenance.json").write_text(json.dumps(provenance, indent=2))
+    if config.get("hrcp", {}).get("enabled", False):
+        config["phy_error_model"] = "hrcp_iq_continuous_ldpc_v1"
+        config["protocol_revision"] = "hrcp_independent_endpoints_v1"
+        config["phy_limitations"] = ["ideal_rectangular_nyquist_pulse_not_spectrum_mask_verified",
+            "no_CFO_phase_noise_multipath_or_doppler",
+            "AWGN_continuous_absolute_sample_seed" if config.get("awgn",{}).get("enabled",False) else "AWGN_disabled_no_noise_samples",
+            "slot_0_1us_and_RSSI_30_minus_code_provisional_user_approved",
+            "subheader_crc8_init0_provisional_user_approved", "no_external_interoperability_vector"]
+        config["standard_exceptions"] = ["directional_RF_split", "HRCP_frame_at_271_08GHz", "beacon_140us"]
+        config["hrcp"].setdefault("expected_rssi_admission_enabled", True)
+        if not config["hrcp"]["expected_rssi_admission_enabled"]:
+            config["standard_exceptions"].append("expected_RSSI_admission_disabled_to_match_device")
+        receiver = 'A' if config["protocol"].get("data_from_prc",False) else 'B'
+        config["payload_accounting"] = f"unique_CRC_valid_payload_received_at_{receiver}; acked_data_frames_separate"
+        config["hrcp"]["timing_sample_rate_hz"] = 3.52e9
+        config["hrcp"]["sifs_us"] = 2.5
+        config["hrcp"]["rifs_a_us"] = 19.05
+        config["hrcp"]["rifs_b_us"] = 8.01
+        config["hrcp"].setdefault("monitor_rssi_window_s",1e-6)
+        config["monitor_rssi_measurement"] = {"source":"rx_iq_matched_filter",
+            "reference":"receiver_chain_output_equivalent", "includes_noise":config.get("awgn",{}).get("enabled",False),
+            "equivalent_noise_bandwidth_hz":1.76e9, "self_tx":"excluded_missing_if_no_rx_samples"}
+    config["legacy_rssi_csv_source"] = "timeseries/events/frames RSSI columns: link_budget_predicted_signal; waveform RSSI: live_signals_rssi.csv"
+    if config.get("preview_mode", False):
+        config["evaluation_scope"] = "usability_preview_not_standard_phy_validation"
+        config["phy_limitations"] = ["statistical_uncoded_QPSK_no_waveform_decode",
+            "simplified_MAC_20us_control_10us_IFS", "expected_RSSI_admission_not_evaluated",
+            "fixed_RSSI_gate_effectively_disabled_at_minus999dBm"]
+    if config.get("preview_mode", False) and config["phy_error_model"] == "threshold_only":
+        config["evaluation_scope"] = "received_power_threshold_with_mcs_table"
+        config["phy_limitations"] = ["deterministic_received_power_threshold_no_waveform_decode",
+            "simplified_MAC_20us_control_10us_IFS", "expected_RSSI_admission_not_evaluated"]
+        config["rate_source"] = "MCStable.csv; DATA direction; minimum sampled rate during frame; credited after ACK"
+    if empirical.get("enabled",False):
+        config["phy_error_model"]="empirical_packet_v1"
+        config["evaluation_scope"]="empirical_probability_with_shared_hrcp_mac"
+        config["phy_limitations"]=["packet_all_or_nothing_header_and_body",
+            "RSSI_held_at_frame_start", "independent_frame_draws", "no_waveform_or_FEC_execution",
+            "legacy_control_frame_timing_not_TJX_BPSK_validated",
+            "BER_independent_residual_error_approximation" if empirical["metric"]=="ber" else
+            "PER_length_policy_"+empirical.get("per_length_policy","exact")]
+        config["rate_source"]="MCStable.csv at DATA TX start; mcs_by_rate_gbps maps to measured MCS IDs"
+        config["monitor_rssi_measurement"]={"source":"link_budget_predicted_signal",
+            "reference":"receiver_chain_output_equivalent", "includes_noise":False}
+        config["calibration_status"]=empirical.get("calibration_status","unvalidated")
+        config["reachability_columns"]="timeseries ab_reachable/ba_reachable are legacy threshold references; empirical decisions use the curve only"
+        config["frame_rssi_reference"]="frames.csv rssi_at_end_dbm holds TX-start signal power for empirical_packet_v1"
+    runtime = tempfile.TemporaryDirectory(prefix='drone_monitor_') if config.get('monitor_only',False) else None
+    if runtime is None:
+        inputs = output / "inputs"
+        inputs.mkdir()
+        provenance = {}
+        for label, mapping, key in (("e_plane.csv", config["antenna"], "e_plane"),
+                                    ("h_plane.csv", config["antenna"], "h_plane"),
+                                    ("MCStable.csv", config, "mcs_table")):
+            source = Path(mapping[key])
+            target = inputs / label
+            shutil.copyfile(source, target)
+            provenance[label] = {"source": str(source), "sha256": hashlib.sha256(target.read_bytes()).hexdigest()}
+            mapping[key] = str(target)
+        if empirical.get("enabled",False):
+            source=Path(empirical["table"]);target=inputs/"receiver_curve.csv"
+            shutil.copyfile(source,target)
+            provenance["receiver_curve.csv"]={"source":str(source),"sha256":hashlib.sha256(target.read_bytes()).hexdigest()}
+            metadata=source.with_suffix(source.suffix+".provenance.json")
+            if metadata.exists():
+                saved=inputs/"receiver_curve.provenance.json";shutil.copyfile(metadata,saved)
+                provenance["receiver_curve.provenance.json"]={"source":str(metadata),"sha256":hashlib.sha256(saved.read_bytes()).hexdigest()}
+            empirical["table"]=str(target)
+        provenance["drone_model"] = json.loads((share / "models/drone/fuel_metadata.json").read_text())
+        (output / "provenance.json").write_text(json.dumps(provenance, indent=2))
     resolved = output / "config.yaml"
     resolved.write_text(yaml.safe_dump(config, allow_unicode=True, sort_keys=False))
     tree = ET.parse(share / "worlds/drone_world.sdf")
@@ -89,7 +153,7 @@ def setup(context):
     plugin = ET.SubElement(world, "plugin", filename=str(plugin_path), name="comms_sim::DroneEncounterPlugin")
     ET.SubElement(plugin, "config_file").text = str(resolved)
     ET.SubElement(plugin, "pause_at_encounter").text = arg("pause_at_encounter").lower()
-    world_path = output / "world.sdf"
+    world_path = (Path(runtime.name) if runtime else output) / "world.sdf"
     tree.write(world_path, encoding="unicode")
     env = {"GZ_PARTITION": os.environ.get("GZ_PARTITION") or f"drone_{os.getpid()}_{uuid.uuid4().hex[:6]}"}
     server = ExecuteProcess(cmd=["gz", "sim", "-s", "-r", str(world_path)], additional_env=env, output="screen")
@@ -99,6 +163,7 @@ def setup(context):
             return []
         if event.returncode != 0 or not (output / "completed").is_file():
             raise RuntimeError(f"実験が完了しませんでした。ログと設定: {output}")
+        if runtime: runtime.cleanup()
         print(f"結果保存先: {output}", flush=True)
         if arg("headless").lower() != "true" and arg("keep_gui_open").lower() == "true":
             print("実験完了。GUIは確認用に開いたままにします。", flush=True)

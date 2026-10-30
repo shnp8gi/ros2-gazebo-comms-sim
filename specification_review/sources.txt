@@ -1,3 +1,5 @@
+最新追記（2026-10-28）: ユーザー提供802153-2023.pdfを照合済み。ieee_2023_review_ja.txtを優先。LDPC行列の未取得状態は解消したがruntimeはまだ仮PHYのまま。以下は作成当時の設計/実装履歴。
+
 最新追記（2026-10-28）: ユーザー了承により公開代替資料を用いた仮設計を作成。
 provisional_design_ja.txt / provisional_profile.yaml / evidence.csv / timing_budget.csvを参照。
 PDF6件をローカル保存。references/manifest.jsonにURL・SHA256・使用箇所を記録。

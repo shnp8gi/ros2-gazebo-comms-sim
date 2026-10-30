@@ -1,14 +1,14 @@
 項目,照合内容,現在の状態,扱い
-規格版,3d-2017 / 3e-2017を設計目標,公開代替資料で仮設計完了,正式本文入手後に差分照合。2023 RIFSを混在させない
-MAC,共通Pairnet、B=PRC/A=PRDEV,構造確認・具体フィールド未確定,lab_mac80_v0を交換可能な仮codecとして定義
-PHY,AB THz-SC / BA HRCP-SC,方向選択はユーザー確定,異帯域構成は実験拡張
-ヘッダー,3d PHY37/MAC80/HCS16,S1確認、3e詳細未確認,BA133 bitは時間見積り専用仮定
-CRC,対象範囲・多項式・初期値・反転・送信順,正式条件未確認,仮CRCとチェック値/送信順を設計書に定義
-FEC,QPSK・LDPC11/15を目標,3d符号長確認、規定行列未取得,実LDPC未設定での符号化モード起動は禁止。無符号debugと長さ見積りを分離
-同期系列,preambleと受信検出器,ドラフト構造と論文の概数を確認,仮Golay系列を定義。規格性能との同一視禁止
-送信時間,生成sample数/Fs,仮算術プレビュー実行済み,現行20 µs固定は変更なし
-アクセススロット,Beaconが通知するスロットでRequest送信,論文で構造確認,数値/遅延時挙動は仮定、実機照合事項
-Beacon番号,16 bitオンエア通番と64 bitログUIDを分離,仮MAC設計済み,復号前の正解番号を受信判断に渡さない
-実験条件,140 µs・500 ms・A待機中は新Beacon無視・半二重,ユーザー確認済み,維持。切断はtimeout別集計
-時間整合,uint64 sample時計・状態保持・処理遅れで欠落させない,設計済み・波形実装未着手,境界/分割/更新刻み/CPU負荷に対する不変性を検証
-実装状態,本作業は研究と仮設計,既存runtimeに変更なし,provisional_design_ja.txt / provisional_profile.yamlを参照
+規格版,3d-2017 / 3e-2017を設計目標,ユーザー提供IEEE802.15.3-2023本文を関連条項まで確認,正式本文入手後に差分照合。2023 RIFSを混在させない。2023本文照合の最新結果はieee_2023_differences.csv参照
+MAC,共通Pairnet、B=PRC/A=PRDEV,構造確認・具体フィールド未確定,lab_mac80_v0を交換可能な仮codecとして定義。2023本文照合の最新結果はieee_2023_differences.csv参照
+PHY,両方向HRCP-SC形式。テラヘルツ側の3d frameを3eで代替,ユーザー指定をv3へ反映,3d物理層準拠とは扱わない。方向別の周波数と電力は維持
+ヘッダー,両方向PHY36bit + MAC80bit + HCS16bit,HRCP形式へ統一。旧THz37bitは使用しない,"EH(8,4)/stuff2bit/spread4/PWで送信header1216chip"
+CRC,対象範囲・多項式・初期値・反転・送信順,HCS多項式0xA12BとFCS条項を確認。送信順を含むcodecは未実装,仮CRCとチェック値/送信順を設計書に定義。2023本文照合の最新結果はieee_2023_differences.csv参照
+FEC,QPSK・LDPC11/15を目標,規定LDPC行列取得・展開構造検証済み、復号器未実装,実LDPC未設定での符号化モード起動は禁止。無符号debugと長さ見積りを分離。2023本文照合の最新結果はieee_2023_differences.csv参照
+同期系列,preambleと受信検出器,ドラフト構造と論文の概数を確認,仮Golay系列を定義。規格性能との同一視禁止。2023本文照合の最新結果はieee_2023_differences.csv参照
+送信時間,実際に生成するchip/sample数から算出,共通frameのheader1216chipを確認、runtime正式codecは未実装,8usは最大送信枠であって固定frame実長ではない
+アクセススロット,4slots/各10.5us、Beacon周期140us固定,最新ユーザー指定。現行runtime周期も140us,X03として周期上限の例外を明示。各8us枠の検査とwire単位U03は維持
+Beacon番号,解析UIDと規定on-air情報を分離,正式MACに独自Beacon番号を追加しない設計,selected_beacon_uidはAの解析ログ。Bがon-airから個別識別可能とは仮定しない
+実験条件,規格優先、方向別周波数X01・3e frame代替X02・Beacon140us固定X03,v4設計へ反映,ieee_2023_conflict_resolution.csv参照
+時間整合,uint64 sample時計・状態保持・処理遅れで欠落させない,lab仮PHYは実装/検証済み・正式PHYは未実装,境界/分割/更新刻み/CPU負荷に対する不変性を検証。2023本文照合の最新結果はieee_2023_differences.csv参照
+実装状態,規格照合・忠実設計・参照箇所一覧,runtime未変更・新規Gazebo実行なし,最新: ieee_2023_fidelity_design_ja.txt / ieee_2023_reference_map.csv

@@ -1,0 +1,18 @@
+項目,従来仮定,本文確認結果,条項,本文ページ,反映事項
+LDPC行列,未取得,両レートの規定定義を取得・展開検証,12.2.3.6.4 / 13.2.3.6,438 / 518,符号器/復号器へ実装
+THz MCS,標準番号未確認,仮案の6段は0/1/2/3/8/9,Table14-5 / 14-11,568 / 573,RSSI閾値の対応は未確定のまま
+THz symbol rate,1.76Gbaudは仮定,2.16GHzで1.76Gchip/sを確認,Table14-8,571,多値変調/PWと区別
+ヘッダーFEC,"EH(16,11)","EH(8,4)",Table13-16,525,scrambling/spreading込みで置換
+HCS,CRC16 0x1021,CRC16多項式0xA12B,13.2.4.3.3,524,送信順/初期状態も照合
+HRCP PHY header,133bit情報全体を借用,PHY36bit + MAC80bit + HCS16bit,Figure13-7,523,独自headerを置換
+THz PHY header,BW3bit+reserved1bit,BW4bit・reservedなし、全37bit,Figure14-6,573,"field順は確認。133bitとEH(8,4)/Table14-7の長さ整合は未解決"
+MAC header,独自80bit構成,正式10byte、TX/ACK情報24bit,Figure6-2 / 6.2.13,119 / 142,Stk-ACK・10bit連続受領通番
+SIFS,10us,既定2.5us、対応範囲0.5〜2.5us,7.6.2 / Table13-19,274 / 528,接続前既定・接続後交渉
+RIFS,未実装,通常/Longを選択、PRC/DEVで異なる,Table13-20,529,2023でも通常値が残る
+Response送信,Request後10us,次Beaconと同じ時刻または後,7.5.1,270,両端状態・PSP slotを再設計
+DATA誤り回復,直ちに500ms待機,Stk-ACKによる再送、非同期時RIFS回復,7.6.5 / 7.12.7,285 / 319–320,短期回復と最終監視を分離
+LDPC最終語,0埋め全長送信の仮定,shorteningで挿入0は送信しない,13.2.3.6,518,送信時間/PER見積り修正
+既存RSSI表,0.5〜6Gbps、定義不明,定義は引き続き不明,MCStable.csv,対象外,規格感度表を切替閾値と混同しない
+THzの集約,一般Pairnetの最大256個をTHzにも適用,THz PHYで集約は禁止,7.11.3,311,ABは1サブフレーム基準。以前の説明を訂正
+Beacon周期,ユーザー指定140us,規格枠は確認済み。最新ユーザー指定で140us固定へ復帰,7.20 / Table7-12/13/14,347–348,X03研究例外。現行runtime周期140usと一致。旧53us設計は不採用
+受信判定,RSSI−68.5dBm固定gate,ユーザー変更確定: gateを外し波形受信判定,6.1 / 14.2.6,118 / 577,runtime未反映。Expected RSSIの接続許可条件とは分離

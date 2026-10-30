@@ -1,0 +1,20 @@
+{
+  "direction": "Q_A_TO_B",
+  "user_direction": "下り",
+  "frequency_hz": 60480000000,
+  "mcs": 8,
+  "frame_bytes": 100000,
+  "payload_length_interpretation": "100 kB = 100000 bytes (TJX decimal default convention)",
+  "aggregation": "clear_write",
+  "ber_stage": "unknown",
+  "reference_rssi_dbm": null,
+  "source_directory": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T064005Z-1-001/TJX_attenuator",
+  "filename_assumptions": {
+    "10dBm.csv": "10 dB attenuation",
+    "14.5.csv": "14.5 dB attenuation"
+  },
+  "frame_classification": "DATA represents PHY test payload; not a measurement of actual MAC control packets",
+  "calibration_status": "invalidated_by_user",
+  "eligible_for_calibration": false,
+  "invalidation_reason": "ユーザーが前回測定は誤りと申告し再測定したため、校正・シミュレーションへの利用対象から除外。原本コピーと旧集計は履歴として保存。"
+}

@@ -1,0 +1,84 @@
+# 役割修正: A=PRDEV、B=PRC。BA=272GHz帯（A受信LNA25dB）、AB=61GHz帯。
+# 各機1m/s・全50秒の通し確認用。波形同期/LDPC/詳細MACを省く簡易プレビュー。
+# 固定RSSIゲートは-999 dBmで実質無効。期待RSSI・LDPC・波形同期は省略。
+# 簡易MAC: Beacon 140 us、制御送信20 us、IFS 10 us、DATA 100 us。
+scenario: parallel
+antenna_mode: fixed
+drone_a:
+  speed_kmh: 3.6
+  altitude_m: 20.0
+  fixed_elevation_deg: 45.0
+drone_b:
+  speed_kmh: 3.6
+  altitude_m: 30.0
+  fixed_elevation_deg: -45.0
+lateral_separation_m: 10.0
+encounter_time_s: 25.0
+duration_s: 50.0
+radio_ab:
+  frequency_hz: 60.48e9
+  power_mw: 0.15848931924611134
+  sensitivity_dbm: -999.0
+  tx_antenna_gain_dbi: 23.0
+  rx_antenna_gain_dbi: 23.0
+  tx_insertion_loss_db: 3.0
+  rx_lna_gain_db: 0.0
+  rx_conversion_gain_db: 0.0
+  rx_insertion_loss_db: 3.0
+  noise_temperature_k: 300.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 0.0
+  required_snr_db: null
+radio_ba:
+  frequency_hz: 271.08e9
+  power_mw: 0.7943282347242815
+  sensitivity_dbm: -999.0
+  tx_antenna_gain_dbi: 24.0
+  rx_antenna_gain_dbi: 24.0
+  tx_insertion_loss_db: 0.0
+  rx_lna_gain_db: 25.0
+  rx_conversion_gain_db: 3.0
+  rx_insertion_loss_db: 3.0
+  noise_temperature_k: 300.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 10.0
+  required_snr_db: null
+propagation:
+  exponent: 2.0
+antenna:
+  e_plane: e_plane.csv
+  h_plane: h_plane.csv
+  max_attenuation_db: 30.0
+mcs_table: MCStable.csv
+awgn:
+  enabled: true
+  seed: 20261027
+  bit_rate_bps: 3.52e9
+  control_frame_bytes: 64
+protocol:
+  data_from_prc: true         # B(PRC)→A(PRDEV)でデータ送信。逆方向は受領確認。
+  response_timeout_ms: 500.0
+  ack_timeout_ms: 500.0
+  inactivity_timeout_ms: 500.0
+  beacon_interval_ms: 0.14
+  control_frame_us: 20.0
+  ifs_us: 10.0
+  data_frame_us: 100.0
+simulation:
+  physics_step_s: 0.01
+  real_time_factor: 20.0
+  log_interval_s: 0.01
+lab_phy:
+  enabled: false
+hrcp:
+  enabled: false
+  data_bytes: 2048
+  atp_ms: 500
+  expected_rssi_admission_enabled: false
+  association_reference_distance_m: 30.0
+  monitor_enabled: false
+  monitor_waveforms: false
+  noise_threads: 4
+  monitor_rssi_interval_s: 0.01
+  decode_threads: 4
+preview_mode: true

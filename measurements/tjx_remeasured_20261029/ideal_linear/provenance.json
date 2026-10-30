@@ -1,0 +1,46 @@
+{
+  "calibration_status": "ideal_linear_assumption_relative_power_only",
+  "simulator_schema_compatible": false,
+  "user_instruction": "AMAM/AMPMをモデル化せず理想変換とし、歪みが疑われる部分を除外する",
+  "cutoff_attenuation_db": 27.5,
+  "cutoff_is_provisional": true,
+  "high_power_extrapolation": "MCS11のみ、減衰27.5 dB以下はBER/PER=0という仮定",
+  "other_mcs": "保持。歪みの根拠が明確でない微小誤りを一律に削除しない",
+  "distortion_free_remaining_region_is_verified": false,
+  "curves": [
+    {
+      "metric": "per",
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_remeasured_20261029/per_relative.csv",
+      "source_sha256": "f286b9a6ed83ce658292cedd91475dbf397aa1f4e80eda28efdb2b00884282c4",
+      "excluded_measurement_points": 16,
+      "retained_measurement_points": 68,
+      "synthetic_anchor": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "11",
+        "relative_power_db": -27.5,
+        "ber": "",
+        "per": "0",
+        "reference_bytes": 100000
+      },
+      "anchor_is_measured": false
+    },
+    {
+      "metric": "ber",
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_remeasured_20261029/ber_relative.csv",
+      "source_sha256": "48e5710bcc95550c3a5bde35a8e0a3098a0604e91505d4c4ec1c38b5c7de85a8",
+      "excluded_measurement_points": 16,
+      "retained_measurement_points": 68,
+      "synthetic_anchor": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "11",
+        "relative_power_db": -27.5,
+        "ber": "0",
+        "per": "",
+        "reference_bytes": 100000
+      },
+      "anchor_is_measured": false
+    }
+  ]
+}

@@ -1,0 +1,3 @@
+direction,rssi_dbm,ber,compared_bits,tx_packets,rx_ok_packets,mcs,frame_type,frame_bytes,notes,attenuation_db,attenuator_location,sweep_direction,ber_stage,sync_status,tx_waveform_file,rx_waveform_file,error_bits,rssi_raw,per,snr_db
+P_B_TO_A,,,,,,,,,,,,,,,,,,,,
+Q_A_TO_B,,,,,,,,,,,,,,,,,,,,

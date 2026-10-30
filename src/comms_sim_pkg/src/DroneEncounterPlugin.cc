@@ -27,10 +27,12 @@ class DroneEncounterPlugin : public gz::sim::System,
     pause_at_encounter_ = sdf->Get<bool>("pause_at_encounter", false).first;
     try {
       run_ = std::make_unique<DroneRun>(ScenarioConfig::Load(sdf->Get<std::string>("config_file")));
+      if(!run_->Config().monitor_only){
       poses_.open(run_->Config().output_dir + "/gazebo_poses.csv");
       if (!poses_) throw std::runtime_error("Gazebo位置ログを開けません");
       poses_ << std::fixed << std::setprecision(9)
         << "time_s,model,x_m,y_m,z_m,roll_rad,pitch_rad,yaw_rad\n";
+      }
       pubs_[0] = node_.Advertise<gz::msgs::Pose>("/drone_a/pose");
       pubs_[1] = node_.Advertise<gz::msgs::Pose>("/drone_b/pose");
       std::cout << "ドローン実験開始: " << run_->Config().scenario << " / "
@@ -67,7 +69,13 @@ class DroneEncounterPlugin : public gz::sim::System,
           // 命令値ではなく、Physics更新後のECM位置を記録する。
           auto pose = gz::sim::worldPose(entities_[i], ecm);
           const auto &p = pose.Pos(); const auto r = pose.Rot().Euler();
-          poses_ << time_ << ',' << names_[i] << ',' << p.X() << ',' << p.Y() << ',' << p.Z()
+          if(run_->Config().monitor_only){
+            const auto planned=geometry(run_->Config(),time_);
+            const auto expected=(i%2==0)?planned.a:planned.b;
+            if((Eigen::Vector3d(p.X(),p.Y(),p.Z())-expected).norm()>1e-6)
+              throw std::runtime_error("Gazebo実位置が設定軌道と一致しません");
+          }
+          if(poses_.is_open())poses_ << time_ << ',' << names_[i] << ',' << p.X() << ',' << p.Y() << ',' << p.Z()
                  << ',' << r.X() << ',' << r.Y() << ',' << r.Z() << '\n';
           if (i < 2) {
             gz::msgs::Pose msg;
@@ -87,14 +95,14 @@ class DroneEncounterPlugin : public gz::sim::System,
         next_pose_log_ = time_ + 0.02;
       }
       if (pause_at_encounter_ && !encounter_paused_ && time_ >= run_->Config().encounter_s) {
-        poses_.flush();
+        if(poses_.is_open())poses_.flush();
         encounter_paused_ = true;
         events_->Emit<gz::sim::events::Pause>(true);
         std::cout << "最接近位置で一時停止しました。GUIの再生ボタンで続行できます。" << std::endl;
       }
       if (time_ >= run_->Config().duration_s) {
-        poses_.flush();
-        if (!poses_) throw std::runtime_error("Gazebo位置ログを書き込めません");
+        if(poses_.is_open())poses_.flush();
+        if (poses_.is_open()&&!poses_) throw std::runtime_error("Gazebo位置ログを書き込めません");
         run_->Finish();
         std::cout << "ドローン実験完了: " << run_->Stats().delivered_mb << " MB" << std::endl;
         stopped_ = true;

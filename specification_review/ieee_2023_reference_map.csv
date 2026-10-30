@@ -1,0 +1,32 @@
+id,topic_ja,clause,figure_or_table,printed_page,pdf_page_1_based,used_for_ja,status_ja
+R01,bit・byteの送信順,4.1; 6.1,Figure 4-1等,42–43; 118,43–44; 119,通常のLSB順とCRC等の例外を区別,確認済
+R02,Pairnet MAC header,6.2.1; 6.2.2,Figure 6-2; Figure 6-8,119–120,120–121,10 byteの正式構成、Pairnetのversion、Frame Control,確認済
+R03,FCS,6.2.10.6,Equation 6-1/6-2,127–128,128–129,CRC32の多項式・初期値・補数・検査範囲,確認済
+R04,Stk-ACKと通番,6.2.13,Figure 6-50,142,143,TX/ACK 24 bit、10 bit通番、最大256個の表現。ただしTHzにはR14の制約,確認済
+R05,Beaconと接続要求のRSSI条件,6.3.1.2,Figure 6-55/56/57,145–146,146–147,同期情報15 byte、周期、ATP、Next DEVID、Expected RSSI、PRC address,確認済・slot durationの符号化単位は要確認
+R06,Command body,6.3.4.1,Figure 6-65/66,152,153,MAC subheader、Command Type/Length、payload、FCS,確認済
+R07,DATA subheaderとCRC8,6.3.6.1,Figure 6-70～74,155–156,156–157,subheader 4 byte、sequence 10 bit、length 13 bit、CRC8,確認済・CRC8初期状態の独立照合が必要
+R08,能力・動作条件の交渉,6.4.13～6.4.18,Figure 6-109; Table 6-33/34等,177–191,178–192,HRCP/THzを分け、SIFS・MCS・PW・payload上限などを通知,確認済・異PHY間の交渉は独自接続層
+R09,Request/Response,6.5.2.2; 6.5.2.3,Figure 6-169; Figure 6-172,213–215,214–216,Request No-ACK、Next DEVID、Response Stk-ACK、DEV address、ATP,確認済
+R10,接続手順,7.5.1,Figure 7-21～24,270–272,271–273,Request受信でBeacon停止、Responseタイミング、両端の成立判断、RIFSでResponse再送,確認済
+R11,切断・無応答監視,7.5.2,—,272–273,273–274,ATP内に通信がなければ切断。500 msは本実験の選択値,確認済
+R12,SIFS/RIFSと独立状態,7.6.2; 7.6.5,—,274; 285–286,275; 286–287,接続前の既定SIFS、交渉後SIFS、同期/非同期、header-only応答,確認済
+R13,Beaconによる時計同期,7.9,—,307–308,308–309,受信Beaconからローカルsuperframe時計を合わせる,確認済
+R14,集約の適用範囲,7.11.3,Figure 7-60/61,311–312,312–313,冒頭でTHz PHYの集約を禁止。一般のPairnet集約記述をTHzへ無条件適用しない,重要訂正
+R15,再送・同期回復・重複排除,7.12.7～7.12.9,Figure 7-65/66,319–321,320–322,Stk-ACK、RIFS、連続正常通番、重複配送防止,確認済
+R16,Beacon周期とアクセススロット,7.20,Table 7-12/13/14,347–348,348–349,HRCP-SCの1～6 slot、最大Beacon/Request各8 us。Table7-14は本文・表題等に不整合,確認済・一部解釈保留
+R17,14/15 LDPC,12.2.3.6.4,Table 12-17; Equation 12-6,438,439,"LDPC(1440,1344)検査行列",行列生成・rank検証済、codec未実装
+R18,HRCPの周波数,13.1.5,Table 13-1,508–509,509–510,既定中心60.480 GHz。実験61 GHzと区別,確認済
+R19,HRCP MCS・header・時間,13.2.3.1～13.2.3.4,Table 13-6～9,514–516,515–517,MCS対応、1760 Mchip/s、PW、64-chip block、preamble/header長,確認済
+R20,11/15 LDPCとshortening,13.2.3.6,Table 13-10; Equation 13-1,517–518,518–519,"LDPC(1440,1056)、末尾shortening、符号語の送信順",行列生成・rank検証済、codec未実装
+R21,stuff・spread・scramble,13.2.3.7～13.2.3.9,Equation 13-2～5; Table 13-11/12; Figure 12-14参照,519–520,520–521,符号化後のblock合わせ、spread4、PRBS,確認済
+R22,HRCP preamble,13.2.4.2,Figure 13-5; Table 13-13; Equation 13-6～9,520–522,521–523,SYNC/SFD/CES、Golay系列、PSP長/ PAP短preamble,確認済
+R23,PHY header/HCS/EH,13.2.4.3,Figure 13-6～8; Table 13-16,522–525,523–526,"36 bit PHY header、HCS 0xA12B、EH(8,4)、spread4",確認済
+R24,SIFS/RIFSの数値,13.2.7; 14.2.7,Table 13-19/20,528–529; 577–578,529–530; 578–579,SIFS既定2.5 us、通常/Long RIFSの計算式,確認済
+R25,THzチャネル,14.1,Table 14-1等,555–561,556–562,周波数帯とチャネル配置。実験272 GHzと規定中心を区別,該当チャネルを照合
+R26,THz MCS・FEC,14.2.3.1/2; 14.2.4.3.2,Table 14-5/6/11,568–570; 573,569–571; 574,BPSK/QPSK/16-QAM等、MCS番号、13章LDPCの参照,確認済
+R27,THz header時間・chip rate,14.2.3.4～14.2.3.6,Table 14-7/8/9,570–571,571–572,19 block/40 stuff bitの記述と37 bit headerの整合は未解決,解釈保留
+R28,THz PHY header,14.2.4.3.2,Figure 14-6; Table 14-11/12/13,573–576,574–577,37 bit、MCS4/bandwidth4/seed4/PPRE2/PW1/length22、lengthのFCS扱い,確認済・header符号化長はR27と照合必要
+R29,受信感度の位置付け,14.2.6,Table 14-14,577,578,所定のAWGN/FEC条件の性能要件。一律RSSI成功判定やMCStable閾値ではない,確認済
+R30,品質フィードバックの適用範囲,6.5.1; 6.5.8,Table 6-48/49,211–213; 233–234,212–214; 234–235,PiconetのChannel Status commandをPairnetへ無条件流用しない,確認済
+R31,4アクセススロットの推奨根拠,4.7.9.2,NOTE; footnote15,50,51,単一搬送波で4を推奨。接続時間の最適化と端末間衝突確率低減。スロットはRequestの送信開始候補,参考情報であり必須要件ではない。許容範囲はTable7-13の1～6

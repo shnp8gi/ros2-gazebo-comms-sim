@@ -1,0 +1,214 @@
+IEEE Std 802.15.3-2023 タイマー・再送の本文再確認
+作成日: 2026-10-28
+目的: 「資料に記載がない」としていた項目を、提供された規格書の本文・図から再分類する。
+このレビューではコードを変更していない。
+
+資料とレビュー対象
+・原本: /home/rosgazebo/Downloads/802153-2023.pdf
+・原本 SHA-256: 10e332866392adb63ecc6c1854ff30b03a5c36bc0b2e888c4d7dcb5f1b0bd4c2
+・抽出文: specification_review/references/ieee_802153_2023_user_supplied.txt
+・実装: src/comms_sim_pkg/src/hrcp_pairnet.cpp
+・実装 SHA-256（確認時）: 7dfc66c117133369227585aa9d9f349ee00dfe8ee9bfe46590f2986698527fa1
+・HEAD: f79009379c10786ae14b81567c0365c86ca00d7d
+・同時に親エージェントが実装作業中のため、行番号・評価は上記ファイル内容の時点のもの。
+・「PDFページ」はPDFビューアでの1始まり、「本文ページ」は紙面下の印刷ページ。
+・確認範囲: §4.7.5、§6.1、§6.5.2.2–3、§7.4.2/7.4.5、§7.5.1–2、§7.6.2/7.6.5、
+  §7.12.7–8、Table 7-12/13、§13.2.7、Table 13-19/20、Figure 7-21–24/7-66。
+・抽出全文でも ATP、Association timeout timer、association timeout period、restart/reset timer を検索。
+  検索で見つからないことだけをもって「規格書全体に規定なし」とは断定しない。
+
+用語
+ATP: Association Timeout Period（接続維持のタイムアウト期間）
+RIFS: Retransmission Interframe Space（再送フレーム間隔）
+SIFS: Short Interframe Space（短いフレーム間隔）
+PRC: Pairnet Coordinator（Pairnetの調整役。実装B）
+PRDEV: Pairnet Device（Pairnetの機器。実装A）
+PAP: Pairnet Associated Period（Pairnet接続後の期間）
+MAC: Medium Access Control（媒体アクセス制御）
+PHY: Physical Layer（物理層）
+Stk-ACK: Stack Acknowledgment（MACヘッダー内の累積確認応答）
+FCS: Frame Check Sequence（フレーム検査系列）
+HCS: Header Check Sequence（ヘッダー検査系列）
+TX_END: シミュレータ内の最終送信シンボル終了時刻。規格固有のフィールド名ではない。
+
+1. 最優先の結論
+
+【明確な実装競合】接続後のAsynchronous Phaseでは、RIFSで送る回復フレームは
+データ本文を含まず、MACヘッダーのみとするshall規定がある。
+§7.6.5 本文286/PDF287: "shall transmit the frame with only the MAC header"
+§7.12.7.2 本文320/PDF321: "shall transmit the frame with no data payload"
+現行はSend()でDATAをe.recoverに保存し、RIFS満了時にSend(is_a,e.recover)でDATA本文を
+再送する（124、239行付近）。DATAを伴うこの回復は上記規定と競合する。
+これは調査時点の競合であり、親エージェントがheader-onlyへの修正・回帰試験を進めている。
+正常なACKを受けた同期状態でのDATA再送は§7.12.7.1に別途規定され、禁止されない。
+Association Responseの回復は§7.5.1の別規定なので、これまで一律にheader-onlyへ変更しない。
+
+2. ATPの開始時刻
+
+【本文で確認】§7.5.1 本文271/PDF272:
+"once it has sent a Stk-ACK" / "once it has sent an Association Response command"
+・PRDEVはStk-ACKを送った後、PRCはAssociation Responseを送った後にATPタイマーを開始する。
+・この文は送信完了後からの開始と読む根拠となり、TX_END起算は整合的。
+・図7-21（同ページ）のMSCでもそれぞれのタイマーの開始・停止を示す。
+・ただしMSCは波形図ではなく、Requestの先頭/末尾シンボルの差を描き分けていない。
+
+【解釈が残る】PRDEVの最初のAssociation Requestについては§7.5.1 本文270/PDF271が
+Request送信と "starting the Association timeout timer" を述べる。
+Requestについて、同じ箇所に「最終シンボル終了時刻」と同等の明示は確認できない。
+RequestもTX_ENDから開始する実装は合理的だが、全開始点が原文にサンプル精度で明記されている
+とは説明しない。
+
+3. ATPを再送で延長するか
+
+【未確定・ユーザー選択】同じ接続試行の初回だけ開始し、再送で延長しないという規則を
+直接指定する文は上記確認範囲では見つからなかった。
+§7.5.1 本文270/PDF271は、Beaconを受信するたびRequestを送れることとタイマー開始を
+同じ文で述べる。そのため、各Requestで開始/再開始する読みも排除できない。
+Responseについても「送った後に開始」の文に初回だけという限定はない。
+一方、再送のたび必ずrestartするとの明示も確認できない。
+現行StartOnce()は「その段階の初回から500 ms、再送で延長しない」というユーザー選択。
+規格が明確に禁止するとまでは言えないが、「再送非延長が規格で確定」は誤り。
+
+4. ATP 500 msという値
+
+【推奨と設定値を区別】§6.5.2.2 本文214/PDF215、§6.5.2.3 本文215/PDF216のNOTEは
+PRDEVの短いATPとして500 ms以下を推奨する。
+500 ms固定を全機器に義務付けるshall規定ではない。
+Requestは希望値、Responseは最終値。PRCが対応できなければ最終値が変わり得る。
+実装のmin(要求値, ローカル上限)という決め方は実装者選択であり、規格そのものの式ではない。
+
+5. 接続後の更新条件・切断
+
+【本文で確認】§7.5.2 本文273/PDF274:
+"If the PRC does not receive any frame ... the PRC shall disassociate the PRDEV."
+・PRDEVはATPが切れない頻度でフレームを送り、PRCは有効な相手機器の受信が途絶えて
+  ATPを超えたら接続を解除する。
+・Probe RequestをStk-ACKの代わりに送りPRCのATPをresetできるとの明示もある。
+・期限切れ後にPRDEVからフレームが来た場合、PRCはDisassociation Requestを送る。
+
+【正常受信の定義から支持】§6.1 本文118/PDF119:
+"‘reception’ by the MAC sublayer implies that the frame contents are valid"
+HCSを通過したフレームのみPHYからMACへ渡し、MACではFCSを用いて有効性を判断する。
+よって、本文のFCSが不正なフレームを通常の「受信成功」としてATP更新しない方針は支持される。
+ただしヘッダー内ACKの処理、同期状態への復帰はヘッダーの正常性による別判定である。
+
+【正常なheader-onlyも受信】§7.12.7.1 本文319/PDF320はデータのない場合もStk-ACKだけを
+送ってping-pongを維持する。本文なしの正しいフレームは、本文付きデータがないことを理由に
+ATP対象外にはしない。§7.5.2の「any frame」と整合する。
+現行177行付近はvalidなheader-onlyで更新し、body CRC不正では更新しない。
+
+【左右対称化の明示は未確認】§7.5.1はPRDEV側にもタイマー開始を要求するが、§7.5.2の
+継続受信による更新・無受信による解除の具体的文は主としてPRC側を記述している。
+PRDEVにも全く同じ更新・期限切れ動作を実装することは合理的な対称化だが、今回の確認範囲から
+「両機で完全に同一の更新規則が明文規定」とまでは言えない。
+§4.7.5 本文48/PDF49はPRCまたはPRDEVが相手消失を判断してPairnetを終了する概略を
+記述しており、PRDEV側の切断自体は規格にない機能ではない。ただし具体的な受信による
+タイマー更新式や、判定をサンプル精度で指定する規定としては扱わない。
+§7.4.5のPiconetにはDEV側のBeacon無受信による解除があるが、Pairnetは接続時にBeaconを
+停止するので、その規則をそのまま転用できない。
+
+6. Request再送
+
+【本文で許容】§7.5.1 本文270/PDF271:
+"can send an Association Request command ... after receiving every Beacon frame"
+・未接続PRDEVはBeacon受信ごとにランダムにアクセススロットを選んでRequestを送れる。
+・RequestはNo-ACK policyを使用する（shall）。キャリアセンスは不要。
+・接続を開始したPRDEVが異なるNext DEVIDのBeaconを受信した場合は無視する（shall）。
+・同じNext DEVIDの新BeaconでRequestを再送できる読みであり、Requestを送ったら以降すべての
+  Beaconを必ず無視しなければならないわけではない。
+・canは許容であって、各Beaconごとの再送を必須にするshallではない。
+・待機中も同一Next DEVIDのBeaconで再送する現行動作はこの規定に沿う。
+
+7. Association ResponseのRIFSと起点
+
+【本文・図で支持】§7.5.1 本文271/PDF272は、Stk-ACKまたはDATAを受けないPRCについて
+"resend the Association Response command after a RIFS period" と述べる（should）。
+図7-24 本文272/PDF273ではResponse末尾から次のResponse先頭までRIFSと図示される。
+従ってResponse再送を「前回ResponseのTX_END＋PRCのRIFS」とする起点は図から確認できる。
+最初のResponseはRequest受信直後に任意送信ではなく、Beaconと同じタイミングまたはそれ以降
+（§7.5.1 本文270/PDF271）。現行の次のBeacon格子時刻への切り上げは、この条件を満たす選択。
+
+8. 接続後のRIFS値と状態
+
+【数値で確認】Table 13-19 本文528/PDF529、Table 13-20 本文529/PDF530:
+SIFS既定値 = 2.5 µs、可変範囲0.5–2.5 µs、刻み0.1 µs。
+PRC RIFS = 2 × SIFS + 3.01 µs = 8.01 µs。
+DEV RIFS = 4 × SIFS + 9.05 µs = 19.05 µs。
+Long RIFSも別にある。現行は通常RIFSを選んでいる。
+サンプル格子に乗らないPRC値の上方丸めは実装の量子化であり、表そのものが丸め値なのではない。
+
+【状態遷移は本文にある】§7.6.5 本文285–286/PDF286–287、§7.12.7.2 本文320/PDF321:
+・両DEVはそれぞれ独立に同期/非同期状態を判断する。
+・正常なMACヘッダーを受信すれば、RIFS内で同期状態に復帰する。
+・同期状態の次送信は受信フレーム後SIFS。データなしならヘッダーだけ送る。
+・MACヘッダー誤り、または自己送信末尾からSIFS後にフレームが来ないと非同期となる。
+・PHYエラー通知でも非同期に入ってよい（may）。MACヘッダー誤りはshall。
+・非同期ではRIFSを使用し、Stk-ACKを含むヘッダーだけ送る（shall）。
+現行は正常headerイベントで回復予定を解除するが、明示的な同期/非同期状態を保持していない。
+header errorイベントではRX_FAILを記録してreturnしており、ケースによる回復予定の再設定が
+必要になる可能性がある。正しいheader後にPHY受信エラーが起きた場合が特に要確認。
+
+9. Figure 7-66の起点を読む際の注意
+
+図7-66 本文320/PDF321を画像で確認した。
+・Time #2のPRDEVの最初のRIFS矢印は相手header開始よりSIFSだけ左から始まる。
+  直前の自己送信末尾からRIFSを数える読みと整合する。
+・同じTime #2で、その後のheader-only再送も自己送信末尾からRIFS。
+・Time #4のPRDEVと、PRCの2回目以降のheader-onlyも自己送信末尾からRIFS。
+・Time #4のPRCは相手フレーム受信途中のPHY Receiver Error後にheader-onlyを送る。
+  この「最初の」送信の起点/遅延は図にRIFS矢印がなく、本文も厳密なイベント時刻を与えない。
+・調査途中にTime #2の左端を相手header先頭と読み違えたが、拡大再確認で訂正した。
+  相手header先頭起算で実装変更する根拠にはしない。
+・§7.12.8の「最後の送信末尾からRIFS」はCTAP内CTAでImm-ACK/Dly-ACKを待つ文脈。
+  この一文だけをPairnetのすべてのエラー回復に一般化しない。
+・§13.2.7.5の最小Tx-to-Tx能力の規定と、MACが実際に選ぶRIFS待機を混同しない。
+
+10. 最小修正に向けた状態遷移案（実装は本レビューで変更しない）
+
+確定部分:
+  a) 接続前Response待ち/ACK待ちと、接続後PAP同期/非同期を区別する。
+  b) 接続後、正しい宛先MACヘッダーを受信した時点で非同期の回復送信予定を止め、同期へ移行。
+     ヘッダーACK情報と本文の受信成功は別々に処理する。
+  c) RX_END＋SIFSに次送信。本文エラーなら受信成功した最後の連続シーケンス番号をACKする。
+     DATA再送は同期状態でACK情報に応じて実行する。
+  d) MACヘッダー誤り、または応答不着時に非同期へ移行。
+     回復送信のペイロードを空にし、最後に正常受信したシーケンス番号のStk-ACKを持たせる。
+  e) 正常headerを受けるまで、各自己header-only TX_END＋自機RIFSで回復を繰り返す。
+  f) Association Responseの再送だけはResponseを保持し、図7-24どおり前回TX_END＋PRC RIFS。
+  g) ATPはRIFSと独立に管理し、本文不正でATPを正常受信更新しない。
+
+起点の実装解釈を明示する必要がある部分:
+  h) 通常の無応答/ヘッダー誤りでは図7-66に合わせ、自己TX_END＋RIFSを期限として保持する。
+     SIFSでは応答不着を判定しても、さらに丸ごとRIFSを加算する二重待ちは避ける。
+     PHYが受信中なら、header復号完了前の「まだ有効headerがない」と無信号を区別する。
+  i) すでに正常headerが来て回復を停止した後のPHYエラーで非同期へ移る選択を採る場合、
+     最初のheader-only送信をmax(error通知時刻, last_TX_END＋RIFS)以降とする案は
+     図7-66 Time #4との整合を取りやすい。ただし、このmax式自体は規格本文の式ではない。
+     ここは回復起点の暫定規則として単独でテストし、shallの値として文書化しない。
+  j) header errorがRIFS期限より後に確定したとき、過去時刻へ送信イベントを戻さず、現在以降へ
+     丸める。重複イベント、自己送信との重複、正常headerの同時刻優先順を固定する。
+     これらはシミュレータの因果性を保つ実装上の選択。
+
+11. 関連するユーザー指定例外
+
+Beacon 140 µsは規格値不明だから仮置き、という状態ではない。
+Table 7-12 本文347/PDF348、Table 7-13 本文348/PDF349には期間式、スロット1–6個、
+最大Beacon 8 µs、最大Request 8 µsの値がある。
+既定SIFS 2.5 µsで最大6スロット10.5 µsなら上限は8＋2.5＋6×10.5＝73.5 µs。
+140 µsはこれとは一致しないユーザー指定の研究条件として明示する。
+方向別の異帯域と272 GHz側をHRCP形式で代替する条件も、規格全体への完全準拠とは分ける。
+
+最終整理
+・資料に明確な規定あり: 接続後非同期回復のheader-only、MAC正常headerによる同期復帰、
+  PRCの無受信ATP解除、RequestのNo-ACK、PRC/DEVのRIFS値、ResponseのRIFS図示起点。
+・資料の文・図から支持: Stk-ACK/Response送信後ATP開始、通常のTX_END起算RIFS、
+  header-only正常受信でのATP更新、本文CRC不正を正常MAC受信にしない。
+・今回の確認で確定できない: Requestのシンボル精度のATP開始、再送ATP非延長の必須性、
+  PRDEV側維持ATPの完全な対称規則、受信途中PHYエラー直後の初回回復送信の厳密な起点。
+・規格と異なるユーザー条件: Beacon 140 µsなど。
+
+親エージェントの対応結果（2026-10-28）:
+  接続後のDATAのRIFS回復を本文なしのData-type Stk-ACKへ変更済み。
+  AのRIFS回復送信が9104sample・本文なしである追加試験と、全8テストが成功。
+  十字追従10msのGazebo実行hrcp_monitor_20261028_v1も正常終了。
+  本文中の「競合」は調査時点の記録であり、この経路は修正済み。

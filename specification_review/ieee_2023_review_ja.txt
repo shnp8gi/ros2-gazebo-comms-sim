@@ -1,0 +1,94 @@
+最新方針v4: ユーザー指定でBeacon周期140us固定。3e形式代替は維持。以下の53usは旧設計の記録。詳細はieee_2023_fidelity_design_ja.txt。
+
+最新方針v3: ユーザー指定でテラヘルツ側も3e物理層フレームに代替。設計周期53us、MCSはHRCP側へ統一。旧THzフィールド/方式案は今回の実行対象外。詳細はieee_2023_fidelity_design_ja.txt。
+
+最新方針(v2): 競合は規格優先、方向別異PHYだけ研究例外。ieee_2023_conflict_resolution.csvを参照。以下の旧固定待機/全Beacon無視は採用方針ではない。
+
+更新: 最新設計はieee_2023_fidelity_design_ja.txt、参照一覧はieee_2023_reference_map.csv。
+ユーザーはBeacon周期のslot算出と固定RSSI gate廃止を選択。以下の「維持」は過去時点の記録。
+7.11.3のTHz集約禁止を追記訂正。THz header符号化長の未確定点は最新設計U01参照。
+
+IEEE Std 802.15.3-2023 本文照合（2026-10-28）
+資料: /home/rosgazebo/Downloads/802153-2023.pdf（ユーザー提供、684ページ）
+今回確認したのは下記の関連条項。全684ページの実装適合審査を行ったわけではない。
+本書のClause 13がHRCP、Clause 14がTHz PHY。2017年版の解説から2023年統合版の本文へ照合根拠を更新する。
+資料照合・パラメータ抽出のみ。Gazeboの通信コードと実行設定は今回変更していない。
+ページは本文印刷番号。PDFビューア上は本文番号+1であることを該当図表で確認した。
+
+1. 適応変調とMCS
+Table 14-5、14-11（本文568/573ページ）により、前回仮案の変調/FECに対応するTHz-SC MCS番号は0,1,2,3,8,9と確認。
+0: BPSK・11/15、1: BPSK・14/15、2: QPSK・11/15、3: QPSK・14/15、8:16-QAM・11/15、9:16-QAM・14/15。
+BPSK/QPSKの波形は14.2.3.1のπ/2シフトを反映する。今のAB plain QPSKも差し替え対象。
+2.16GHz帯域・PWなしのレートは約1.29/1.64/2.58/3.29/5.16/6.57Gbps。Table 14-8のchip rate式から1.76Gchip/sを確認できた。
+これは規定のPHYレート。MCStable.csvの0.5〜6Gbpsへの割当とRSSI閾値は依然として実験仮定であり、本文が当該CSVを裏付けるわけではない。
+HRCP側はTable 13-6（本文514ページ）：MCS0/1がπ/2QPSK、MCS2/3が16-QAM、それぞれ11/15、14/15。
+3dのMCS番号と3eのMCS番号を共通番号で扱わない。
+THz-SCではPW8chip対応が必須でPW0はoptional。HRCP-SCでは逆にPW0必須、PW8optional（13.2.3.1/14.2.3.3）。
+PW8時はデータ56chip/64chipとなり、同じMCSの名目速度が7/8になる。THz MCS9で約5.75Gbps。
+前回案のPWなしを採用するには、そのoptional能力を持つ機器という仮定を明記する。PW8対応必須を常時PW8使用と誤解しない。
+
+2. LDPC定義の不足は解消
+11/15: 13.2.3.6、Table 13-10、式(13-1)（本文517–518、PDF518–519ページ）。
+14/15: 12.2.3.6.4、Table 12-17、式(12-6)（本文438、PDF439ページ）。
+THz側14.2.3.2はこれらを参照するため、両方向で同じ1440bit符号長の定義を使える。
+先頭15列の非零要素とQC展開式をieee_2023_ldpc_definitions.jsonへ転記。両表と式はPDF画像でも照合済み。
+verify_standard_ldpc.pyで行列を展開し、規定式の別表現で全要素を照合した。
+11/15は384×1440、rank384。14/15は96×1440、rank96。両方とも系統符号のパリティ部分もfull rank、非零要素4320。
+これにより検査行列の生成と系統符号化に必要な基本構造は確認できた。LDPC符号器/軟判定復号器の通信コアへの実装はまだ行っていない。
+最終符号語はshorteningを行い、埋めた0は送信しない。単純に全符号語を1440bit送る仮見積りは要修正。
+送信順（rk-1が最初、r0が最後）、スクランブル、stuff bitsは実装時に合わせて照合する。
+
+3. ヘッダー形式と保護方式の修正
+HRCP PHY headerは36bit（Figure 13-7、本文523）。MCS3/PW1/seed4/PPRE2/length22/reserved4。
+THz PHY headerは37bit（Figure 14-6、本文573）。MCS4/bandwidth4/seed4/PPRE2/PW1/length22。
+前の解説ベースのTHz bandwidth3/reserved1という割当から変わる。実験MACの先頭順を規格順として流用しない。
+PHY lengthのFCS扱いはHRCPでは含む（13.2.4.3.2）、THzでは除くとの記述（14.2.4.3.2）。両PHYへ同一のlength計算を無条件で適用しない。
+MAC headerは10byteだが、内容はFigure 6-2（本文119）のFrame Control2/PairnetID2/DestID1/SrcID1/TX and ACK Information3/Stream Index1。
+独自lab_mac80の16bit通番/nonce方式とは異なる。6.2.13のStk-ACKのLast Received Sequence Numberは10bitで、初期値0x3FF。
+規格の通番・NextDEVIDと、解析用64bit beacon_indexの対応管理は設計し直す必要がある。
+HCSは13.2.4.3.3（本文524）。多項式はx^16+x^15+x^13+x^8+x^5+x^3+x+1（最高次項を除く0xA12B）。仮CRC-16/CCITT-FALSEの0x1021とは異なる。
+ヘッダーFECはTable 13-16（本文525）の4bit情報+4bitパリティ、すなわちEH(8,4)。仮EH(16,11)を置換する。
+ヘッダーにはscrambling、spreading4、π/2BPSK、PWとブロック形成がある。Table 13-7/14-7を参照。単にEH符号長だけ変えて送信時間を出さない。
+FCSの多項式/初期値/補数は6.2.10.6。bit/byte送信順は4.1/6.1と実フレーム構成を含めたテストベクトルで確認する。
+正しいGolay系列、SYNC/SFD/CESの配置は13.2.4.2と参照条項に定義されている。仮の反復a7/末尾b7系列を規格系列に置換する。
+
+4. IFSは10us固定ではない
+HRCPの13.2.7/Table 13-19/20（本文528–529）、THzの14.2.7はこの定義を参照。
+pPHYSIFSTimeは0.5〜2.5us、0.1us刻み、既定2.5us。
+7.6.2により接続前は既定SIFS、接続後は双方が対応する最短値をPRCが選び、operation parametersで通知する。
+既定SIFS2.5usの場合、通常RIFSはPRC8.01us、DEV19.05us。
+Long RIFSはPRC74.7us、DEV152us。Long RIFS Supportで選択する条件付きの別モード。
+前の講演資料からの「旧値が新値へ全面置換」という読み方は修正する。2023本文では通常とLongが併存している。
+142usはDEV側Long RIFS式の加算項であり、ユーザー指定Beacon140usとは別。
+
+5. 接続と回復処理が通信量に直結する
+Pairnetの接続は7.5.1（本文270–272）。Piconet用7.4.2を流用しない。
+BeaconのNextDEVIDを照合したRequest受信時にPRCがBeaconを停止する。Responseは次のBeaconと同じタイミングか、それより後に送る記述がある。
+よって現在のRequest受信後10usでResponseを即送信する仮手順は要修正。
+Access SlotはRequest長+SIFS。仮の固定20us幅と必ずしも一致しない。
+PRDEVはResponse受信でassociated、PRCはResponseに対するStk-ACKまたはDATA受信で接続成立を判断する。両端の状態を分離する。
+ACKを失った場合は7.5.1でRIFS後のResponse再送が記述されている。現行の単一shared状態で500ms停止するモデルとは違う。
+
+接続後は7.6.5、7.12.7.1/2（本文285–286/319–320）。
+・MACヘッダーが正常なら、payloadの一部が失敗しても最後の連続正常サブフレーム番号をStk-ACKで知らせ、再送を制御する。
+・MACヘッダーが失われるなどした場合はAsynchronous Phaseへ入り、RIFSでpayloadなしのフレームを交換して同期回復する。
+・データを持たない側もヘッダーだけを返信してping-pongを継続できる。
+・一般Pairnetには最大256個の集約があるが、7.11.3冒頭はTHz PHYでの集約を禁止している。THzに集約を適用する以前の説明は訂正。Stk-ACK・再送・同期回復は別途実装対象。
+従って今回の「1bitのpayload誤りで約500ms停止」は規格の必然ではなく仮実装の制約だった。
+ユーザー指定の500msを即座に変更する必要はない。短期回復/再送と、最終的な無応答監視を別々にモデル化する設計へ更新する。
+
+6. 実験条件・実機不明点は本文と区別
+Beacon140us、接続Response/ACK待ち500ms、切断500ms、待機中の新Beacon無視、半二重、異帯域の方向別運用は実験条件として現時点では維持。
+規格本文のPairnet説明は共通PHYの運用を前提とする箇所があり、A→B272GHz/B→A61GHzの相互運用全体を規格準拠とは呼ばない。
+周波数とチャネル中心の照合は14.1/Table14-1および13.2.2を参照。2.16GHzで271.08/273.24GHz等が示され、272.000GHz・61.000GHzという現在の値は規定中心と同一ではない。
+Table14-14（本文577）にはMCS別の基準受信感度があるが、これは所定のAWGN/誤り率条件で満たすべき受信性能であり、任意の適応MCS切替閾値表ではない。
+元のMCStable.csvの速度定義・RSSI参照面・実機切替方式は、このPDFを入手しても自動的には確定しない。
+印刷誤記らしい箇所もある（Table14-12の14.28GHzなど、他の帯域表と不整合）。曖昧な数値をそのままコードへ埋め込まない。
+
+7. 実装へ反映する順序
+(1) 確定したLDPC行列の符号化/軟判定復号、shorteningと送信順のテスト。
+(2) 正式PHY header/HCS/EH(8,4)/scrambler/preamble/ブロック構成と送信時間。
+(3) Pairnet MAC、Stk-ACK、サブフレーム再送、RIFSでの回復、両端状態と接続タイマー。
+(4) MCS0/1/2/3/8/9の適応選択と実際の品質フィードバック、表の参照面の照合。
+(5) 同一RF条件で固定SNR試験、Gazebo4条件、複数seed比較。
+今回の作業だけで新しい通信性能が得られたと扱わない。過去の0.065536MB等は引き続きlab_iq_rect_v0_uncodedの結果。

@@ -1,0 +1,3497 @@
+{
+  "calibration_status": "measured_with_assumptions",
+  "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_remeasured_20261029/ideal_linear/per_relative.csv",
+  "source_sha256": "2a0fd848f94ca567653458bbbf70465a7b6eb3e32c5f9316edb297864ba2fdb2",
+  "measurement_conditions": {
+    "calibration_status": "measured_relative_power_only",
+    "direction": "Q_A_TO_B",
+    "user_direction": "下り",
+    "frequency_hz": 60480000000,
+    "frame_bytes": 100000,
+    "aggregation": "clear_write",
+    "mcs_values": [
+      3,
+      6,
+      8,
+      9,
+      11
+    ],
+    "packet_length_interpretation": "100 kB interpreted as 100000 bytes",
+    "tx_power_and_cabling_same_across_mcs": true,
+    "hardware_swap": "上り下りの機器が逆。同型だが個体ID不明。今回の組み合わせに対する測定。",
+    "previous_measurement_invalid_reason": "コネクターの接続方法が間違っていた（ユーザー申告）",
+    "reference_rssi_dbm": null,
+    "ber_stage": "unknown",
+    "filename_assumptions": {
+      "MCS6/48.0d.csv": "48.0 dB attenuation"
+    },
+    "file_count": 84,
+    "sample_count": 9495,
+    "sources": [
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/45.0dB.csv",
+        "local_copy": "raw/MCS3/45.0dB.csv",
+        "sha256": "d424d49415aed466667756f4e724e1a17301149774c03e84ff5fe86814be9314",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 125,
+          "denominator_sum": 23045.0,
+          "rssi_raw_min": 133.0,
+          "rssi_raw_max": 138.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 125,
+          "denominator_sum": 23045.0,
+          "rssi_raw_min": 133.0,
+          "rssi_raw_max": 138.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/46.0dB.csv",
+        "local_copy": "raw/MCS3/46.0dB.csv",
+        "sha256": "6a7c89d1070bb776da545b2f428f61cac4e0cff6d2f8247c3d7476e099f1da2a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 104,
+          "denominator_sum": 19121.0,
+          "rssi_raw_min": 128.0,
+          "rssi_raw_max": 135.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 104,
+          "denominator_sum": 19121.0,
+          "rssi_raw_min": 128.0,
+          "rssi_raw_max": 135.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/47.0dB.csv",
+        "local_copy": "raw/MCS3/47.0dB.csv",
+        "sha256": "e6a7633dab19214ea3c4d41607873fc2fb3f2d96af81b0af9ddcfb99c31f3067",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 120,
+          "denominator_sum": 22089.0,
+          "rssi_raw_min": 111.0,
+          "rssi_raw_max": 126.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 120,
+          "denominator_sum": 22089.0,
+          "rssi_raw_min": 111.0,
+          "rssi_raw_max": 126.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/48.0dB.csv",
+        "local_copy": "raw/MCS3/48.0dB.csv",
+        "sha256": "ffb8f894a36c8d418bce74d81b01b09606910f56a2048418a2d41886df9cb48c",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 156,
+          "denominator_sum": 28725.0,
+          "rssi_raw_min": 102.0,
+          "rssi_raw_max": 117.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 156,
+          "denominator_sum": 28725.0,
+          "rssi_raw_min": 102.0,
+          "rssi_raw_max": 117.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/49.0dB.csv",
+        "local_copy": "raw/MCS3/49.0dB.csv",
+        "sha256": "e2a6b1f6d378266fc76a445367a29d7d5cd46c7bf752297df8dd82fe4a882ba9",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 107,
+          "denominator_sum": 19683.0,
+          "rssi_raw_min": 94.0,
+          "rssi_raw_max": 107.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 107,
+          "denominator_sum": 19683.0,
+          "rssi_raw_min": 94.0,
+          "rssi_raw_max": 107.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/50.0dB.csv",
+        "local_copy": "raw/MCS3/50.0dB.csv",
+        "sha256": "c15b79235bffd36bfd8b9c584691056f89833394ce1d333e1b78d4f4cefd626e",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 100,
+          "denominator_sum": 18368.0,
+          "rssi_raw_min": 94.0,
+          "rssi_raw_max": 100.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 100,
+          "denominator_sum": 18368.0,
+          "rssi_raw_min": 94.0,
+          "rssi_raw_max": 100.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/51.3dB.csv",
+        "local_copy": "raw/MCS3/51.3dB.csv",
+        "sha256": "5c874a65b92585f5e1677102a2fd0858f281459ad8e8218d42b6705c34f86546",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 92,
+          "denominator_sum": 16884.0,
+          "rssi_raw_min": 83.0,
+          "rssi_raw_max": 88.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 92,
+          "denominator_sum": 16884.0,
+          "rssi_raw_min": 83.0,
+          "rssi_raw_max": 88.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/52.5dB.csv",
+        "local_copy": "raw/MCS3/52.5dB.csv",
+        "sha256": "90f4aa48e7d9d417cf9fc0920dbd2acdfef9fa56355a0e85492c8b5c49df5eec",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 206,
+          "denominator_sum": 38109.0,
+          "rssi_raw_min": 65.0,
+          "rssi_raw_max": 80.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 206,
+          "denominator_sum": 38109.0,
+          "rssi_raw_min": 65.0,
+          "rssi_raw_max": 80.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/53.8dB.csv",
+        "local_copy": "raw/MCS3/53.8dB.csv",
+        "sha256": "5b1caf37d9be33a6a97d6f955c46583f2bf0d1e5538431f2ba7bdab831f794b8",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 241,
+          "denominator_sum": 44532.0,
+          "rssi_raw_min": 66.0,
+          "rssi_raw_max": 72.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 241,
+          "denominator_sum": 44532.0,
+          "rssi_raw_min": 66.0,
+          "rssi_raw_max": 72.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/55.0dB.csv",
+        "local_copy": "raw/MCS3/55.0dB.csv",
+        "sha256": "a188a1abd11b0035f8cf8453f1c564f50386e78899c3586b7fbd007bc9a2ea10",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 104,
+          "denominator_sum": 19096.0,
+          "rssi_raw_min": 57.0,
+          "rssi_raw_max": 63.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 104,
+          "denominator_sum": 19096.0,
+          "rssi_raw_min": 57.0,
+          "rssi_raw_max": 63.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/56.3dB.csv",
+        "local_copy": "raw/MCS3/56.3dB.csv",
+        "sha256": "393fcb2d1f385a5799ec967a753535da2b0709a1ea71317b932846712f189c14",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 95,
+          "denominator_sum": 17427.0,
+          "rssi_raw_min": 48.0,
+          "rssi_raw_max": 54.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 95,
+          "denominator_sum": 17427.0,
+          "rssi_raw_min": 48.0,
+          "rssi_raw_max": 54.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/57.5dB.csv",
+        "local_copy": "raw/MCS3/57.5dB.csv",
+        "sha256": "429830ff0d8e3deb0e24640f982cfbbf900098f0b0706953e1894af8da286214",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 113,
+          "denominator_sum": 20512.0,
+          "rssi_raw_min": 31.0,
+          "rssi_raw_max": 49.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 113,
+          "denominator_sum": 20512.0,
+          "rssi_raw_min": 31.0,
+          "rssi_raw_max": 49.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS3/60.0dB.csv",
+        "local_copy": "raw/MCS3/60.0dB.csv",
+        "sha256": "c0a42fd9d3b7c997937a947e529d55908a8b2cbfe111ad92f7a8bc3df94d86b1",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 116,
+          "denominator_sum": 5408.0,
+          "rssi_raw_min": 25.0,
+          "rssi_raw_max": 37.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 116,
+          "denominator_sum": 5408.0,
+          "rssi_raw_min": 25.0,
+          "rssi_raw_max": 37.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/45.0dB.csv",
+        "local_copy": "raw/MCS6/45.0dB.csv",
+        "sha256": "8eb6cae23f8506e039423f30ef590709f32f39769e9a36f71acc0f0734db685a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 147,
+          "denominator_sum": 53430.0,
+          "rssi_raw_min": 142.0,
+          "rssi_raw_max": 145.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 147,
+          "denominator_sum": 53430.0,
+          "rssi_raw_min": 142.0,
+          "rssi_raw_max": 145.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/46.0dB.csv",
+        "local_copy": "raw/MCS6/46.0dB.csv",
+        "sha256": "c3205441e1b061f3439c448263cdd9cbd505391bfaf65f61514b355457b36361",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 147,
+          "denominator_sum": 53426.0,
+          "rssi_raw_min": 132.0,
+          "rssi_raw_max": 136.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 147,
+          "denominator_sum": 53426.0,
+          "rssi_raw_min": 132.0,
+          "rssi_raw_max": 136.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/47.0dB.csv",
+        "local_copy": "raw/MCS6/47.0dB.csv",
+        "sha256": "81a6a34f3d685ed9a0e2d28c292422852ae1ed9dadc742b8253c05cb4ebfcfad",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 90,
+          "denominator_sum": 32609.0,
+          "rssi_raw_min": 123.0,
+          "rssi_raw_max": 127.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 90,
+          "denominator_sum": 32609.0,
+          "rssi_raw_min": 123.0,
+          "rssi_raw_max": 127.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/48.0d.csv",
+        "local_copy": "raw/MCS6/48.0d.csv",
+        "sha256": "abba18206dcea28b7726209bb3ec7ce0b6aadde973bad531b352205358b9b495",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 104,
+          "denominator_sum": 37708.0,
+          "rssi_raw_min": 114.0,
+          "rssi_raw_max": 118.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 104,
+          "denominator_sum": 37708.0,
+          "rssi_raw_min": 114.0,
+          "rssi_raw_max": 118.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/49.0dB.csv",
+        "local_copy": "raw/MCS6/49.0dB.csv",
+        "sha256": "4df7f00c767dcb90daf1e29b921d13f55d9390ddc5c28bf59bc4d4c8bf598d6a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 94,
+          "denominator_sum": 34075.0,
+          "rssi_raw_min": 102.0,
+          "rssi_raw_max": 108.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 94,
+          "denominator_sum": 34075.0,
+          "rssi_raw_min": 102.0,
+          "rssi_raw_max": 108.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/50.0dB.csv",
+        "local_copy": "raw/MCS6/50.0dB.csv",
+        "sha256": "4555a6d1eeed412fdac8db8e3b75eb4605188398e9e7ed070da8132efda229c5",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 107,
+          "denominator_sum": 38810.0,
+          "rssi_raw_min": 93.0,
+          "rssi_raw_max": 99.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 107,
+          "denominator_sum": 38810.0,
+          "rssi_raw_min": 93.0,
+          "rssi_raw_max": 99.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/51.3dB.csv",
+        "local_copy": "raw/MCS6/51.3dB.csv",
+        "sha256": "3c5af2fb7eeb773c7bef37c4028f1eac176eda7b0c34218c66e832427d6c330d",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 146,
+          "denominator_sum": 53097.0,
+          "rssi_raw_min": 83.0,
+          "rssi_raw_max": 88.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 146,
+          "denominator_sum": 53097.0,
+          "rssi_raw_min": 83.0,
+          "rssi_raw_max": 88.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/52.5dB.csv",
+        "local_copy": "raw/MCS6/52.5dB.csv",
+        "sha256": "a63846b03778a300b896d8b06703917dd6efa726d3efb0c6c7f973b0c362e0fb",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 108,
+          "denominator_sum": 39145.0,
+          "rssi_raw_min": 73.0,
+          "rssi_raw_max": 80.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 108,
+          "denominator_sum": 39145.0,
+          "rssi_raw_min": 73.0,
+          "rssi_raw_max": 80.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS6/55.0dB.csv",
+        "local_copy": "raw/MCS6/55.0dB.csv",
+        "sha256": "3acaa4b679261d51678f3968b7893fb12146e6557884ed306cd1fd8c86f0ae1b",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 110,
+          "denominator_sum": 39899.0,
+          "rssi_raw_min": 53.0,
+          "rssi_raw_max": 60.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 110,
+          "denominator_sum": 39899.0,
+          "rssi_raw_min": 53.0,
+          "rssi_raw_max": 60.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/45.0dB.csv",
+        "local_copy": "raw/MCS8/45.0dB.csv",
+        "sha256": "4b21364a022aeea55974d628ba5f0c2dfcab9e7a7e38411286bbea6601b3e78a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 156,
+          "denominator_sum": 71595.0,
+          "rssi_raw_min": 131.0,
+          "rssi_raw_max": 135.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 156,
+          "denominator_sum": 71595.0,
+          "rssi_raw_min": 131.0,
+          "rssi_raw_max": 135.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/46.0dB.csv",
+        "local_copy": "raw/MCS8/46.0dB.csv",
+        "sha256": "0e169120665bc1035ea8290276d104c9e271f073630ae75d142fa88213a43ed0",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 133,
+          "denominator_sum": 60979.0,
+          "rssi_raw_min": 124.0,
+          "rssi_raw_max": 135.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 133,
+          "denominator_sum": 60979.0,
+          "rssi_raw_min": 124.0,
+          "rssi_raw_max": 135.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/47.0dB.csv",
+        "local_copy": "raw/MCS8/47.0dB.csv",
+        "sha256": "5c5e506917d0c85fd892d5f98ccf7311c88c2392e26c65f4fa5a91d17a4156d0",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 107,
+          "denominator_sum": 48908.0,
+          "rssi_raw_min": 124.0,
+          "rssi_raw_max": 128.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 107,
+          "denominator_sum": 48908.0,
+          "rssi_raw_min": 124.0,
+          "rssi_raw_max": 128.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/47.5dB.csv",
+        "local_copy": "raw/MCS8/47.5dB.csv",
+        "sha256": "675401231cb3328fc816f6a875c89385e1f5f8a35dcd2064e2cda2db13622a02",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 104,
+          "denominator_sum": 47576.0,
+          "rssi_raw_min": 118.0,
+          "rssi_raw_max": 124.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 104,
+          "denominator_sum": 47576.0,
+          "rssi_raw_min": 118.0,
+          "rssi_raw_max": 124.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/48.0dB.csv",
+        "local_copy": "raw/MCS8/48.0dB.csv",
+        "sha256": "b3b3cdf69bcf0c40de673b7060de1545da3bc6cf1cd69c55d5613a7390cd8b67",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 95,
+          "denominator_sum": 43401.0,
+          "rssi_raw_min": 114.0,
+          "rssi_raw_max": 119.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 95,
+          "denominator_sum": 43401.0,
+          "rssi_raw_min": 114.0,
+          "rssi_raw_max": 119.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/48.6dB.csv",
+        "local_copy": "raw/MCS8/48.6dB.csv",
+        "sha256": "ccca787fff5d0fe3c23f57f0d53619b07e1167438a8b2e9b298bde92f2b1a624",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 132,
+          "denominator_sum": 60483.0,
+          "rssi_raw_min": 110.0,
+          "rssi_raw_max": 115.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 132,
+          "denominator_sum": 60483.0,
+          "rssi_raw_min": 110.0,
+          "rssi_raw_max": 115.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/49.0dB.csv",
+        "local_copy": "raw/MCS8/49.0dB.csv",
+        "sha256": "8cec2cd16b295d3ebfaba929311690d54893a44eec557ce0629fe803ff67ecc4",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 104,
+          "denominator_sum": 47579.0,
+          "rssi_raw_min": 102.0,
+          "rssi_raw_max": 108.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 104,
+          "denominator_sum": 47579.0,
+          "rssi_raw_min": 102.0,
+          "rssi_raw_max": 108.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS8/50.0dB.csv",
+        "local_copy": "raw/MCS8/50.0dB.csv",
+        "sha256": "0efba7db01151ed156a41672f08606dc2d5e5f2b1610e3074e9df5b23f6b4c5a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 88,
+          "denominator_sum": 40210.0,
+          "rssi_raw_min": 92.0,
+          "rssi_raw_max": 98.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 88,
+          "denominator_sum": 40210.0,
+          "rssi_raw_min": 92.0,
+          "rssi_raw_max": 98.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/35.0dB.csv",
+        "local_copy": "raw/MCS9/35.0dB.csv",
+        "sha256": "819330461acfbbeda16a681d4b2f89d71fac5eea6db6ecd0f0506a83f42a3b08",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 123,
+          "denominator_sum": 86708.0,
+          "rssi_raw_min": 233.0,
+          "rssi_raw_max": 237.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 123,
+          "denominator_sum": 86708.0,
+          "rssi_raw_min": 233.0,
+          "rssi_raw_max": 237.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/36.0dB.csv",
+        "local_copy": "raw/MCS9/36.0dB.csv",
+        "sha256": "8e5deeace0acb578a7ab885f5c4a5a454b6f62bc3a25c3cad243d24d3b7c2b7c",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 105,
+          "denominator_sum": 73772.0,
+          "rssi_raw_min": 222.0,
+          "rssi_raw_max": 226.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 105,
+          "denominator_sum": 73772.0,
+          "rssi_raw_min": 222.0,
+          "rssi_raw_max": 226.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/37.0dB.csv",
+        "local_copy": "raw/MCS9/37.0dB.csv",
+        "sha256": "90152031a4c84b1fdf023c67b0917d2e94d17ebb84d4840c8725695014a7bc2b",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 160,
+          "denominator_sum": 112789.0,
+          "rssi_raw_min": 219.0,
+          "rssi_raw_max": 223.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 160,
+          "denominator_sum": 112789.0,
+          "rssi_raw_min": 219.0,
+          "rssi_raw_max": 223.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/38.0dB.csv",
+        "local_copy": "raw/MCS9/38.0dB.csv",
+        "sha256": "8e495b85b12a18bd946ab7001aa5fb40c14b8a81d7ecef7cd63d82d63b70401f",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 108,
+          "denominator_sum": 75965.0,
+          "rssi_raw_min": 209.0,
+          "rssi_raw_max": 213.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 108,
+          "denominator_sum": 75965.0,
+          "rssi_raw_min": 209.0,
+          "rssi_raw_max": 213.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/38.5dB.csv",
+        "local_copy": "raw/MCS9/38.5dB.csv",
+        "sha256": "afc967c1cd6cbaa85a8d92b193786cd5d9b933476bdb5fc57c5f2f16b8c24ce1",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 119,
+          "denominator_sum": 83811.0,
+          "rssi_raw_min": 197.0,
+          "rssi_raw_max": 203.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 119,
+          "denominator_sum": 83811.0,
+          "rssi_raw_min": 197.0,
+          "rssi_raw_max": 203.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/39.0dB.csv",
+        "local_copy": "raw/MCS9/39.0dB.csv",
+        "sha256": "60a05ed0d6cb2cb34090163ceb44e3ecb12450fcd69cc0ede7d97d675908278f",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 102,
+          "denominator_sum": 71678.0,
+          "rssi_raw_min": 197.0,
+          "rssi_raw_max": 202.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 102,
+          "denominator_sum": 71678.0,
+          "rssi_raw_min": 197.0,
+          "rssi_raw_max": 202.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/39.5dB.csv",
+        "local_copy": "raw/MCS9/39.5dB.csv",
+        "sha256": "2dbed5cc33cb4cf558b37e7786783980760b28c98a5b479a439fb880bea0e78b",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 133,
+          "denominator_sum": 93701.0,
+          "rssi_raw_min": 192.0,
+          "rssi_raw_max": 195.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 133,
+          "denominator_sum": 93701.0,
+          "rssi_raw_min": 192.0,
+          "rssi_raw_max": 195.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/40.0dB.csv",
+        "local_copy": "raw/MCS9/40.0dB.csv",
+        "sha256": "2ef312f991efa9bc7a2f67099b10ca0a74d7fd6adf595279a594375b3c2bd25f",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 142,
+          "denominator_sum": 100077.0,
+          "rssi_raw_min": 183.0,
+          "rssi_raw_max": 188.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 142,
+          "denominator_sum": 100077.0,
+          "rssi_raw_min": 183.0,
+          "rssi_raw_max": 188.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/40.5dB.csv",
+        "local_copy": "raw/MCS9/40.5dB.csv",
+        "sha256": "2ebc9b162dba605804aeb9c63f70efbae980d73ef2709ed88f961b70d9a9c82b",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 122,
+          "denominator_sum": 85912.0,
+          "rssi_raw_min": 176.0,
+          "rssi_raw_max": 180.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 122,
+          "denominator_sum": 85912.0,
+          "rssi_raw_min": 176.0,
+          "rssi_raw_max": 180.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/41.0dB.csv",
+        "local_copy": "raw/MCS9/41.0dB.csv",
+        "sha256": "0a750b7fce7e9be4ef791272db9627395fe633b2d73200f7dcc382d78492e5ab",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 121,
+          "denominator_sum": 85148.0,
+          "rssi_raw_min": 173.0,
+          "rssi_raw_max": 177.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 121,
+          "denominator_sum": 85148.0,
+          "rssi_raw_min": 173.0,
+          "rssi_raw_max": 177.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/41.5dB.csv",
+        "local_copy": "raw/MCS9/41.5dB.csv",
+        "sha256": "fdae325a291cd48b1bd3ab7ff4816f8f3061c0ea85c7906229739ffe70962b6c",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 129,
+          "denominator_sum": 90911.0,
+          "rssi_raw_min": 167.0,
+          "rssi_raw_max": 172.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 129,
+          "denominator_sum": 90911.0,
+          "rssi_raw_min": 167.0,
+          "rssi_raw_max": 172.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/42.0dB.csv",
+        "local_copy": "raw/MCS9/42.0dB.csv",
+        "sha256": "d6e6b649fcda60446f60444895492618fc4659b35860444c41323bf80496a901",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 84,
+          "denominator_sum": 58938.0,
+          "rssi_raw_min": 164.0,
+          "rssi_raw_max": 167.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 84,
+          "denominator_sum": 58938.0,
+          "rssi_raw_min": 164.0,
+          "rssi_raw_max": 167.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/42.5dB.csv",
+        "local_copy": "raw/MCS9/42.5dB.csv",
+        "sha256": "badfd980c3634fef8fe83d68d0906b1330fda722500b35aa31427e24e03385a1",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 151,
+          "denominator_sum": 106497.0,
+          "rssi_raw_min": 158.0,
+          "rssi_raw_max": 164.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 151,
+          "denominator_sum": 106497.0,
+          "rssi_raw_min": 158.0,
+          "rssi_raw_max": 164.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/43.0dB.csv",
+        "local_copy": "raw/MCS9/43.0dB.csv",
+        "sha256": "18d0538ae3fa3e6d360e9737a367ee4b5fb7c3ea943aea759f55656ed2bcc2bb",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 108,
+          "denominator_sum": 75999.0,
+          "rssi_raw_min": 155.0,
+          "rssi_raw_max": 158.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 108,
+          "denominator_sum": 75999.0,
+          "rssi_raw_min": 155.0,
+          "rssi_raw_max": 158.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/44.0dB.csv",
+        "local_copy": "raw/MCS9/44.0dB.csv",
+        "sha256": "34b5e86c30d8acde685bea7420ee139e974da09659d7e19d89d5fa118fdc0f2d",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 100,
+          "denominator_sum": 70311.0,
+          "rssi_raw_min": 146.0,
+          "rssi_raw_max": 148.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 100,
+          "denominator_sum": 70311.0,
+          "rssi_raw_min": 146.0,
+          "rssi_raw_max": 148.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS9/45.0dB.csv",
+        "local_copy": "raw/MCS9/45.0dB.csv",
+        "sha256": "de0102822d1768f974323a6afb67d6f94b01a920fa86e16caaedb423bb18b346",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 85,
+          "denominator_sum": 59642.0,
+          "rssi_raw_min": 136.0,
+          "rssi_raw_max": 141.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 85,
+          "denominator_sum": 59642.0,
+          "rssi_raw_min": 136.0,
+          "rssi_raw_max": 141.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/20.0dB.csv",
+        "local_copy": "raw/MCS11/20.0dB.csv",
+        "sha256": "c32c4372d77fad14f06742e8fc785259df874e294c944641162bb0268ec0de79",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 123,
+          "denominator_sum": 108245.0,
+          "rssi_raw_min": 387.0,
+          "rssi_raw_max": 391.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 123,
+          "denominator_sum": 108245.0,
+          "rssi_raw_min": 387.0,
+          "rssi_raw_max": 391.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/20.5dB.csv",
+        "local_copy": "raw/MCS11/20.5dB.csv",
+        "sha256": "7c0c99aa50132f6af8f87eac09529697ab36e6a605d7e3a448e8a1a8d021d466",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 133,
+          "denominator_sum": 117160.0,
+          "rssi_raw_min": 382.0,
+          "rssi_raw_max": 385.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 133,
+          "denominator_sum": 117160.0,
+          "rssi_raw_min": 382.0,
+          "rssi_raw_max": 385.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/21.0dB.csv",
+        "local_copy": "raw/MCS11/21.0dB.csv",
+        "sha256": "8f4a498f6096f963a9331fb922c88d385e65fb700d53ef5a1a3093a7c99e16c2",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 106,
+          "denominator_sum": 93217.0,
+          "rssi_raw_min": 376.0,
+          "rssi_raw_max": 379.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 106,
+          "denominator_sum": 93217.0,
+          "rssi_raw_min": 376.0,
+          "rssi_raw_max": 379.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/21.5dB.csv",
+        "local_copy": "raw/MCS11/21.5dB.csv",
+        "sha256": "bd33bd4f41c7abb52ce50332b21747c011280c64477b78320e90eb45c285aa51",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 95,
+          "denominator_sum": 83421.0,
+          "rssi_raw_min": 370.0,
+          "rssi_raw_max": 374.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 95,
+          "denominator_sum": 83421.0,
+          "rssi_raw_min": 370.0,
+          "rssi_raw_max": 374.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/22.0dB.csv",
+        "local_copy": "raw/MCS11/22.0dB.csv",
+        "sha256": "fdcdd03e46dac10f78e95e90547744b1bd976f67a964af901dfdd009af49beec",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 87,
+          "denominator_sum": 76295.0,
+          "rssi_raw_min": 365.0,
+          "rssi_raw_max": 369.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 87,
+          "denominator_sum": 76295.0,
+          "rssi_raw_min": 365.0,
+          "rssi_raw_max": 369.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/22.5dB.csv",
+        "local_copy": "raw/MCS11/22.5dB.csv",
+        "sha256": "920129daed56428d3f34b8dc776f5ddcc5f4e6314f051671484e2a61d8c55d72",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 98,
+          "denominator_sum": 86080.0,
+          "rssi_raw_min": 361.0,
+          "rssi_raw_max": 364.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 98,
+          "denominator_sum": 86080.0,
+          "rssi_raw_min": 361.0,
+          "rssi_raw_max": 364.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/23.0dB.csv",
+        "local_copy": "raw/MCS11/23.0dB.csv",
+        "sha256": "81f0b9de9c09a116d96d7e4659b1e0759d8313ada001d4bd9d6fb4ba5abad2cc",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 99,
+          "denominator_sum": 86960.0,
+          "rssi_raw_min": 357.0,
+          "rssi_raw_max": 359.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 99,
+          "denominator_sum": 86960.0,
+          "rssi_raw_min": 357.0,
+          "rssi_raw_max": 359.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/23.5dB.csv",
+        "local_copy": "raw/MCS11/23.5dB.csv",
+        "sha256": "dbc60a4f3dfef0d4768c73ffb36a694b7bbe44e06db19b21c32af9aaf9e40a59",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 127,
+          "denominator_sum": 111899.0,
+          "rssi_raw_min": 351.0,
+          "rssi_raw_max": 355.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 127,
+          "denominator_sum": 111899.0,
+          "rssi_raw_min": 351.0,
+          "rssi_raw_max": 355.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/24.0dB.csv",
+        "local_copy": "raw/MCS11/24.0dB.csv",
+        "sha256": "7de19e44f89dd9864e8738d2bbaf810b7b31c014563219b676544219667c5010",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 101,
+          "denominator_sum": 88765.0,
+          "rssi_raw_min": 348.0,
+          "rssi_raw_max": 350.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 101,
+          "denominator_sum": 88765.0,
+          "rssi_raw_min": 348.0,
+          "rssi_raw_max": 350.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/24.5dB.csv",
+        "local_copy": "raw/MCS11/24.5dB.csv",
+        "sha256": "c0f48d99685f0f3ac86ceff8c36f83d9bb6f69084c5e8f2cd8e75ea5fd37210a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 111,
+          "denominator_sum": 97575.0,
+          "rssi_raw_min": 343.0,
+          "rssi_raw_max": 347.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 111,
+          "denominator_sum": 97575.0,
+          "rssi_raw_min": 343.0,
+          "rssi_raw_max": 347.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/25.0dB.csv",
+        "local_copy": "raw/MCS11/25.0dB.csv",
+        "sha256": "2e6d67b29f5be85771c1fd9df4365d03563cdf5cbb966374d43d95ed6e99395e",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 95,
+          "denominator_sum": 83416.0,
+          "rssi_raw_min": 340.0,
+          "rssi_raw_max": 342.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 95,
+          "denominator_sum": 83416.0,
+          "rssi_raw_min": 340.0,
+          "rssi_raw_max": 342.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/25.5dB.csv",
+        "local_copy": "raw/MCS11/25.5dB.csv",
+        "sha256": "934881ea15e44a24a8d3826a7b24fb40f56141309668e6504d311cffccf08ebb",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 107,
+          "denominator_sum": 94095.0,
+          "rssi_raw_min": 334.0,
+          "rssi_raw_max": 338.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 107,
+          "denominator_sum": 94095.0,
+          "rssi_raw_min": 334.0,
+          "rssi_raw_max": 338.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/26.0dB.csv",
+        "local_copy": "raw/MCS11/26.0dB.csv",
+        "sha256": "d22e42cc3ea584afe1f93662f848ad6c0bbb5da1e5ec82f8f08d21cf2fd669c1",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 110,
+          "denominator_sum": 96794.0,
+          "rssi_raw_min": 330.0,
+          "rssi_raw_max": 333.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 110,
+          "denominator_sum": 96794.0,
+          "rssi_raw_min": 330.0,
+          "rssi_raw_max": 333.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/26.5dB.csv",
+        "local_copy": "raw/MCS11/26.5dB.csv",
+        "sha256": "7df11ab666a4a2f4bb0499038c3fb9426000adafd9b2e17ce411b4249a5185c1",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 107,
+          "denominator_sum": 94116.0,
+          "rssi_raw_min": 325.0,
+          "rssi_raw_max": 329.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 107,
+          "denominator_sum": 94116.0,
+          "rssi_raw_min": 325.0,
+          "rssi_raw_max": 329.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/27.0dB.csv",
+        "local_copy": "raw/MCS11/27.0dB.csv",
+        "sha256": "76f3e4f3eaa49b3c4ca7ca8ebba13a681f439e792aa80e2e0196ca9e514acdee",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 92,
+          "denominator_sum": 80852.0,
+          "rssi_raw_min": 320.0,
+          "rssi_raw_max": 323.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 92,
+          "denominator_sum": 80852.0,
+          "rssi_raw_min": 320.0,
+          "rssi_raw_max": 323.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/27.5dB.csv",
+        "local_copy": "raw/MCS11/27.5dB.csv",
+        "sha256": "8db58a68f9f57b951d003705aeea7a922fe2490e3a61f1aeaacc15bdc537dc6a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 124,
+          "denominator_sum": 109190.0,
+          "rssi_raw_min": 315.0,
+          "rssi_raw_max": 318.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 124,
+          "denominator_sum": 109190.0,
+          "rssi_raw_min": 315.0,
+          "rssi_raw_max": 318.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/28.0dB.csv",
+        "local_copy": "raw/MCS11/28.0dB.csv",
+        "sha256": "8f614b331f9f6a955c916160f87952ea1085374bc8f16660ef2341303a3825ca",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 103,
+          "denominator_sum": 90553.0,
+          "rssi_raw_min": 309.0,
+          "rssi_raw_max": 313.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 103,
+          "denominator_sum": 90553.0,
+          "rssi_raw_min": 309.0,
+          "rssi_raw_max": 313.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/28.5dB.csv",
+        "local_copy": "raw/MCS11/28.5dB.csv",
+        "sha256": "9664605412eb359b8f17264205e9219270d0be3183892bbfaa17ddcd5c497232",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 108,
+          "denominator_sum": 94923.0,
+          "rssi_raw_min": 303.0,
+          "rssi_raw_max": 307.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 108,
+          "denominator_sum": 94923.0,
+          "rssi_raw_min": 303.0,
+          "rssi_raw_max": 307.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/29.0dB.csv",
+        "local_copy": "raw/MCS11/29.0dB.csv",
+        "sha256": "440c4f1ebc1f6ad731cbdec10851dfbf8e8d94b26bcdb6798f211069f64e5d24",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 103,
+          "denominator_sum": 90572.0,
+          "rssi_raw_min": 299.0,
+          "rssi_raw_max": 302.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 103,
+          "denominator_sum": 90572.0,
+          "rssi_raw_min": 299.0,
+          "rssi_raw_max": 302.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/29.5dB.csv",
+        "local_copy": "raw/MCS11/29.5dB.csv",
+        "sha256": "dea0f76dfea7f4e3d70e950b17814700cebc7ddc619d3020b19b6181f381e665",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 147,
+          "denominator_sum": 129622.0,
+          "rssi_raw_min": 290.0,
+          "rssi_raw_max": 296.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 147,
+          "denominator_sum": 129622.0,
+          "rssi_raw_min": 290.0,
+          "rssi_raw_max": 296.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/30.0dB.csv",
+        "local_copy": "raw/MCS11/30.0dB.csv",
+        "sha256": "fed5dd31b61b7f60f21246c08798d6ab061cf5e45002e041f679db7db8c5ab24",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 99,
+          "denominator_sum": 87020.0,
+          "rssi_raw_min": 285.0,
+          "rssi_raw_max": 289.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 99,
+          "denominator_sum": 87020.0,
+          "rssi_raw_min": 285.0,
+          "rssi_raw_max": 289.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/30.5dB.csv",
+        "local_copy": "raw/MCS11/30.5dB.csv",
+        "sha256": "1db73c888624d694ed0d64d747713cb2686fb1178e875affa73cf72feb68e640",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 91,
+          "denominator_sum": 79890.0,
+          "rssi_raw_min": 278.0,
+          "rssi_raw_max": 282.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 91,
+          "denominator_sum": 79890.0,
+          "rssi_raw_min": 278.0,
+          "rssi_raw_max": 282.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/31.0dB.csv",
+        "local_copy": "raw/MCS11/31.0dB.csv",
+        "sha256": "17f1c9d90935b9c9b384968a4319b99a0149900ec39b05d099a324b1a69c18b5",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 88,
+          "denominator_sum": 77261.0,
+          "rssi_raw_min": 271.0,
+          "rssi_raw_max": 275.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 88,
+          "denominator_sum": 77261.0,
+          "rssi_raw_min": 271.0,
+          "rssi_raw_max": 275.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/31.5dB.csv",
+        "local_copy": "raw/MCS11/31.5dB.csv",
+        "sha256": "bf9dce5fed30e8803e81f5c0da3f6092e9e7693d385fcc88a33260995ea97348",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 103,
+          "denominator_sum": 90561.0,
+          "rssi_raw_min": 266.0,
+          "rssi_raw_max": 269.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 103,
+          "denominator_sum": 90561.0,
+          "rssi_raw_min": 266.0,
+          "rssi_raw_max": 269.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/32.0dB.csv",
+        "local_copy": "raw/MCS11/32.0dB.csv",
+        "sha256": "220dfd5246c6c8216065e193376204a52a53fcff3aa3186fe20943cfcce3066d",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 96,
+          "denominator_sum": 84370.0,
+          "rssi_raw_min": 261.0,
+          "rssi_raw_max": 264.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 96,
+          "denominator_sum": 84370.0,
+          "rssi_raw_min": 261.0,
+          "rssi_raw_max": 264.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/32.5dB.csv",
+        "local_copy": "raw/MCS11/32.5dB.csv",
+        "sha256": "2da8289ca84bf0bd7259d12a8c6dacfbf2c88d9decd65a4c511665932638f29e",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 138,
+          "denominator_sum": 121698.0,
+          "rssi_raw_min": 260.0,
+          "rssi_raw_max": 263.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 138,
+          "denominator_sum": 121698.0,
+          "rssi_raw_min": 260.0,
+          "rssi_raw_max": 263.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/33.0dB.csv",
+        "local_copy": "raw/MCS11/33.0dB.csv",
+        "sha256": "b14ab9eb93104a7d35cdfe03a4a7dff7d3e8ca052dce5ef795ff0602c8497cdd",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 84,
+          "denominator_sum": 73691.0,
+          "rssi_raw_min": 256.0,
+          "rssi_raw_max": 260.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 84,
+          "denominator_sum": 73691.0,
+          "rssi_raw_min": 256.0,
+          "rssi_raw_max": 260.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/33.5dB.csv",
+        "local_copy": "raw/MCS11/33.5dB.csv",
+        "sha256": "e8d327ef6ece9dbde6b48a02181a9933925403156756bdc6aaf731c95d4a242e",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 106,
+          "denominator_sum": 93260.0,
+          "rssi_raw_min": 252.0,
+          "rssi_raw_max": 255.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 106,
+          "denominator_sum": 93260.0,
+          "rssi_raw_min": 252.0,
+          "rssi_raw_max": 255.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/34.0dB.csv",
+        "local_copy": "raw/MCS11/34.0dB.csv",
+        "sha256": "0b01704736aa871c91a33e4878cef8de874294f1d8867618792cd6a4cf2ab352",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 91,
+          "denominator_sum": 79968.0,
+          "rssi_raw_min": 247.0,
+          "rssi_raw_max": 252.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 91,
+          "denominator_sum": 79968.0,
+          "rssi_raw_min": 247.0,
+          "rssi_raw_max": 252.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/34.5dB.csv",
+        "local_copy": "raw/MCS11/34.5dB.csv",
+        "sha256": "6d978d2908732a103e9ee58502d082d1b8ea86c27def0ec5d64bed20c4f07ae0",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 93,
+          "denominator_sum": 81719.0,
+          "rssi_raw_min": 244.0,
+          "rssi_raw_max": 247.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 93,
+          "denominator_sum": 81719.0,
+          "rssi_raw_min": 244.0,
+          "rssi_raw_max": 247.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/35.0dB.csv",
+        "local_copy": "raw/MCS11/35.0dB.csv",
+        "sha256": "55cbf41485b65e8460face41789832ccd84ba65c4585035adc7c28a10bda9a2a",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 94,
+          "denominator_sum": 82592.0,
+          "rssi_raw_min": 239.0,
+          "rssi_raw_max": 243.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 94,
+          "denominator_sum": 82592.0,
+          "rssi_raw_min": 239.0,
+          "rssi_raw_max": 243.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/35.5dB.csv",
+        "local_copy": "raw/MCS11/35.5dB.csv",
+        "sha256": "90abac84d36b4e05df70f44edf918b6bfdb0299b829ffb9c78e7f129c217c9b9",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 105,
+          "denominator_sum": 92350.0,
+          "rssi_raw_min": 234.0,
+          "rssi_raw_max": 237.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 105,
+          "denominator_sum": 92350.0,
+          "rssi_raw_min": 234.0,
+          "rssi_raw_max": 237.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/36.0dB.csv",
+        "local_copy": "raw/MCS11/36.0dB.csv",
+        "sha256": "db10e7e2bfff9d02a95eb13210fd3e64f0399bf3ad6e3df6caffa85636a49561",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 94,
+          "denominator_sum": 82611.0,
+          "rssi_raw_min": 229.0,
+          "rssi_raw_max": 233.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 94,
+          "denominator_sum": 82611.0,
+          "rssi_raw_min": 229.0,
+          "rssi_raw_max": 233.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/36.5dB.csv",
+        "local_copy": "raw/MCS11/36.5dB.csv",
+        "sha256": "cdf7a813590b37e64c71116c0c03dd47fa722d19a1fd3e0cb17fadb15da5fec4",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 94,
+          "denominator_sum": 82582.0,
+          "rssi_raw_min": 224.0,
+          "rssi_raw_max": 228.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 94,
+          "denominator_sum": 82582.0,
+          "rssi_raw_min": 224.0,
+          "rssi_raw_max": 228.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/37.0dB.csv",
+        "local_copy": "raw/MCS11/37.0dB.csv",
+        "sha256": "d3839a3b79b1fb554a83f7bf7ff83846a5bbf20e02c524aba1568e39fdc46c90",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 102,
+          "denominator_sum": 89706.0,
+          "rssi_raw_min": 220.0,
+          "rssi_raw_max": 223.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 102,
+          "denominator_sum": 89706.0,
+          "rssi_raw_min": 220.0,
+          "rssi_raw_max": 223.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/38.0dB.csv",
+        "local_copy": "raw/MCS11/38.0dB.csv",
+        "sha256": "8c46b734967ba6b38638ecef1be71a37c1491dba0ac719a71958d9a131440aa9",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 100,
+          "denominator_sum": 87837.0,
+          "rssi_raw_min": 209.0,
+          "rssi_raw_max": 212.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 100,
+          "denominator_sum": 87837.0,
+          "rssi_raw_min": 209.0,
+          "rssi_raw_max": 212.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/39.0dB.csv",
+        "local_copy": "raw/MCS11/39.0dB.csv",
+        "sha256": "7fd94eac5a6d6e68aa326dd882ce3d8b2cfea8b319e02e603acf885ae4426e51",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 101,
+          "denominator_sum": 88856.0,
+          "rssi_raw_min": 196.0,
+          "rssi_raw_max": 201.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 101,
+          "denominator_sum": 88856.0,
+          "rssi_raw_min": 196.0,
+          "rssi_raw_max": 201.0
+        }
+      },
+      {
+        "source": "/home/rosgazebo/Downloads/TJX_attenuator-20261029T092900Z-1-001/TJX_attenuator/MCS11/40.0dB.csv",
+        "local_copy": "raw/MCS11/40.0dB.csv",
+        "sha256": "4ff8c7a7a1057695253e894d2481d7de57baf6dc5869ff4bacf54fb134e88492",
+        "ber_aggregation": {
+          "method": "detected_packet_weighted_ber",
+          "used_rows": 97,
+          "denominator_sum": 85225.0,
+          "rssi_raw_min": 182.0,
+          "rssi_raw_max": 186.0
+        },
+        "per_aggregation": {
+          "method": "detected_packet_weighted_per_approximation",
+          "used_rows": 97,
+          "denominator_sum": 85225.0,
+          "rssi_raw_min": 182.0,
+          "rssi_raw_max": 186.0
+        }
+      }
+    ]
+  },
+  "ideal_linear_provenance": {
+    "calibration_status": "ideal_linear_assumption_relative_power_only",
+    "simulator_schema_compatible": false,
+    "user_instruction": "AMAM/AMPMをモデル化せず理想変換とし、歪みが疑われる部分を除外する",
+    "cutoff_attenuation_db": 27.5,
+    "cutoff_is_provisional": true,
+    "high_power_extrapolation": "MCS11のみ、減衰27.5 dB以下はBER/PER=0という仮定",
+    "other_mcs": "保持。歪みの根拠が明確でない微小誤りを一律に削除しない",
+    "distortion_free_remaining_region_is_verified": false,
+    "curves": [
+      {
+        "metric": "per",
+        "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_remeasured_20261029/per_relative.csv",
+        "source_sha256": "f286b9a6ed83ce658292cedd91475dbf397aa1f4e80eda28efdb2b00884282c4",
+        "excluded_measurement_points": 16,
+        "retained_measurement_points": 68,
+        "synthetic_anchor": {
+          "direction": "Q_A_TO_B",
+          "frame": "DATA",
+          "mcs": "11",
+          "relative_power_db": -27.5,
+          "ber": "",
+          "per": "0",
+          "reference_bytes": 100000
+        },
+        "anchor_is_measured": false
+      },
+      {
+        "metric": "ber",
+        "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_remeasured_20261029/ber_relative.csv",
+        "source_sha256": "48e5710bcc95550c3a5bde35a8e0a3098a0604e91505d4c4ec1c38b5c7de85a8",
+        "excluded_measurement_points": 16,
+        "retained_measurement_points": 68,
+        "synthetic_anchor": {
+          "direction": "Q_A_TO_B",
+          "frame": "DATA",
+          "mcs": "11",
+          "relative_power_db": -27.5,
+          "ber": "0",
+          "per": "",
+          "reference_bytes": 100000
+        },
+        "anchor_is_measured": false
+      }
+    ]
+  },
+  "assumptions": {
+    "absolute_power_reference_dbm_at_zero_attenuation": -12.2,
+    "power_alignment": "MCS3の最初の全行PER1点56.3 dBを旧基準-68.5 dBmへ置く仮定。絶対感度の実測ではない。",
+    "opposite_direction": "下りQの曲線を未測定の上りPにも適用。P/Qの計算受信電力はそれぞれの既存RF設定を維持。",
+    "control_mcs": "ユーザー指定によりBeacon/Request/Response/ACK/DATA_ACK/DisassociateはMCS3。測定MCS3の受信曲線を参照。",
+    "frame_lengths": "100000 bytesから既存independent式でDATA2048 bytesおよび短い制御フレームへ補正。長さ別実測校正ではない。",
+    "zero_success_observations": "測定PER1は長さ補正しても1。未観測の成功確率は推定しない。",
+    "temporal_correlation": "なし。フレームごとの独立抽選。",
+    "distortion": "ideal_linear派生曲線を使用。MCS11の20〜27.5 dB実測を除外し27.5 dBに仮定のゼロ点。",
+    "per_aggregation": "packet_lost不明のため検出数重み付き近似PER。",
+    "protocol": "③と共通MAC。既存制御フレーム時間はTJX BPSK形式へ校正済みではない。",
+    "timeout": "接続待ち500 ms、接続後ATP10000 ms。実機現在値の読出確認は未実施。",
+    "data_direction": "既存シナリオを維持しP=B→A。測定方向Qとは異なり代理曲線を使用。",
+    "throughput": "既存MCStable.csvを維持。実測PER曲線に合わせてMCS選択閾値を再最適化していない。",
+    "data_mcs0": "MCStableの0.5 Gbps DATA用だけ、未測定MCS0の曲線をMCS3で代用。繰り返し利得は付加しない。"
+  },
+  "row_origins": [
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -72.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-60.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -72.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-60.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -69.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-57.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -69.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-57.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -68.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-56.3",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -68.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-56.3",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -67.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-55.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -67.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-55.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -66.0,
+      "source_mcs": "3",
+      "source_relative_power_db": "-53.8",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -66.0,
+      "source_mcs": "3",
+      "source_relative_power_db": "-53.8",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -64.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-52.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -64.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-52.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -63.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-51.3",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -63.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-51.3",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -62.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -62.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -61.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -61.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -60.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -60.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -59.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -59.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -58.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -58.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "3",
+      "rssi_dbm": -57.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "0",
+      "rssi_dbm": -57.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -67.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-55.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -64.7,
+      "source_mcs": "6",
+      "source_relative_power_db": "-52.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -63.5,
+      "source_mcs": "6",
+      "source_relative_power_db": "-51.3",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -62.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -61.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -60.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -59.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -58.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "6",
+      "rssi_dbm": -57.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -62.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -61.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -60.8,
+      "source_mcs": "8",
+      "source_relative_power_db": "-48.6",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -60.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -59.7,
+      "source_mcs": "8",
+      "source_relative_power_db": "-47.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -59.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -58.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "8",
+      "rssi_dbm": -57.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -57.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -56.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-44.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -55.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-43.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -54.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-42.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -54.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-42.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -53.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-41.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -53.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-41.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -52.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-40.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -52.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-40.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -51.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-39.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -51.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-39.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -50.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-38.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -50.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-38.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -49.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-37.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -48.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-36.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "9",
+      "rssi_dbm": -47.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-35.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -52.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-40.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -51.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-39.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -50.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-38.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -49.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-37.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -48.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-36.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -48.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-36.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -47.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-35.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -47.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-35.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -46.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-34.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -46.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-34.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -45.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-33.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -45.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-33.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -44.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-32.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -44.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-32.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -43.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-31.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -43.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-31.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -42.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-30.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -42.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-30.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -41.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-29.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -41.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-29.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -40.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-28.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -40.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-28.0",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "Q_A_TO_B",
+      "mcs": "11",
+      "rssi_dbm": -39.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-27.5",
+      "opposite_direction_proxy": false,
+      "mcs0_proxy": false,
+      "synthetic_zero": true,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -72.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-60.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -72.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-60.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -69.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-57.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -69.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-57.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -68.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-56.3",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -68.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-56.3",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -67.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-55.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -67.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-55.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -66.0,
+      "source_mcs": "3",
+      "source_relative_power_db": "-53.8",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -66.0,
+      "source_mcs": "3",
+      "source_relative_power_db": "-53.8",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -64.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-52.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -64.7,
+      "source_mcs": "3",
+      "source_relative_power_db": "-52.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -63.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-51.3",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -63.5,
+      "source_mcs": "3",
+      "source_relative_power_db": "-51.3",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -62.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -62.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -61.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -61.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -60.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -60.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -59.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -59.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -58.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -58.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "3",
+      "rssi_dbm": -57.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "0",
+      "rssi_dbm": -57.2,
+      "source_mcs": "3",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": true,
+      "synthetic_zero": false,
+      "frame": "DATA"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -67.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-55.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -64.7,
+      "source_mcs": "6",
+      "source_relative_power_db": "-52.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -63.5,
+      "source_mcs": "6",
+      "source_relative_power_db": "-51.3",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -62.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -61.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -60.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -59.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -58.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "6",
+      "rssi_dbm": -57.2,
+      "source_mcs": "6",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -62.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-50.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -61.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-49.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -60.8,
+      "source_mcs": "8",
+      "source_relative_power_db": "-48.6",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -60.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-48.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -59.7,
+      "source_mcs": "8",
+      "source_relative_power_db": "-47.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -59.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-47.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -58.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-46.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "8",
+      "rssi_dbm": -57.2,
+      "source_mcs": "8",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -57.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-45.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -56.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-44.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -55.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-43.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -54.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-42.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -54.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-42.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -53.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-41.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -53.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-41.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -52.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-40.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -52.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-40.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -51.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-39.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -51.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-39.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -50.7,
+      "source_mcs": "9",
+      "source_relative_power_db": "-38.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -50.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-38.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -49.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-37.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -48.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-36.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "9",
+      "rssi_dbm": -47.2,
+      "source_mcs": "9",
+      "source_relative_power_db": "-35.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -52.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-40.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -51.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-39.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -50.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-38.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -49.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-37.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -48.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-36.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -48.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-36.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -47.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-35.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -47.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-35.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -46.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-34.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -46.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-34.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -45.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-33.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -45.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-33.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -44.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-32.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -44.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-32.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -43.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-31.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -43.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-31.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -42.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-30.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -42.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-30.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -41.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-29.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -41.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-29.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -40.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-28.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -40.2,
+      "source_mcs": "11",
+      "source_relative_power_db": "-28.0",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": false,
+      "frame": "ALL"
+    },
+    {
+      "direction": "P_B_TO_A",
+      "mcs": "11",
+      "rssi_dbm": -39.7,
+      "source_mcs": "11",
+      "source_relative_power_db": "-27.5",
+      "opposite_direction_proxy": true,
+      "mcs0_proxy": false,
+      "synthetic_zero": true,
+      "frame": "ALL"
+    }
+  ]
+}

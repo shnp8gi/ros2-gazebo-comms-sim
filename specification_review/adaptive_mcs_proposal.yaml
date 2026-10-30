@@ -1,3 +1,4 @@
+# Superseded design decisions: ieee_2023_fidelity_profile.json (THz aggregation prohibited; custom ACK feedback rejected).
 profile_id: adaptive_mcs_design_v0
 status: proposal_only_not_loaded
 user_confirmed_adaptive_modulation: true
@@ -9,10 +10,10 @@ reference_plane_candidates:
 - tjx_input
 data_direction: A_TO_B
 symbol_rate_hz: 1760000000
-symbol_rate_status: lab_assumption_for_3d
+symbol_rate_status: confirmed_Table14_8_for_2_16GHz
 pilot_enabled: false
 standard_conformance: false
-ldpc_matrices_available: false
+ldpc_matrices_available: true
 profiles:
 - lab_profile_id: AB0
   rssi_lower_dbm: -68.5
@@ -25,8 +26,9 @@ profiles:
   code_rate: 11/15
   nominal_information_rate_gbps: 1.2906666666666666
   table_to_nominal_ratio: 0.38739669421487605
-  standard_mcs_id: null
-  assignment_status: 独自仮対応・実機との対応未確認
+  standard_mcs_id: 0
+  assignment_status: 変調/FEC/MCS番号は本文確認。RSSI表との対応は仮定
+  standard_reference: S10 Table14-5 and Table14-11
 - lab_profile_id: AB1
   rssi_lower_dbm: -65.5
   rssi_upper_dbm: -62.5
@@ -38,8 +40,9 @@ profiles:
   code_rate: 14/15
   nominal_information_rate_gbps: 1.6426666666666667
   table_to_nominal_ratio: 0.6696428571428572
-  standard_mcs_id: null
-  assignment_status: 独自仮対応・実機との対応未確認
+  standard_mcs_id: 1
+  assignment_status: 変調/FEC/MCS番号は本文確認。RSSI表との対応は仮定
+  standard_reference: S10 Table14-5 and Table14-11
 - lab_profile_id: AB2
   rssi_lower_dbm: -62.5
   rssi_upper_dbm: -58.5
@@ -51,8 +54,9 @@ profiles:
   code_rate: 11/15
   nominal_information_rate_gbps: 2.5813333333333333
   table_to_nominal_ratio: 0.8329028925619835
-  standard_mcs_id: null
-  assignment_status: 独自仮対応・実機との対応未確認
+  standard_mcs_id: 2
+  assignment_status: 変調/FEC/MCS番号は本文確認。RSSI表との対応は仮定
+  standard_reference: S10 Table14-5 and Table14-11
 - lab_profile_id: AB3
   rssi_lower_dbm: -58.5
   rssi_upper_dbm: -54.0
@@ -64,8 +68,9 @@ profiles:
   code_rate: 14/15
   nominal_information_rate_gbps: 3.2853333333333334
   table_to_nominal_ratio: 0.8218344155844156
-  standard_mcs_id: null
-  assignment_status: 独自仮対応・実機との対応未確認
+  standard_mcs_id: 3
+  assignment_status: 変調/FEC/MCS番号は本文確認。RSSI表との対応は仮定
+  standard_reference: S10 Table14-5 and Table14-11
 - lab_profile_id: AB4
   rssi_lower_dbm: -54.0
   rssi_upper_dbm: -50.5
@@ -77,8 +82,9 @@ profiles:
   code_rate: 11/15
   nominal_information_rate_gbps: 5.1626666666666665
   table_to_nominal_ratio: 0.8910123966942148
-  standard_mcs_id: null
-  assignment_status: 独自仮対応・実機との対応未確認
+  standard_mcs_id: 8
+  assignment_status: 変調/FEC/MCS番号は本文確認。RSSI表との対応は仮定
+  standard_reference: S10 Table14-5 and Table14-11
 - lab_profile_id: AB5
   rssi_lower_dbm: -50.5
   rssi_upper_dbm: null
@@ -90,8 +96,9 @@ profiles:
   code_rate: 14/15
   nominal_information_rate_gbps: 6.570666666666667
   table_to_nominal_ratio: 0.9131493506493507
-  standard_mcs_id: null
-  assignment_status: 独自仮対応・実機との対応未確認
+  standard_mcs_id: 9
+  assignment_status: 変調/FEC/MCS番号は本文確認。RSSI表との対応は仮定
+  standard_reference: S10 Table14-5 and Table14-11
 below_minimum: no_supported_data_profile
 control_ab:
   modulation: BPSK
@@ -128,3 +135,6 @@ validation:
   noise_variance_from_esn0_not_information_rate: true
   missing_ldpc_matrix_action: reject_coded_simulation
   do_not_apply_table_as_second_rate_limit: true
+verified_standard_edition: IEEE_802.15.3_2023
+ldpc_status: definitions_extracted_structure_verified_not_runtime_implemented
+review_document: ieee_2023_review_ja.txt

@@ -1,0 +1,3 @@
+direction,frame,mcs,frame_bytes,attenuation_db,reference_attenuation_db,reference_rssi_dbm,statistics_csv,aggregation,ber_stage,notes
+P_B_TO_A,,,,,,,,averaged,unknown,
+Q_A_TO_B,,,,,,,,averaged,unknown,

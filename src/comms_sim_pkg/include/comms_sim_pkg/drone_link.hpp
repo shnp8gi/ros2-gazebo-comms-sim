@@ -13,6 +13,7 @@
 #include "comms_sim_pkg/comms_calculator.hpp"
 #include "comms_sim_pkg/awgn.hpp"
 #include "comms_sim_pkg/lab_phy.hpp"
+#include "comms_sim_pkg/hrcp_pairnet.hpp"
 
 namespace comms_sim {
 
@@ -48,6 +49,7 @@ PowerBudget calculate_power_budget(const RadioConfig &radio, double path_loss_db
 struct ProtocolConfig {
   AwgnConfig awgn;
   LabPhyConfig lab_phy;
+  HrcpConfig hrcp;
   double beacon_interval_s = 0.000140;
   double control_frame_s = 0.000020;
   double ifs_s = 0.000010;
@@ -56,8 +58,12 @@ struct ProtocolConfig {
   double ack_timeout_s = 0.5;
   double inactivity_timeout_s = 0.5;
   double channel_sample_s = 0.0001;
+  bool data_from_prc = false;  // true: B(PRC)→A(PRDEV)。未指定の旧設定は従来方向を維持。
 };
 struct ScenarioConfig {
+  bool preview_mode=false;
+  bool monitor_only=false;
+  bool allow_pre_encounter_end=false;  // 初回確立までの再生記録用。既定では従来の終了条件を維持。
   std::string scenario = "parallel", antenna_mode = "fixed";
   DroneConfig a, b{50.0, 30.0, -45.0};
   RadioConfig ab, ba{60e9, 0.4, -68.5};
@@ -85,6 +91,7 @@ struct LinkSample {
   double off_axis_a_deg = 0, off_axis_b_deg = 0;
   PowerBudget budget_ab{}, budget_ba{};
   bool snr_ab_ok = true, snr_ba_ok = true;
+  double rate_ba_gbps = 0;
 };
 class RadioModel {
  public:
@@ -113,6 +120,9 @@ struct LinkEvent {
   double sync_metric = 0;
   unsigned wire_sequence = 0, wire_reference = 0;
   uint64_t beacon_index = 0;  // 実験内で1始まり。応答・データも接続の起点を保持。
+  std::string empirical_curve="";
+  double lookup_rssi_dbm = std::numeric_limits<double>::quiet_NaN();
+  int mcs = -1;
 };
 struct LinkStats {
   double delivered_mb = 0, connected_s = 0;
@@ -129,9 +139,9 @@ class LinkProtocol {
   using Log = std::function<void(const LinkEvent &)>;
   LinkProtocol(ProtocolConfig config, Evaluate evaluate, Log log = {});
   void Advance(double time);
-  bool Connected() const { return connected_; }
-  const LinkStats &Stats() const { return stats_; }
-  const std::string &State() const { return state_; }
+  bool Connected() const { return hrcp_?hrcp_->Connected():connected_; }
+  const LinkStats &Stats() const { return hrcp_?hrcp_->Stats():stats_; }
+  const std::string &State() const { return hrcp_?hrcp_->State():state_; }
  private:
   enum class Action { Idle, Request, Response, Ack, Data, DataAck,
                       FrameEnd, ResponseTimeout, AckTimeout, InactivityDisconnect };
@@ -161,6 +171,7 @@ class LinkProtocol {
   void Wait(Action action, const std::string &state, double start, double duration);
   void Emit(const std::string &type, const std::string &detail = "");
   void Integrate(double until);
+  std::unique_ptr<HrcpPairnet> hrcp_;
   ProtocolConfig config_;
   AwgnSampler awgn_sampler_;
   Evaluate evaluate_;

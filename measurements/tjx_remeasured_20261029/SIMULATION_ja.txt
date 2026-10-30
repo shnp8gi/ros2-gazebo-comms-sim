@@ -1,0 +1,44 @@
+② 実測曲線＋仮定による通しシミュレーション
+
+設定:
+ src/comms_sim_pkg/config/drone_statistical_measured_provisional.yaml
+受信曲線:
+ src/comms_sim_pkg/config/receiver_curve_measured_provisional.csv
+曲線の出典・仮定:
+ 同CSV.provenance.json。実行時に結果のinputs/へコピーされる。
+
+実行（リポジトリルートから）:
+ python3 tools/run_statistical_model.py --config src/comms_sim_pkg/config/drone_statistical_measured_provisional.yaml --replay
+
+並行固定、各機1 m/s、50秒。強制減衰なし。
+③と共通のMAC処理を用い、受信だけ実測PER曲線からフレームごとに独立抽選する。
+時間相関なし。波形生成・復調なし。NF/SNRやExpected RSSIを判定へ重ねない。
+速度とMCS選択には既存MCStable.csvを使用。DATAはP=B→A、2048 bytes。
+接続待ち500 ms、接続後ATP10000 ms。測定から決めた値ではない。
+
+実測済み部分:
+ 下りQ、MCS3/6/8/9/11、100000 bytes、clear_writeの再測定84条件。
+ 理想変換用の派生表（MCS11の16点除外+1点の仮定ゼロ）から作成。
+ 元データは保持。旧接続誤りの測定は使用しない。
+
+通し運転を可能にする今回の仮定:
+ 1. 絶対電力: 減衰0 dB時を-12.2 dBmと仮置き。
+    MCS3で初めて全行PER1になる減衰56.3 dBを、従来基準-68.5 dBmへ対応付ける。
+    これは位置合わせの選択であり、実機の絶対感度の測定結果ではない。
+ 2. 上りP: 下りQの曲線を同じ受信入力電力に対する代理曲線として使用。
+    PとQの送信電力・アンテナ・伝搬・回路利得はそれぞれの既存設定を維持する。
+ 3. 制御フレーム: ユーザー指定によりBeacon/Request/Response/ACK/DATA_ACK/
+    DisassociateをMCS3に統一。測定MCS3の曲線を参照する。
+    未測定MCS0のMCS3曲線による代用は、MCStableの0.5 Gbps DATA用だけに残す。
+    MCS0の繰り返しによる追加利得は付けない。
+ 4. 長さ: PER(N)=1-(1-PER(100000))^(N/100000)で近似。
+    DATA2048 bytes、Beacon36、Request27、Response31、ACK等17などへ適用。
+    同期失敗やFECブロック誤り・バースト誤りを忠実に換算する式ではない。
+    測定PER1は短いフレームでも1となる。未観測の成功確率は新たに作らない。
+ 5. 実測PER合算: ロスト数がCSVにないため、検出数で重み付けした近似。
+ 6. 制御時間: 既存詳細MACの制御フレーム時間を維持。TJX BPSK時間へ校正済みではない。
+
+calibration_status=measured_with_assumptions。モニターにも同じ意味の表示を出す。
+この実行は仮定を含む実測曲線の適用確認であり、実機校正完了の宣言ではない。
+仮定はYAMLのmeasurement_assumptionsと受信CSVのprovenanceへ保存。
+物理パラメータ・MCSテーブルを、期待する接続結果に合わせて自動変更しない。

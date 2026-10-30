@@ -109,5 +109,18 @@
     "used_sections": "Fig.11、Table 3a（PDF p.11）",
     "retrieved_date": "2026-10-28",
     "normative_standard_text": false
+  },
+  {
+    "id": "S10",
+    "file": "/home/rosgazebo/Downloads/802153-2023.pdf",
+    "source_type": "ユーザー提供規格本文",
+    "title": "IEEE Std 802.15.3-2023",
+    "status": "user_supplied_local",
+    "bytes": 11315423,
+    "sha256": "10e332866392adb63ecc6c1854ff30b03a5c36bc0b2e888c4d7dcb5f1b0bd4c2",
+    "normative_standard_text": true,
+    "used_sections": "6.2/7.5/7.6.5/7.12.7/12.2.3.6.4/13.2/14.2",
+    "pages": 684,
+    "retrieved_date": "2026-10-28"
   }
 ]

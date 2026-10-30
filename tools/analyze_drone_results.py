@@ -22,6 +22,9 @@ def analyze(directory, plot=True):
     if not (directory / 'completed').is_file():
         raise ValueError('未完了の実験は集計できません')
     c = yaml.safe_load((directory / 'config.yaml').read_text())
+    if c.get('hrcp', {}).get('enabled', False):
+        from analyze_hrcp_results import analyze as analyze_hrcp
+        return analyze_hrcp(directory, c)
     conditions = {'scenario': c['scenario'], 'antenna_mode': c['antenna_mode'],
                   'speed_a_kmh': c['drone_a']['speed_kmh'], 'speed_b_kmh': c['drone_b']['speed_kmh'],
                   'altitude_a_m': c['drone_a']['altitude_m'], 'altitude_b_m': c['drone_b']['altitude_m'],

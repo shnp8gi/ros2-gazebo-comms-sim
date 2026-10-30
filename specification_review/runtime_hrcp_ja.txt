@@ -1,0 +1,339 @@
+HRCP実験実装 v1（2026-10-28）
+
+対象
+  ドローン2機、A→B:60.48GHz/-8dBm、B→A:271.08GHz/-1dBm。
+  両方向ともHRCP-SC（High-Rate Close Proximity Single Carrier:高速近接単一搬送波）形式。
+  AがPRDEV（Pairnet Device:端末）、BがPRC（Pairnet Coordinator:調整局）。
+  全規格適合・実機相互接続・3d物理層への適合を保証する実装ではない。
+  原本:/home/rosgazebo/Downloads/802153-2023.pdf。参照一覧:ieee_2023_reference_map.csv。
+
+起動設定
+  src/comms_sim_pkg/config/drone_hrcp_smoke.yaml:最接近を中心に2ms、Gazebo動作確認用。
+  src/comms_sim_pkg/config/drone_hrcp.yaml:従来の40秒軌道。今回は40秒評価を未実施。
+  hrcp.enabled:trueで新しい通信コアへ切替。既存の統計モデルとlab_phyは別設定で使用可能。
+  速度はA/B別に指定でき、初期値は各50km/h。高度20m/30m。
+  並行は横10m差・高度10m差、十字は高度10m差。固定アンテナは横向き仰角+45/-45度。
+  追従アンテナは相手へ瞬時に向く理想制御。機体空力・姿勢制御誤差は今回追加していない。
+
+規格を参照して実装した部分
+  §6.2:80bit MACヘッダー、PairnetID、SrcID/DestID、TX/ACK情報、10bit通番。
+  §6.3.1.2:Beaconの同期パラメータ、BSID/PRC Capabilityの情報要素。
+  §6.3.4/6.3.6:コマンド/データのサブヘッダー、長さ、本文検査符号。
+  §6.4.13～15/6.5.2.2～3:能力情報、Request、Response、確定ATP。
+  §7.5.1:アクセススロット選択、正常RequestでBeacon停止、Responseは次Beacon予定時刻以降。
+    AはResponse受信で接続済みとなる。BはResponseのACK又は正常DATA受信で接続済みとなる。
+    同じNext DEVIDのBeaconからRequest再送可能。開始後の異なるNext DEVIDは無視する。
+  §7.5.2:正常受信による維持タイマー更新、満了による切断、旧IDの送信へのDisassociation Request。
+  §7.6.5/7.12.7:正常ヘッダー内のACK処理、SIFS応答、RIFS回復、順序通番/重複排除。
+  §13.2.3～4:36bit PHYヘッダー、EH(8,4)、HCS0xA12B、スクランブラ、Golay系列、pilot。
+    長/短プリアンブル5120/3328chip、ヘッダー1216chip。本文の符号長から実送信時間を計算。
+    LDPC(1440,1056)/(1440,1344)、短縮符号化、MCS0～3(QPSK/16QAM)を実装。
+    LDPC行列はTable13-10/Eq13-1、Table12-17/Eq12-6。
+    数値のbit順は§4.1/6.1、HCS/FCSの例外は各条項に従う解釈。実機の既知bit列との照合は未実施。
+
+ユーザーが承認した研究例外
+  1. 方向ごとに異なる搬送周波数を使用する。
+  2. 271.08GHzでも3e側と同じHRCPフレームを使い、3dの別PHYフレームを作らない。
+  3. Beacon開始間隔を140usに固定する。HRCPの通常上限73.5usとの違いを残す。
+
+ユーザーが承認した暫定解釈
+  ・スロット長の1byte欄は0.1us単位。10.5usを105として格納する。
+  ・Expected RSSIはcode=30-RSSI[dBm]。1byteで扱える範囲は+30～-225dBm。
+    原文の+30～-226dBmという範囲表記との端点差は未解決。実験で使う値は範囲内。
+  ・サブヘッダーCRC8は初期値0、poly0x07、最後に反転、MSB first。
+  ・同じ段階の再送ではATPを延長しない。初回送信の完了時刻から500ms。
+    これらを「規格で一意に確認済み」とは扱わない。
+
+実装者の選択
+  ・4アクセススロット。各10.5us、SIFS（Short Interframe Space:短フレーム間隔）は2.5us。
+    4スロットは規格の推奨値であり必須値ではない。
+  ・Expected RSSIの基準距離はユーザーの委任により30mを選択。
+    Bの正面EIRPから基準距離のPLを引き、1dB単位で切り上げて広告。
+    Aは受信同期系列から推定した電力をアンテナ利得で補正して比較する。
+    これはRequest送信可否のMAC条件。PHYの受信成否を切る固定RSSI閾値ではない。
+  ・1フレーム1サブフレーム、DATA本文2048byte。複数フレーム集約・断片化は今回使用しない。
+  ・MCS（Modulation and Coding Scheme:変調・符号化方式）は送信側のACK観測で選ぶ。
+    初期MCS0、10回確認で1段上げ、未確認/回復で1段下げる。規格が指定する適応算法ではない。
+    既存MCStable.csvの6段階を4つのMCSへ無理に対応させていない。
+  ・LDPC復号は最大50反復、係数0.8のlayered normalized min-sum。
+  ・受信機は平坦チャネルの理想Nyquistパルスモデル。2sample/chip、整合フィルタ後の軟判定。
+    RRCの送信スペクトルマスク、搬送波周波数ずれ、位相雑音、マルチパス、Dopplerは未評価。
+  ・受信検出は128chip遅延自己相関と既知Golay相関、SFDを使用。
+    自己相関閾値0.20、Golay相関閾値0.30。2つのsample位相を探索する。
+    位相候補を整理するため最大2sampleの処理待ちがある。フレーム開始時刻は受信機へ渡さない。
+    CES/pilotは送信する。現在の平坦チャネル係数はSYNC系列から推定する。
+  ・RF損益、熱雑音、アンテナCSV、自由空間を基準とするPLの条件は従来のExcelモデルを引継ぐ。
+    AWGN以外の環境変動・実機雑音の校正は別途必要。
+
+受信判定とAWGN
+  AWGN（Additive White Gaussian Noise:加法性白色ガウス雑音）は複素I/Qに加える。
+  整合フィルタ出力でE[|n|^2]=1、I/Qはそれぞれ平均0・分散1/2。
+  シンボル平均電力1で、信号振幅=sqrt(SNR_linear * 雑音帯域幅 / 1.76e9)。
+  2sample/chipの送信パルスは各sampleを1/sqrt(2)倍。受信時に2sampleを合成する。
+  雑音乱数はseed・受信機・絶対sample番号から生成。計算の分割幅や再送で別系列に飛ばない。
+  無通信区間にも雑音を生成し、同期探索を続ける。送信中の端末は受信を中断する。
+  受信機には送信した正解bit列、フレーム境界、正しい長さ/MCSを渡さない。
+  同期→ヘッダーEH復号/HCS→受信ヘッダーの長さ/MCS→本文LDPC→MACのHCS/FCS・宛先を検査。
+  従来の-68.5dBm即失敗判定は新方式では使わない。
+  正常ヘッダー中のACK情報は本文が破損しても扱う。ただし破損本文を受領量やATP更新へ数えない。
+
+タイマーと時刻
+  3.52GHzの整数sample時計を使用。1sampleは約0.284ns。
+  Gazeboの100usステップ間も全通信sample・MACイベントを処理し、CPUの遅さは実時間の遅さになる。
+  B→A/A→Bそれぞれに伝搬時間を加え、sample境界へ切り上げる。
+  RIFS（Retransmission Interframe Space:再送フレーム間隔）は自己送信完了から計る。
+    A:19.05us=67056sample。B:8.01usを切上げ28196sample（約8.010227us）。
+  有効な宛先ヘッダーを検出したらRIFS再送を止め、受信終了と本文の検査を待つ。
+  ATP（Association Timeout Period:接続タイムアウト期間）:
+    Aの接続待ち:初回Request TX_END+要求ATP。再送で延長しない。
+    Bの確認待ち:初回Response TX_END+確定ATP。再送で延長しない。
+    Aの接続後:Responseを受理し、返すStk-ACKのTX_ENDから確定ATPを開始。
+    接続後の正常受信:その受信完了時刻+確定ATPへ更新。正常header-only ACKも含む。
+  要求ATPとBの設定上限が異なる場合は小さい値をResponseで確定し、Aも受信した確定値を使う。
+  既定は両方500ms。requested_atp_msを省略するとatp_msと同じ値。
+  timeoutsは接続前の端点ATP満了、disconnectionsは両機接続後の切断。
+  再送、ヘッダーだけの応答、接続後の切断をsetup timeoutへまとめない。
+
+ログと集計
+  events.csv:送受信・再送・端点ATP・接続イベント。
+  frames.csv:観測器が送信波形と受信結果を対応させた全完了フレーム。
+    MCS、符号化後bit数、sample数、伝搬、成功/失敗、同期相関を記録。
+    波形未検出もNO_SYNC_OR_HEADERとして残す。相手MACへこの失敗情報を直接通知しない。
+  Beacon番号は観測用uint64。Beacon/Requestへの独自識別子追加はしていない。
+    AのRequestには選んだBeaconの観測番号を記録する。BのMACに番号を既知として渡さない。
+  total_data_MB: BがFCS正常で受けた一意のアプリ本文。重複再送は加算しない。
+  acked_data_frames: AがACKを確認したデータ数。末尾でACKがまだなら受領数と1件違う場合がある。
+  last_setup_ms:初回Request送信開始から、Bも接続を確認するまで。
+  connections.csvには起点Beaconからの時間も別列にする。
+  margin/ab_reachable/ba_reachableは旧RSSI閾値との比較列で、新受信判定ではない。
+  BER/PER等で直接推定していない欄はnan。失敗確率を捏造して埋めない。
+
+検査範囲
+  既存4試験に加えLDPC/codec/連続modem/Pairnetの4試験を追加。
+  独立GF(2)実装のparity fixture、短縮、訂正、HCS/FCS、QPSKの理論BERを照合。
+  無雑音寄りの受信、雑音だけの100万chip、Request再送、Response/RIFS回復、DATA誤り回復。
+  chunk分割不変、ATP整数境界、再送時の非延長、接続後切断の分類、確定ATPの使用、旧IDの切断通知。
+  FSMの満了検査はATPを試験内だけ1msへ短縮。500msは既定値と整数期限の単体検査で確認。
+  Gazeboでは各2msの4条件のみ動作確認。500ms遮断、40秒すれ違い、複数seed統計は未実施。
+  連続sampleを省略しないため40秒×4条件は重い。短時間の起動確認から全走行性能を推定しない。
+  実機の既知bit列との相互検証、RFスペクトル/同期性能の規格試験は未実施。
+
+再実行（sudo不要。リポジトリのルートで実行）
+  sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp -e DISPLAY= sim bash -c "source /opt/ros/humble/setup.bash && source install/drone/setup.bash && python3 tools/run_drone_scenarios.py --config src/comms_sim_pkg/config/drone_hrcp_smoke.yaml"'
+  出力先は毎回新規生成する。40秒設定を使う場合はconfig名をdrone_hrcp.yamlへ変更する。
+  最新の動作確認結果: ../sim_results/hrcp_gazebo_20261028_v3/（4条件各2ms）。
+
+追記: 規格再照合と4系統モニター（2026-10-28）
+  §7.6.5(PDF287)・§7.12.7.2(PDF321)に接続後の非同期回復はheader-onlyと明記。
+  以前のDATA本文付きRIFS再送経路は誤りだったため修正。相手headerを確認してSIFSでDATAへ戻る。
+  Association Response再送は§7.5.1の別の手続きとして維持。
+  追加試験: A側RIFS回復が本文なし9104sampleであること、モニターON/OFFの受領量・誤り数一致。
+  初期v3結果は修正前のコード。新しいモニター実行hrcp_monitor_20261028_v1は修正後。
+  暫定項目の再照合はstandard_fields_recheck_20261028_ja.txtとstandard_timing_recheck_20261028_ja.txt。
+
+ライブ表示:
+  python3 tools/run_hrcp_monitor.py
+  または --scenario parallel --antenna-mode fixed 等で条件を指定。
+  専用設定drone_hrcp_monitor.yamlは十字・追従、10ms実行、最接近5ms。
+  A送信/A受信/B送信/B受信を同じシミュレーション時計で表示する。
+  電力推移:100ns平均、最新204.8us。I/Q:最新1024sample(約291ns)をそのまま表示。
+  受信停止区間を灰色で表示。受信入力の表示と、受信機が処理可能かどうかを区別する。
+  縦軸は正規化値。TXは送信波形の基準、RXは雑音電力1の基準であり、dBmとして比較しない。
+  最新snapshotを約200msの壁時計間隔でatomic更新。全波形を40秒保存する機能ではない。
+  表示一時停止は計算を止めず、通信処理に表示用の間引きを適用しない。
+  実行後も画面は最終snapshotを残す。UI（User Interface:操作画面）のウィンドウを閉じて終了。
+
+再照合での説明訂正:
+  CRC8は初期値だけでなく、augmentation（D*x^8）と出力の採り方も未解決。
+  現行の帰還計算は図6-73の配線と対応するが、本文の剰余表現と最終出力の照合が必要。
+  既知bit列と未照合であり、現在のCRC8を規格確定値として扱わない。
+  RequestのATPをTX_ENDから始める厳密な起点も実装上の解釈。
+  Response/Stk-ACKの送信後起算、通常回復のRIFS起点と、すべて一意に決まると混同しない。
+
+最新確認（2026-10-28 17時台）:
+  sim_results/hrcp_monitor_20261028_172055_af2561: 十字追従10ms完走、1.525760MB、接続1回。
+  全8テスト成功、Gazebo位置整合検査成功。
+  モニター上部に探索／Response待ち／ACK待ち／接続成立とA/B各状態を表示。
+  最終TX/RXは履歴であり、現在処理中のフレームではない。細かな同期・復号処理段階は未表示。
+  終了後は終了時点の状態を表示し、最後のA送信／B送信のI/Q区間も選択可能。
+  履歴波形の末尾時刻と状態の計算時刻は分けて表示する。
+  正規化は内部の信号・雑音比を表すスケール変更。絶対電力を比較できる表示ではない。
+  電力表示の受信基準は雑音平均1、送信基準とは別。dBm値はtimeseries.csvを参照。
+
+RSSI数値表示（2026-10-28）:
+  モニター上部にA受信(B→A)とB受信(A→B)の最新RSSI[dBm]を表示。
+  データは既存LinkSample.rssi_ba/rssi_abで、受信回路の利得・損失を含む受信機入力点。
+  電力計算の信号電力であり、波形からの推定RSSIや雑音込み瞬時電力ではない。
+  無送信・受信処理停止中も、その配置で送信した場合の予測電力として表示。
+  チャネル再計算時刻を併記し、過去I/Q選択中もRSSIは最新値を表示する。
+  旧snapshotには値を後付けせず「未収録」を表示。
+
+RSSIスクロール表示と実受信失敗の表示（2026-10-28、上記の波形UI記述を更新）:
+  通常画面からI/Q・正規化電力波形を外し、A/Bの受信RSSI[dBm]を同一時間軸へ表示。
+  直近5ms/10ms/100ms/1秒を選択。チャネル計算ごとのRSSI履歴を最大10000点保持。
+  波形による受信処理自体は継続しており、GUI変更による判定閾値の導入はない。
+  推測の99%受信境界の校正・表示は、実際の失敗を表示するというユーザー変更により実施しない。
+  完了フレームの受信失敗区間（到着から終了）を帯、終了時刻を×で表示。
+  赤: PRDEV→PRC、紫: PRC→PRDEV。逆方向も同じように記録し、片側だけと決めつけない。
+  波形同期できなかった場合も送信ログ照合の観測器でNO_SYNC_OR_HEADERとして記録。
+  MACへ観測器の失敗情報を渡さない。表示更新は壁時計約200ms、時刻は整数sampleから換算。
+  受信失敗はフレーム末尾＋4sample時点で確定して観測記録へ追加。
+  黄◆: Beaconは復号できたがExpected RSSIで要求送信を拒否された時点。受信失敗とは別分類。
+  最新完了フレームの成功/失敗/未判定と、その時刻を方向別に常時表示。
+  成功後も失敗履歴を最大10000件保持。無印の区間は成功保証ではなく、未送信・未判定も含む。
+  Expected RSSIは最後のBeacon受信時の判定。現在の全フレームへの固定閾値ではない。
+  半二重重複の理由は受信失敗フレームに送受信重複があったことを表し、唯一の原因とは断定しない。
+
+リンク確立前の片方向不充足に限定（2026-10-28、直前の実受信失敗表示の対象を修正）:
+  ユーザーが確認したいのは接続前の方向非対称。接続後DATA/DATA_ACKはGUI判定とハイライトから除外。
+  生のframes.csvや通信統計のデータ受信誤りは削除せず保持し、リンク確立の不成立とは分ける。
+  Beacon/Request/Response/接続確認ACKの送信開始時に未接続なら、確立用フレームとして観測。
+  Beaconは復号に加えて期待RSSI条件の結果を当該方向の観測結果へ反映。
+  各方向は未判定0/充足確認1/不充足確認-1。最新の確立用フレーム結果を次の結果まで保持。
+  未接続で一方1・他方-1の期間だけ背景を色付け。一方未判定の場合は片方向不充足と断定しない。
+  この期間は電波が連続して通らない物理区間ではなく、観測結果を保持した期間。
+  接続確立で期間を終了し、ATP満了/切断で観測状態を未判定へ戻す。
+  GUIの初期表示は「リンク確立区間」。確立後もその区間を残し、緑破線で確立時刻を示す。
+  直近5ms/10ms/100ms/1秒へ切り替えてRSSIを流すことも可能。
+  検証: Requestのみ失敗→再送成功の片方向区間と接続による終了、接続後DATA障害の除外。
+
+軽量化・俯瞰表示（2026-10-28、検証途中）:
+  旧sweep_sim.pyの並列化は複数実験単位。HRCP内は単一スレッドだった。
+  monitor_waveforms=falseを既定化し、表示しないI/Q収集を停止。
+  イベント期限を追跡して、イベントのないサンプルでEvents全走査を省略。無信号時も受信機への雑音入力は省略していない。
+  noise_threadsで絶対sample・受信機IDを鍵にした雑音生成だけをOpenMPで並列化。受信機とMACは時刻順に処理。
+  4スレッド/1スレッド・イベント毎sample/期限駆動のイベント時刻と同期指標を照合する試験を追加。全8試験成功。
+  同じ10ms並行追従:旧37.425秒→4スレッド32.107秒（約14%短縮）。
+  sim_results/hrcp_monitor_20261028_180945_a386f7のframes/events/summary/timeseries CSVは旧実行とbyte単位で完全一致。
+  RSSIと俯瞰の2画面。俯瞰は通信時刻と設定軌道から計算し、並行・十字の実Gazebo座標ログと一致を確認。
+  凡例はドラッグ移動、位置を再描画後も保持。俯瞰はホイール拡大縮小・ツールバー移動、全体表示ボタンで復帰。
+  詳細な説明は「詳細」で開く。通常画面は時刻・状態・RSSI・グラフに簡略化。
+  全40秒の設定drone_hrcp_full_monitor.yamlを準備済みだが、まだ全区間実行を開始していない。
+  ユーザーは80%削減を希望。無信号区間の雑音誤検出を省く高速モードは未承認・未実装。
+
+性能測定の追記（2026-10-28）:
+  同一10ms並行追従、単発測定。全ケースでframes/events/summary/timeseriesが変更前とbyte単位一致。
+  変更前37.425秒、雑音並列GUIあり32.107秒、GUIなし31.758秒。描画の差は約1%。
+  最適化後1スレッド33.485秒、雑音＋LDPCブロック並列14.316秒、復号メモリ確保削減等13.537秒。
+  約64%削減。80%の目標は未達。全8テスト成功。詳細: sim_results/hrcp_performance_20261028.json。
+  全40秒の固定並行runを開始: sim_results/hrcp_monitor_20261028_183050_f3371c。完走は未確認。
+  この全runは近似を入れず、無信号区間の雑音と同期探索も全サンプルで処理。
+  起動ログ: sim_results/full_fixed_parallel_20261028_183050.log。終了後は検証・集計してverification.jsonへ保存。
+  序盤の非接続区間の速度は近接時より速い。近接10msの単純換算を全runの確定所要時間としない。
+  状態の色帯は通常表示、確立用フレーム個々の失敗印は「詳細」で表示する。
+
+2026-10-28 全航程の簡易プレビュー（正式HRCPモデルとは別設定）
+  起動: python3 tools/run_hrcp_monitor.py --config src/comms_sim_pkg/config/drone_preview.yaml
+  固定並行40秒・最接近20秒。速度50km/h、高度差10m、横差10m。
+  Gazeboステップ10ms、ログ10ms、目標実時間倍率1。通信イベントはその内部で時刻順に処理し、10msに丸めない。
+  RF・熱雑音電力・アンテナ・幾何計算を維持。受信判定は既存の統計QPSK/AWGN（符号化なし）に置換。
+  波形同期・LDPC・期待RSSI許可条件は評価しない。固定RSSIゲートは-999dBmで実質無効。
+  簡易MACはBeacon140us、制御20us、IFS10us、DATA100us、待ち時間500ms。正式HRCPのフレーム長・再送手順とは異なる。
+  GUI・config.yaml・verification.jsonで簡易プレビューと識別。通信量・接続時刻・XOR区間を正式評価に使わない。
+  XORは両方向に観測結果があり、一方成功・逆方向失敗のときだけ失敗方向のRSSI線と送信側航跡を強調。
+  両方向失敗・未判定・接続後のDATA失敗はXOR対象外。状態保持は次の観測または接続/リセットまで。
+
+2026-10-28 PRC/PRDEVとRF方向の修正（先行記録より優先）
+  A=PRDEV（データ受信側）、B=PRC（データ送信側）。機体座標・高度・向きは変更しない。
+  BA/P: PRC→PRDEV、272GHz帯、-1dBm、両アンテナ24dBi、A受信LNA25dB、変換+3dB、損失3dB、NF10dB。
+  AB/Q: PRDEV→PRC、61GHz帯、-8dBm、両アンテナ23dBi、送信損失3dB、受信LNAなし、受信損失3dB、NF0dB。
+  出典はExcel「リンク_4m_1」のB11/B16/B23/B25/B27/B29/B31およびW11/W12/W16/W23/W25。
+  23dBiはアンテナ利得、LNAは25dB。HRCPの使用中心周波数271.08/60.48GHzは従来選定を維持。
+  Beacon/Response/DATAはB→A、Request/Command ACKはA→B。DATA ACKは受信機Aから返信。
+  RIFSの本文なし回復フレーム（ログ名DATA_ACK）は送信機Bからも送出する。
+  protocol.data_from_prc:trueでデータ主方向を明示。旧設定・旧lab_phy設定は従来方向を維持し、過去結果を書換えない。
+  既定drone_params、HRCP全4設定、previewを修正。Expected RSSIは修正後のBA送信条件で再計算。
+  表示RSSIは信号電力の計算値であり、受信波形からのRSSI推定値ではない。
+  詳細モデルはベースバンドへAWGNを加算。プレビューは統計的受信判定のみで、雑音波形を生成しない。
+
+2026-10-28 受信波形RSSI・4状態と接続段階の時間表示（旧RSSI説明より優先）
+  詳細HRCPのGUI/JSONのRSSIは、実受信I/Q（signal+AWGN）の位相0整合フィルタ出力を積算する。
+  z=(r[n]+r[n-1])/sqrt(2)、雑音の正規化平均電力=1。位相0の非重複pairを全点使用する。
+  W校正係数=10^((受信回路出力雑音dBm-30)/10) * 1.76e9/設定雑音帯域Hz。
+  RSSI=10log10(mean(|z|^2 * 校正係数))+30。dBmを直接平均せず、Wで平均する。
+  平均窓は既定1us=3520samples=1760chips。monitor_rssi_window_sで変更できる。
+  現PHYの矩形整合フィルタ等価雑音帯域1.76GHzでの値。実機のRSSI回路仕様・帯域との一致は未検証。
+  平均には受信可能な全chipを使用。自機送信中のpairは分母からも除外し、窓内0点ならnull/測定なし。
+  相手の無送信中は実雑音を積算。送信区間の占有率や雑音により値が変動する。受信成功時だけのRSSIではない。
+  モニター観測だけの変更であり、MACの許可条件・受信復号にはこの表示RSSIを流用しない。
+  live_signals.json: rssi_source=rx_iq_matched_filter、窓開始/終了・有効chip数を記録。
+  predicted_signal_a/b_dbmは旧電力予測を分離した参照値。既存CSVのRSSI列は予測値のまま互換維持。
+  実波形RSSIはlive_signals_rssi.csvへ保存。monitor_rssi_interval_sは保存/表示の間引きで平均窓ではない。
+  簡易プレビュー・旧ログの予測電力はRSSIとして表示しない。新previewはrssi_source=unavailable。
+  主図: 4判定（P0Q0/P0Q1/P1Q0/P1Q1）に未判定と実リンク確立を別枠で追加。
+  P=B(PRC)→A(PRDEV)、Q=A→B。1は直近の復号・期待RSSI等の条件OK、0は条件未達。
+  ●は観測状態の更新/リセット時刻、線は次の更新までの状態保持。独立方向の現在の確率を測定した図ではない。
+  下段はBeacon探索→Request準備/送信→Response待ち→ACK確認→DATAの実行履歴。
+  stage_historyは通信処理から出力。リンク確立はANDだけで判定せず、両端の接続状態に基づく別の縦線。
+  俯瞰図も表示範囲の時刻に合わせる。RSSIは詳細ボタンで補助表示。
+  検証: hrcp_monitor_20261028_192730_5fdb42、固定並行10ms、1.372160MB、全10000窓整合。
+  9 CTest成功（校正/雑音のみ/欠測/窓連続性/モニターON-OFFで通信結果不変を含む）。
+
+
+無AWGNと大学サーバー並列実行（2026-10-28）
+ drone-fspl-parallel-20261028（detached、24CPU/48GB上限、SSH/VPN切断後も継続）
+  本結果: /home/yagi/drone-fspl-20261028-2038/sim_results/fspl_campaign_parallel_20261028
+  --jobs 9 --decode-threads 1。最初の4シナリオを同時、その後2～10m/sの9条件を同時。計13条件。
+  両機1m/sの4条件（並行/十字×固定/追従）、各50m、50s、最接近25s。
+  速度スイープは固定並行・各50m、期間50/v秒。1m/sは最初の結果を再利用。
+  無AWGN、FSPL指数2、アンテナ/受信回路あり、詳細波形/LDPC/CRC/接続手順を維持。簡易版ではない。
+  記録はconfig.yaml/live_signals.json/monitor_replay.jsonl/completedと一覧index.jsonのみ。
+  サーバー9CTest成功。詳細10msは1.521664MB、接続1、再生/巻き戻し/未来値除外を検証。
+  1/3/6復号スレッド同時ベンチ23.55/30.37/23.67秒。通信量・setup/stage/RSSI時刻列・最終statusは一致。
+  途中statusは実時間UI更新のため記録密度が異なる（PHYタイミング差ではない）。
+  並列ランナーの全13条件×2ms統合テスト成功。値の計算やシミュレーション刻みは変更していない。
+  原稿コード: tools/run_monitor_campaign.py（並列化、条件別GZ_PARTITION、停止処理、失敗時記録を追加）。
+  旧逐次コンテナdrone-fspl-campaign-20261028-2038は並列化のため停止。旧fspl_campaignの途中データは保持。
+  半日で完了を約束していない。実測から数日規模の可能性があり、進捗から再評価する。
+  状態確認: ssh nitech-sv12 'docker logs --tail 30 drone-fspl-parallel-20261028'
+  結果取得: rsync -az nitech-sv12:/home/yagi/drone-fspl-20261028-2038/sim_results/fspl_campaign_parallel_20261028/ sim_results/sv12_fspl_campaign_20261028/
+  再生: python3 tools/monitor_hrcp_signals.py sim_results/sv12_fspl_campaign_20261028/parallel_fixed_1mps/live_signals.json --replay --window full
+  サーバー再起動/プロセス障害から計算途中を再開する機能はない。停止中の結果を完走扱いしない。
+
+
+2026-10-29 Expected RSSIによる接続要求制限を無効化（今回の実機条件）
+  ユーザー指示：実機ではExpected RSSI判定を実装していないため、今回も使わない。
+  drone_hrcp*.yamlのhrcp.expected_rssi_admission_enabledをfalseへ変更。
+  正常に復号・CRC検査されたBeaconと既存の宛先/ID条件からRequest送信へ進む。
+  無効時は受信アンテナ利得によるExpected RSSI補正計算も実施しない。
+  Beacon形式は維持し、未使用のExpected RSSIフィールドには-225 dBmを格納する。
+  判定そのものを迂回するため、低い閾値で擬似的に無効化しているわけではない。
+  PHY同期・復号・CRC、Request再送、Response/ACK、ATPは維持する。
+  固定受信感度ゲートの追加、AWGN条件の変更は行わない。
+  無効時はPの接続前判定にExpected RSSIを含めず、Beaconの受信成否を使用する。
+  JSONと再生記録のadmission.enabled=falseで識別する。ユーザー指示により無効時のExpected RSSI項目はモニターに表示しない（詳細を開いても非表示）。
+  launchはstandard_exceptionsへexpected_RSSI_admission_disabled_to_match_deviceを記録する。
+  この省略は実機に合わせた研究条件であり、規格完全準拠とは扱わない。
+  従来の設定・記録との互換性のため、キー省略時とHrcpConfigの既定値はtrue。
+  sv12の稼働中キャンペーンと旧結果は変更していない。旧結果の再生にも遡及適用しない。
+  Expected RSSIを外しても、無AWGNで弱い信号を復号できる問題は解消しない。
+
+  検証結果：分離ビルドbuild/no_expected_rssiでCTest9件成功。Gazebo詳細PHY2ms完走、
+  新旧ログ再生互換性、Expected RSSI項目の非表示を確認。
+  検証結果ディレクトリ：sim_results/parallel_fixed_diagnosis_20261029/no_expected_rssi_smoke
+  簡易プレビューは別のPHY/MACを使うため、詳細HRCPシステムの正常性検証の根拠にはしない。
+
+2026-10-29 ATP500ms通し試験と雑音参照面の未確定事項
+  hrcp_protocol_checkは同じdrone_link_coreを使い、既知の減衰を挿入する通信本体の結合試験。
+  受信失敗は強制boolではなく、100dB減衰後のI/QとAWGNを本体PHYへ入力して生じさせる。
+  ATPは500ms、Expected RSSI無効、Request再送・接続・配送・両端ATP満了を確認。
+  結果: sim_results/hrcp_protocol_check_500ms_20261029/verification.yaml。
+  自然条件のGazebo10ms: sim_results/natural_parallel_10ms_20261029。149usで接続。
+  自然条件の観測要求はリンク確立完了まで。再生だけ--stop-at-connectionで区切る。
+  前者は既知障害の結合試験、後者は最接近付近の短区間。全航路の成立範囲は検証していない。
+  元ExcelのB35はB30-(B9+B31+B33)。コードはNF10dBをアンテナ端換算と解釈し、
+  雑音も受信回路利得25dBで増幅しているため、P側SNRはExcelの比較式より25dB低い。
+  NF10dBの参照面を確認中。実機の正しいSNRと断定しない。
+
+最新（2026-10-29、受信電力閾値モデルへ切替。この記述を優先）:
+  ユーザー指示で詳細PHY/NFの検討は保留。受信回路出力 >= -68.5dBmで受信、未満で未受信。
+  速度は既存MCStable.csv。DATA方向B→Aのフレーム内最低MCS速度を使いACK確認分だけ加算。
+  新設定: src/comms_sim_pkg/config/drone_threshold_parallel_1mps.yaml
+  並行固定・各機1m/s・50秒、強制減衰なし。既存簡易MAC/500ms待ちを使用。
+  AWGN=false, required_snr=null, Expected RSSI=false。詳細PHYと同等とは主張しない。
+  結果: sim_results/threshold_parallel_1mps_20261029。起動込み15.66秒で完走。
+  P1/Q0=22.114310102秒、リンク確立24.114690190秒、切断26.592546641秒。
+  DATA方向MCSは転送中6Gbps、ACK確認14118フレーム、1058.85MB。全50秒平均169.416Mbps。
+  verification.yamlとmcs_throughput.csvに検証・集計。replay.shで2倍速、詳細電力グラフ付き再生。
+  CTest9/9とGazebo結果検証成功。モニターは閾値モードの計算電力を波形RSSIと区別して表示。
+  NFの参照面は未確定だが今回の判定には不使用。旧詳細結果・設定は保持。

@@ -1,0 +1,280 @@
+{
+  "profile_id": "ieee2023_fidelity_design_v4_hrcp_frame_beacon140",
+  "status": "implemented_experimental_hrcp_mode",
+  "standard_conformance_claim": false,
+  "source": "references/manifest.json#S10",
+  "reference_map": "ieee_2023_reference_map.csv",
+  "user_decisions": {
+    "beacon_period": "fixed_140_us_user_override",
+    "fixed_rssi_receive_gate": false,
+    "half_duplex": true,
+    "disconnect_is_setup_timeout": false,
+    "recommended_atp_ms": 500,
+    "requested_atp_ms": 500,
+    "effective_atp": "from_Association_Response",
+    "independent_fixed_response_ack_wait_gate": false,
+    "waiting_beacon_policy": "same_PRC_pairnet_next_devid_allows_access_slot_request_retry; different_next_devid_ignored_after_start",
+    "preserve_directional_frequency_bands": true,
+    "terahertz_phy_frame_substitution": "use_same_HRCP_SC_frame_as_reverse_direction",
+    "association_retry_timer": "500_ms_from_first_TX_END_in_each_stage_not_extended_by_retry"
+  },
+  "roles": {
+    "A": "PRDEV; TX HRCP-SC-format waveform at terahertz carrier; RX HRCP-SC at millimeter-wave carrier",
+    "B": "PRC; TX HRCP-SC at millimeter-wave carrier; RX HRCP-SC-format waveform at terahertz carrier"
+  },
+  "experimental_rf": {
+    "AB_frequency_hz": 271080000000,
+    "BA_frequency_hz": 60480000000,
+    "AB_tx_dbm": -1,
+    "BA_tx_dbm": -8,
+    "noise_temperature_k": 300,
+    "noise_bandwidth_hz": 2164800000,
+    "AB_noise_figure_db": 10,
+    "BA_noise_figure_db": 0,
+    "AB_channel_id": 9,
+    "BA_channel_id": 2,
+    "channel_bandwidth_hz": 2160000000,
+    "channel_source": "Table14-1; Table13-1",
+    "previous_frequency_hz": {
+      "AB": 272000000000,
+      "BA": 61000000000
+    },
+    "frequency_selection": "nearest_defined_center_for_existing_2_16GHz_channel_width",
+    "channel_ids_scope": "RF frequency plan reference only; THz channel 9 is not an HRCP channel or on-air HRCP identifier"
+  },
+  "timing": {
+    "chip_rate_hz": 1760000000,
+    "initial_samples_per_chip": 2,
+    "integer_timebase_hz": 3520000000,
+    "sifs_before_association_us": 2.5,
+    "local_min_sifs_us": {
+      "A": 2.5,
+      "B": 2.5
+    },
+    "long_rifs_enabled": false,
+    "regular_rifs_us_at_default_sifs": {
+      "B_PRC": 8.01,
+      "A_PRDEV": 19.05
+    },
+    "preferred_access_slots": 4,
+    "access_slots_status": "4_recommended_by_informative_note_4_7_9_2; not_mandatory; Table7_13_range_1_to_6",
+    "beacon_period_us": 140,
+    "period_rule": "fixed_140us_start_to_start; advertise_same_value; preserve_four_access_slots",
+    "strict_hrcp_reference_max_beacon_us": 8,
+    "strict_hrcp_reference_max_request_us": 8,
+    "strict_hrcp_reference_example_period_us": 53,
+    "hybrid_period_requires_resolved_thz_header": false,
+    "beacon_period_s": 0.00014,
+    "beacon_period_samples": 492800,
+    "beacon_period_status": "user_confirmed_fixed_value; existing_runtime_interval_already_matches",
+    "access_slot_duration_us": 10.5,
+    "unrounded_superframe_budget_us": 52.5,
+    "slot_table_reference": "Table7-13_HRCP_SC",
+    "max_frame_airtime_validation_required": true,
+    "max_airtime_validation_rule": "serialized_Beacon_and_Association_Request_each_must_fit_8_us; otherwise_reject_configuration",
+    "access_slots_reference": "4.7.9.2 NOTE and footnote15 (printed50/PDF51); Table7-13 (printed348/PDF349)",
+    "strict_superframe_bound_exception": "X03_FIXED_BEACON_140_US",
+    "remaining_budget_us_after_maximum_four_slot_window": 87.5,
+    "remaining_time_policy": "receive_or_idle; no_extra_access_slots",
+    "response_schedule": "at_next_140us_beacon_grid_point_or_later_after_valid_request",
+    "access_slot_wire_unit_us": 0.1,
+    "access_slot_wire_value": 105,
+    "access_slot_encoding_status": "user_approved_provisional_encoding_not_verified_normative",
+    "atp_start": "first_TX_END_in_each_stage",
+    "maintenance_refresh": "valid_MAC_frame_RX_END; header_only_ACK_valid; damaged_payload_does_not_refresh",
+    "rifs_actual_samples": {
+      "A": 67056,
+      "B": 28196
+    }
+  },
+  "phy": {
+    "AB": {
+      "family": "HRCP-SC",
+      "header_bits": 36,
+      "header_fields_bits": {
+        "mcs": 3,
+        "pw": 1,
+        "seed": 4,
+        "ppre": 2,
+        "length": 22,
+        "reserved": 4
+      },
+      "control_mcs": 0,
+      "payload_pilot_chips": 8,
+      "pilot_support_declared": true,
+      "aggregation_subframes": 1,
+      "candidate_data_mcs": [
+        0,
+        1,
+        2,
+        3
+      ],
+      "carrier_use": "terahertz_research_extension_not_standard_THz_SC",
+      "replacement_for": "THz-SC frame",
+      "frame_length_includes_fcs": true,
+      "frame_header_total_information_bits": 132,
+      "encoded_header_bits_before_stuff": 264,
+      "header_stuff_bits": 2,
+      "header_transmitted_chips": 1216
+    },
+    "BA": {
+      "family": "HRCP-SC",
+      "header_bits": 36,
+      "header_fields_bits": {
+        "mcs": 3,
+        "pw": 1,
+        "seed": 4,
+        "ppre": 2,
+        "length": 22,
+        "reserved": 4
+      },
+      "control_mcs": 0,
+      "payload_pilot_chips": 8,
+      "pilot_support_declared": true,
+      "aggregation_subframes": 1,
+      "carrier_use": "millimeter_wave",
+      "frame_length_includes_fcs": true,
+      "frame_header_total_information_bits": 132,
+      "encoded_header_bits_before_stuff": 264,
+      "header_stuff_bits": 2,
+      "header_transmitted_chips": 1216
+    },
+    "control_mcs_status": "implementation_selection_among_supported_MCS_not_mandated_here",
+    "ldpc_n": 1440,
+    "ldpc_k": [
+      1056,
+      1344
+    ],
+    "header_code": "EH(8,4)",
+    "header_hcs_poly": "0xA12B",
+    "block_chips": 64,
+    "psp_preamble_chips": 5120,
+    "pap_preamble_chips": 3328,
+    "mcs_table": "IEEE802.15.3-2023 Table13-6 for both directions",
+    "common_payload_pilot_support_chips": [
+      0,
+      8
+    ],
+    "selected_data_mcs": [
+      {
+        "id": 0,
+        "modulation": "pi/2 QPSK",
+        "ldpc_k": 1056,
+        "rate": "11/15"
+      },
+      {
+        "id": 1,
+        "modulation": "pi/2 QPSK",
+        "ldpc_k": 1344,
+        "rate": "14/15"
+      },
+      {
+        "id": 2,
+        "modulation": "16-QAM",
+        "ldpc_k": 1056,
+        "rate": "11/15"
+      },
+      {
+        "id": 3,
+        "modulation": "16-QAM",
+        "ldpc_k": 1344,
+        "rate": "14/15"
+      }
+    ],
+    "mandatory_zero_pilot_mode_must_be_implemented": true
+  },
+  "receiver": {
+    "mode": "continuous_complex_baseband_awgn",
+    "ground_truth_frame_window_allowed": false,
+    "ground_truth_bit_comparison_for_acceptance": false,
+    "ldpc_decoder": "layered_normalized_min_sum",
+    "decoder_status": "implementation_choice_not_normative",
+    "max_ldpc_iterations": 50,
+    "normalization_factor": 0.8,
+    "expected_rssi_admission": "separate_MAC_condition_not_PHY_gate",
+    "default_expected_rssi_dbm": -85,
+    "expected_rssi_status": "30m_default_under_user_delegation; wire_code_30_minus_dbm_user_approved_provisional",
+    "association_reference_distance_m": 30,
+    "expected_rssi_wire_encoding": {
+      "formula": "code = 30 - RSSI_dBm",
+      "implemented_range_dbm": [
+        -225,
+        30
+      ],
+      "standard_claim": false
+    },
+    "pulse_model": "ideal_rectangular_nyquist_2samples_per_chip; spectrum_mask_unverified",
+    "pending_external_validation": [
+      "wire_bit_order_interoperability",
+      "receiver_spectral_mask_and_RF_impairments",
+      "hardware_crc8_initial_state"
+    ]
+  },
+  "adaptation": {
+    "default_design": "sender_local_ACK_based",
+    "table_threshold_policy": "comparison_only_until_RSSI_plane_and_forward_feedback_defined",
+    "custom_bytes_in_ACK": false,
+    "reverse_RSSI_as_forward_RSSI": false,
+    "vendor_defined_rssi_feedback_enabled": false,
+    "former_thz_bpsk_profiles_active": false,
+    "mcstable_six_row_mapping_status": "not_determined; do_not_map_six_rows_to_four_HRCP_MCS_by_index",
+    "implemented_algorithm": "initial0; ten_confirmed_DATA_ACKs_step_up; unconfirmed_or_RIFS_step_down; range0_to3"
+  },
+  "implementation_blockers": [],
+  "implementation_order": [
+    "LDPC_and_bit_order_vectors",
+    "common_HRCP_serializer_and_receiver_for_both_directions",
+    "apply_directional_RF_budget_to_common_waveform",
+    "independent_endpoint_MAC_and_recovery",
+    "adaptation_and_event_validation",
+    "headless_Gazebo_four_conditions"
+  ],
+  "conformance_policy": {
+    "standard_wins_over_experimental_conflicts": true,
+    "allowed_exception_ids": [
+      "X01_DIRECTIONAL_FREQUENCY_SPLIT",
+      "X02_HRCP_PHY_FRAME_AT_TERAHERTZ",
+      "X03_FIXED_BEACON_140_US"
+    ],
+    "unsupported_normative_interpretation": "unresolved_not_silently_substituted",
+    "implementation_defined_choices_allowed": true,
+    "conflict_register": "ieee_2023_conflict_resolution.csv",
+    "claim_scope": "HRCP frame design used in both directions; no THz-SC PHY or complete_link_conformance_claim"
+  },
+  "runtime_changed": true,
+  "capability_exchange": {
+    "frame_capabilities": "HRCP_SC_in_both_directions",
+    "thz_specific_ies_in_substitute_profile": false,
+    "frequency_mapping": "preconfigured_experimental_frontends; do_not_encode_THz_channel_ID_as_HRCP_channel_ID"
+  },
+  "deferred_original_thz_issues": {
+    "U01_THZ_header_length": "bypassed_by_user_approved_substitution_not_resolved",
+    "U02_slot_table_scope": "substitute_profile_uses_Table7-13; original_Table7-14_ambiguity_not_resolved",
+    "U05_hybrid_capability_exchange": "different_PHY_capability_translation_not_used; direction_specific_RF_mapping_retained"
+  },
+  "runtime_config": "../src/comms_sim_pkg/config/drone_hrcp.yaml",
+  "runtime_smoke_config": "../src/comms_sim_pkg/config/drone_hrcp_smoke.yaml",
+  "runtime_notes": "runtime_hrcp_ja.txt",
+  "provisional_interpretations": {
+    "slot_encoding": "0.1us_per_unit_user_approved",
+    "expected_rssi_encoding": "30_minus_dbm_user_approved",
+    "subheader_crc8_initial_state": "zero_user_approved",
+    "atp_retry": "not_extended; initial_TX_END_of_each_stage; user_approved",
+    "subheader_crc8_augmentation_and_output": "current_D_x8_remainder_matches_feedback_update; wording_and_output_extraction_need_resolution",
+    "request_atp_start": "TX_END_selected; precise_Request_start_not_explicitly_confirmed"
+  },
+  "validation": {
+    "tests": "8_CTest_targets",
+    "gazebo_scope": "4_conditions_each_2ms_near_closest_approach",
+    "full_40s_run": false,
+    "500ms_gazebo_outage_test": false,
+    "monitor_gazebo_scope": "parallel_tracking_10ms_setup_only_highlights"
+  },
+  "implementation_corrections": {
+    "asynchronous_recovery_header_only": {
+      "reference": "7.6.5 PDF287; 7.12.7.2 PDF321",
+      "status": "fixed_and_regression_test_passed"
+    }
+  },
+  "latest_monitor_run": "../sim_results/hrcp_monitor_20261028_175739_41102a"
+}

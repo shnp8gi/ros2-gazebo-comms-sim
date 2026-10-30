@@ -1,0 +1,22 @@
+[
+  {
+    "n": 1440,
+    "k": 1056,
+    "rank": 384,
+    "systematic_parity_rank": 384,
+    "column_weight": 3,
+    "nonzero_entries": 4320,
+    "equation_crosscheck": true,
+    "status": "matrix_structure_only_not_decoder_validation"
+  },
+  {
+    "n": 1440,
+    "k": 1344,
+    "rank": 96,
+    "systematic_parity_rank": 96,
+    "column_weight": 3,
+    "nonzero_entries": 4320,
+    "equation_crosscheck": true,
+    "status": "matrix_structure_only_not_decoder_validation"
+  }
+]

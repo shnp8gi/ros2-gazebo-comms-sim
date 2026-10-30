@@ -57,22 +57,49 @@ def validate(directory):
         raise ValueError('時系列とサマリーの転送量が不一致')
     if any(float(b['total_data_MB']) < float(a['total_data_MB']) for a,b in zip(rows,rows[1:])):
         raise ValueError('累積転送量が減少しています')
-    events = list(csv.DictReader((directory / 'events.csv').open()))
-    connections = [e for e in events if e['event'] == 'CONNECTED']
-    if len(connections) != int(summary['connections']):
-        raise ValueError('接続回数が不一致')
+    events = csv.DictReader((directory / 'events.csv').open())
+    connections = 0
+    timeouts = 0
+    timeout_records = []
+    disconnections = 0
     expected_direction = {'BEACON':'B_TO_A','REQUEST':'A_TO_B','RESPONSE':'B_TO_A','ACK':'A_TO_B'}
+    expected_direction['DATA'] = 'B_TO_A' if c['protocol'].get('data_from_prc',False) else 'A_TO_B'
+    expected_direction['DATA_ACK'] = 'A_TO_B' if c['protocol'].get('data_from_prc',False) else 'B_TO_A'
+    hrcp = c.get('hrcp', {}).get('enabled', False)
     received = {}
+    hrcp_received = set()
     for e in events:
-        if e['frame'] in expected_direction and e['direction'] != expected_direction[e['frame']]:
+        connections += e['event'] == 'CONNECTED'
+        timeouts += e['event'] == 'TIMEOUT'
+        disconnections += e['event'] == 'DISCONNECTED'
+        if e['event']=='TIMEOUT':
+            timeout_records.append({key:e.get(key,'') for key in ['time_s','frame','direction','reason']})
+        # HRCPの本文なしDATA_ACKは、送信側のRIFS回復でも使用する。
+        if e['frame'] in expected_direction and not (hrcp and e['frame']=='DATA_ACK') and e['direction'] != expected_direction[e['frame']]:
             raise ValueError('制御フレームの帯域方向が不一致')
-        sequence = received.setdefault(e.get('beacon_index',''), [])
-        if e['event'] == 'RX_OK': sequence.append(e['frame'])
-        if e['event'] == 'CONNECTED' and sequence[-4:] != ['BEACON','REQUEST','RESPONSE','ACK']:
+        sequence = []
+        if not hrcp and e['event'] in ('RX_OK', 'CONNECTED'):
+            sequence = received.setdefault(e.get('beacon_index',''), [])
+            if e['event'] == 'RX_OK': sequence.append(e['frame'])
+        if hrcp and e['event'] == 'RX_OK': hrcp_received.add(e['frame'])
+        if hrcp and e['event'] == 'CONNECTED':
+            if not {'BEACON','REQUEST','RESPONSE'}.issubset(hrcp_received) or not ({'ACK','DATA'} & hrcp_received):
+                raise ValueError('HRCP接続手順が不一致')
+            hrcp_received.clear()
+        if not hrcp and e['event'] == 'CONNECTED' and sequence[-4:] != ['BEACON','REQUEST','RESPONSE','ACK']:
             raise ValueError('接続手順が不一致')
+    if connections != int(summary['connections']):
+        raise ValueError('接続回数が不一致')
+    if timeouts != int(summary['timeouts']) or disconnections != int(summary['disconnections']):
+        raise ValueError('Timeoutまたは切断のイベント数とサマリーが不一致')
     first = float(summary['first_connected_s'])
     if any(float(r['total_data_MB']) > 0 and (first < 0 or float(r['time_s']) <= first) for r in rows):
         raise ValueError('接続前に転送量が加算されています')
+    temp=directory/'.timeout_events_validator.tmp'
+    with temp.open('w',newline='') as stream:
+        writer=csv.DictWriter(stream,fieldnames=['time_s','frame','direction','reason'])
+        writer.writeheader();writer.writerows(timeout_records)
+    temp.replace(directory/'timeout_events.csv')
     print(f"検証成功: {directory.name}, {summary['total_data_MB']} MB, 位置誤差最大 {max_error:.3g} m", flush=True)
     return summary
 

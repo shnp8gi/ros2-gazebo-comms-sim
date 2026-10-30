@@ -1,0 +1,86 @@
+# 役割修正: A=PRDEV、B=PRC。BA=272GHz帯（A受信LNA25dB）、AB=61GHz帯。
+# ドローン2機の異帯域双方向リンク。周波数はHz、電力はmW、速度はkm/h。
+scenario: cross             # parallel / cross
+antenna_mode: tracking            # fixed / tracking。固定は横向き、十字はA左/B右で交差後の相手側
+drone_a:
+  speed_kmh: 50.0
+  altitude_m: 20.0
+  fixed_elevation_deg: 45.0
+drone_b:
+  speed_kmh: 50.0
+  altitude_m: 30.0
+  fixed_elevation_deg: -45.0
+lateral_separation_m: 10.0     # parallelのみ。crossは平面上で経路が交差。
+encounter_time_s: 0.005         # この時刻に両機が経路中央を通過する
+duration_s: 0.01
+radio_ab:
+  frequency_hz: 60.48e9
+  power_mw: 0.15848931924611134 # -8 dBm。Excel「リンク_4m_1」W11
+  sensitivity_dbm: -68.5
+  tx_antenna_gain_dbi: 23.0
+  rx_antenna_gain_dbi: 23.0
+  tx_insertion_loss_db: 3.0
+  rx_lna_gain_db: 0.0
+  rx_conversion_gain_db: 0.0
+  rx_insertion_loss_db: 3.0
+  noise_temperature_k: 300.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 0.0 # ユーザー指定：理想受信機。実測値が分かってから変更
+  required_snr_db: null
+radio_ba:
+  frequency_hz: 271.08e9
+  power_mw: 0.7943282347242815  # -1 dBm。Excel「リンク_4m_1」B11
+  sensitivity_dbm: -68.5
+  tx_antenna_gain_dbi: 24.0
+  rx_antenna_gain_dbi: 24.0
+  tx_insertion_loss_db: 0.0   # Excelの損失は負値、本設定では正値で指定
+  rx_lna_gain_db: 25.0
+  rx_conversion_gain_db: 3.0
+  rx_insertion_loss_db: 3.0
+  noise_temperature_k: 300.0
+  noise_bandwidth_hz: 2.1648e9 # 1.76 Gbaud × (1 + 0.23)。雑音等価帯域の近似
+  receiver_noise_figure_db: 10.0 # アンテナ端換算の受信系等価NFとして採用
+  required_snr_db: null      # 固定SNR閾値なし。HRCPは実際の波形復号で受信成否を判定
+propagation:
+  exponent: 2.0
+  # c=299792458 m/s。Excelの近似値3e8とはPLが約0.006 dB異なる。
+antenna:
+  e_plane: e_plane.csv
+  h_plane: h_plane.csv
+  max_attenuation_db: 30.0
+mcs_table: MCStable.csv         # 両帯域の実測値ではなく比較専用テーブル（新方式のMCS選択には使用しない）
+awgn:
+  enabled: true                # HRCPの連続I/Q受信とAWGNを有効化
+  seed: 20261027               # 再現用。別シードで独立の乱数系列を試せる
+  bit_rate_bps: 3.52e9         # 1.76 Gbaud × 2。旧統計モデル用。HRCPはMCS0〜3からレートを計算
+  control_frame_bytes: 64      # 旧統計PHY用。HRCPでは使用しない
+protocol:
+  data_from_prc: true         # B(PRC)→A(PRDEV)でデータ送信。逆方向は受領確認。
+  response_timeout_ms: 500.0
+  ack_timeout_ms: 500.0
+  inactivity_timeout_ms: 500.0
+  # hrcpではBeacon周期だけ整合性を検査。IFS/送信時間はHRCPから計算。
+  beacon_interval_ms: 0.14     # ユーザー指定：送信開始から次の送信開始まで140 µs
+  control_frame_us: 20.0  # 従来用。HRCPではsample数から算出
+  ifs_us: 10.0 # 旧モデル用。HRCPのSIFSは2.5us
+  data_frame_us: 100.0  # 従来用。HRCPではsample数から算出
+simulation:
+  physics_step_s: 0.0001
+  real_time_factor: 5.0
+  log_interval_s: 0.0001
+
+# IEEE由来のHRCPフィールドとLDPCを使う研究実装。完全規格適合ではない。
+lab_phy:
+  enabled: false
+hrcp:
+  enabled: true
+  data_bytes: 2048
+  atp_ms: 500
+  expected_rssi_admission_enabled: false # 実機に合わせ、正常なBeacon受信後にRequestを送信
+  association_reference_distance_m: 30.0 # Expected RSSI判定を有効にした場合だけ使用
+
+  monitor_enabled: true # ライブ表示用。通信処理は間引かない。
+  noise_threads: 4 # 雑音生成だけを並列化。通信状態遷移は時刻順に実行。
+  decode_threads: 4 # フレーム内の独立したLDPCブロックを並列復号。
+
+  monitor_rssi_window_s: 1.0e-6 # 波形RSSIの平均窓。通信計算の刻みとは別。

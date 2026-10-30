@@ -1,0 +1,196 @@
+② BER/PER確率モデルの使い方
+作成: 2026-10-29
+
+現在できること
+  ・受信電力→CSVのBER→PER、または受信電力→実測PERで、各フレームの成否を抽選する。
+  ・P(B→A)とQ(A→B)、制御フレームとDATA、MCSごとに異なる受信曲線を使える。
+  ・③のHrcpPairnetと同じ接続/再送/半二重/ATP/切断処理へ受信結果を渡す。
+  ・波形生成・連続sample処理・LDPC復号は実行しない。NF/SNRで二重判定しない。
+  ・DATAの速度は既存MCStable.csvを参照し、送信時間とデータ量へ反映する。
+  ・CSVとYAMLを変更した後、C++を再ビルドせず実行できる。
+
+動作確認用設定（実測未校正）
+  src/comms_sim_pkg/config/drone_statistical_parallel_1mps.yaml
+  src/comms_sim_pkg/config/receiver_curve_demo.csv
+  デモ曲線は人工データ。実機のBER/PER/NFを表していない。
+  デモCSVのper列も実測ではなく、ber列と2048bytesから算出した検証用の値。
+  calibration_status=synthetic_demoとして結果とモニターに明示する。
+
+実行（リポジトリのルートから）
+  python3 tools/run_statistical_model.py --replay
+  python3 tools/run_statistical_model.py --config src/comms_sim_pkg/config/drone_statistical_parallel_1mps.yaml --seed 12345
+  --output sim_results/任意の新規名 も指定できる。既存結果を上書きしない。
+  Dockerイメージros2-gazebo-comms-sim:humble-harmonicとinstall/no_expected_rssiを使用。
+  設定YAMLと参照CSVはリポジトリ内に置く。
+  出力先にreplay.shが作成され、bash 出力先/replay.shで2倍速再生できる。
+  直接起動する場合は、既存のros2 launch comms_sim_pkg sim_launch.pyも利用可能。
+
+実測データの入れ方A: 正規化した受信曲線を直接作る
+  CSV列:
+    direction,frame,mcs,rssi_dbm,ber,per,reference_bytes
+  direction: P_B_TO_A または Q_A_TO_B
+  frame: BEACON/REQUEST/RESPONSE/ACK/DATA/DATA_ACK/DISASSOCIATE
+         CONTROLはDATA以外に一致。ALLは全フレームに一致。
+  mcs: TJXのMCS番号。*は番号共通の曲線を明示する場合のみ使用。
+  rssi_dbm: シミュレーションと同じ受信回路出力（TJX入力相当）の信号電力。
+            TJXツールが出す0〜511のRSSIを入れない。
+  ber/per: 0〜1の確率。使用しない列は空欄でよい。百分率ではない。
+  reference_bytes: PER測定時のペイロード長。BERでは変換に使用しないが、記録は保持する。
+  各direction/frame/mcsの組について、異なる受信電力を2点以上用意する。
+  同一組の電力重複、長さ混在、NaN、範囲外の確率はエラーにする。
+  優先順位: 個別frame → CONTROL(DATA以外) → ALL。それぞれ個別mcs → *。
+  必要な曲線の不足は開始時に検出する。無関係な方向・MCSへ自動的に流用しない。
+
+  設定YAMLのempirical_phyを変更:
+    table: 自分の受信曲線.csv  # YAMLからの相対パス
+    metric: ber               # またはper
+    calibration_status: measured_unvalidated
+  実測条件とシミュレーションの対応を検証後、calibration_statusを変更して履歴を残す。
+
+実測データの入れ方B: TJXツールの7列CSVから変換する
+  ツールの元CSVは変更せず、条件ごとに保存する。
+  time,packet,bER,PER,SNR,RSSI,MCS
+  receiver_measurement_manifest_template.csvをコピーして条件表を記入する。
+  必須列:
+    direction,frame,mcs,frame_bytes,attenuation_db,reference_attenuation_db,
+    reference_rssi_dbm,statistics_csv,aggregation,ber_stage
+  ・statistics_csvは条件表からの相対パス。
+  ・aggregationはaveragedまたはclear_write。測定中は条件を固定する。
+  ・averagedは条件変更後にカウンタをクリアして測定し、最後の累積値を採用する。
+  ・clear_writeは全行を使用。一定パケット長のBERはpacket（検出数）で重み付けする。
+    PERはpacket_lost列があればpacket+packet_lostで重み付けする。
+    TJX標準7列CSVにはlost数がないため、既定ではPER合算を拒否する。
+    --allow-detect-weighted-perを明示すると検出数で重み付けした近似PERを保存する。
+    これは厳密な合算PERではなく、区間によりロスト割合が違うと偏る。
+    区間PERの単純平均は行わない。MCS変化、無効値、非増加時刻はエラーにする。
+  ・最後がNaNならエラー。過去の成功した値で置き換えない。
+  ・packet=0のBER/PER=1は、ツールの既定値の可能性があるので自動採用しない。
+  ・受信不能の条件は別途記録し、表の下限をその観測に合わせて設定する。
+  ・ber_stageはpost_fec、uncoded、unknownなどを記録する。
+  ・frame_bytesは実際に設定したPHY試験ペイロード長（デフォルト100000bytesに注意）。
+
+  python3 tools/prepare_receiver_curve.py measurements/runs.csv measurements/receiver_curve.csv --metric per
+  python3 tools/prepare_receiver_curve.py measurements/runs.csv measurements/receiver_curve.csv --metric ber
+  BERのFEC前後が未確定でも独立残留誤りとして近似する場合のみ --allow-unknown-ber を明示。
+  元CSVのMCSと条件表のMCSの一致を検査する。
+  出力受信曲線に加え、元ファイルのSHA256・条件・最終測定値を.provenance.jsonへ保存する。
+
+  受信電力の対応付け:
+    rssi_dbm = reference_rssi_dbm - (attenuation_db - reference_attenuation_db)
+  同じ経路・同じ利得で、外部減衰量だけを変える測定を想定する。
+  reference_rssi_dbmは、reference_attenuation_db時の、基準位置での受信信号電力。
+  値がまだ測れない場合、仮の値で比較を始めることは可能だが、仮定であることをnotesに残す。
+  絶対感度の校正済みとは扱わない。TJX内部PT_PWRATTの値をdBとして代用しない。
+
+  絶対電力未確定の測定を先に整理する場合:
+    --relative-powerを指定するとreference_rssi_dbmは空欄でよい。
+    出力列はrssi_dbmではなくrelative_power_db。基準減衰からの差を負号で表す。
+    この相対表はシミュレーターへ直接入力しない。基準電力が決まったら条件表に
+    記入し、--relative-powerなしで別名のCSVを再生成する。
+
+  2026-10-29再測定データ（こちらを使用）:
+    measurements/tjx_remeasured_20261029/manifest.csv
+    下り60.48 GHz = 現設定Q_A_TO_B、MCS 3/6/8/9/11、100 kB（100000 bytes）、clear_write。
+    84条件9495行。コネクター接続方法修正後。上り下りの同型機器を入れ替えたことも記録。
+    per_relative.csvは検出数による重み付き近似PER、
+    ber_relative.csvは検出数による重み付きBER（FEC前後未確定）。
+    今回はこの方向・5種類のMCS・長さの測定のみ。他方向、短い制御フレーム、2048 bytesのDATAへ
+    校正済み曲線として流用しない。絶対電力未確定のためデモ設定の差し替えは未実施。
+    旧measurements/tjx_downlink_mcs8_20261029は接続方法が誤っていたとのユーザー申告により
+    使用対象外。INVALIDATED_ja.txtとメタデータを確認する。新旧データを混ぜない。
+
+PERの長さとBERの前提
+  metric=ber:
+    PER = 1 - (1-BER)^(8*Nbytes)
+    正のBER点間は対数補間。ゼロを含む区間は線形補間。
+    独立な残留ビット誤りを仮定。FEC前のBERから実機の最終PERが一意に決まるわけではない。
+    headerを含むパケット全体の失敗を、この近似の成否にまとめている。
+  metric=per:
+    PER点間は線形補間。
+    per_length_policy=exact（既定）: 測定長と判定対象長の不一致をエラーにする。
+    per_length_policy=independent: 明示した場合だけ
+      PER(N) = 1 - (1-PER_ref)^(N/reference_bytes)
+    で近似する。同期失敗・FECブロック誤り・バースト誤りには一般には正確でない。
+    長さ・MCSをそろえた直接測定を優先する。
+
+  現在の判定対象長:
+    DATA: hrcp.data_bytes（既定2048bytes）
+    BEACON: 現MAC本文36bytes
+    REQUEST: 現MAC本文27bytes
+    RESPONSE: 現MAC本文31bytes
+    DISASSOCIATE: 現MAC本文13bytes
+    ACK/DATA_ACK: 本文なしのためheader相当17bytesを使用する近似
+  frame_bits列はこの判定対象bit数。符号化後bit数ではない。
+  制御曲線をまとめる場合はCONTROLを使えるが、実測PERで長さが異なる場合は上記の明示が必要。
+  DATA以外は全てcontrol_mcsを使って曲線を参照する。
+  現在の実測用設定drone_statistical_measured_provisional.yamlはユーザー指定でcontrol_mcs=3。
+  Beacon/Request/Response/ACK/DATA_ACK/DisassociateをMCS3に統一する。
+  DATAはMCStableによる選択を維持。未測定MCS0の代理曲線は0.5 Gbps DATA用のみ。
+  この設定は受信曲線とログのTJX MCS番号を指定する。制御フレームの送信時間は
+  既存の近似を維持しており、TJX BPSKのフレーム時間へ校正済みとは扱わない。
+  各制御フレームを別々に測れない場合、同じMCSの試験曲線を長さ補正して使う近似と明記する。
+
+測定範囲外の扱い
+  最も弱い測定点より下: 受信失敗（PER=1）。下限点ちょうどは測定値。
+  最も強い測定点より上: 最強点の値を保持。飽和による劣化はこのモデルでは表現しない。
+  生RSSIの0〜511→dBm変換を自動推測しない。
+
+チューニングする設定
+  empirical_phy.table / metric: 使用する曲線とBER/PER方式。
+  rssi_offset_ab_db: Q方向の曲線参照電力への加算値。
+  rssi_offset_ba_db: P方向の曲線参照電力への加算値。
+    正の補正は、通常の単調な曲線では受信しやすくする。RF電力やNF自体は変更しない。
+    この補正はPER参照だけに使い、MCStable.csvの速度選択には加算しない。
+  seed: 受信抽選専用。MACのアクセススロット等のseed（awgn.seed）とは別。
+  hrcp.setup_timeout_ms: 接続確立待ち。新設定では500ms。
+  hrcp.atp_ms: 接続後ATP。新設定では資料の既定値10000ms。実機MU_TJX_ATPに合わせる。
+  hrcp.data_bytes: データ長。
+  mcs_by_rate_gbps: MCStable.csvの速度と実測MCS番号の対応。
+  MCStable.csv: DATA方向の受信電力から選ぶ速度。
+    送信開始時に選択し、そのフレームのairtimeを本文bit数/選択速度で計算する。
+    preamble/header時間とIFS/ACK/再送待ちは別に加算する。
+    制御は既存の詳細プロトコルのタイミングを使用する。
+  radio_*の信号利得・送信電力・アンテナ条件: 実機構成が分かったものから更新する。
+  awgn.enabled=false、required_snr_db=null、Expected RSSI無効を維持する。
+    ②の判定へNF/SNRや別の波形誤り判定を重ねない。
+
+結果の確認
+  config.yaml / inputs / provenance.json:
+    実行時設定、受信曲線、MCS表、アンテナ表とハッシュを保存する。
+  frames.csv:
+    フレームごとのBER/PER、random_draw、mcs、empirical_curve、lookup_rssi_dbm。
+    random_draw >= PERで統計的に成功。半二重重複やDATA用MCSなしは別途失敗。
+    互換列rssi_at_end_dbmは、②では送信開始時の受信電力。config.yamlにも明記する。
+    processed_samplesは0（波形を計算していない）。
+  timeseries.csvのab_reachable/ba_reachableは旧閾値判定の参考列で、②の受信判定には使用しない。
+  events.csv: 接続/切断/再送などの共通MACイベント。
+  summary.csv: 配送量・接続・切断・タイムアウト。
+    詳細MACと共通で、total_data_MBは重複を除いた正常受信payload量。
+    acked_data_framesはACK確認数として別集計。①の旧簡易MACのACK後加算と混同しない。
+    awgn_trials/awgn_errorsは互換列名。②ではフレーム判定数/失敗数を意味する。
+  probability_bins.csv: 方向/フレーム/MCS/1dB帯ごとの実際の失敗率と平均モデルPER。
+  statistical_verification.yaml: 抽選との一致、波形未処理、seed、未校正表示の確認。
+  live_signals.json / monitor_replay.jsonl / replay.sh: モニター再生。
+    仮データの実行はタイトルに明示。受信電力は計算値として表示する。
+    全区間表示の密集した再送段階だけ描画解像度に合わせて間引く。ログは保持する。
+
+モデルの限界（③との差）
+  パケット全体を一つの成功/失敗にまとめる。成功時のheaderとbodyは実際の時刻順にMACへ渡す。
+  headerだけ成功/bodyだけ失敗するケース、同期誤検出、相関した連続誤り、CFO等は評価しない。
+  受信電力はフレーム送信開始時の値をフレーム内で保持する。
+  既存詳細MACと同じ処理を呼ぶが、これだけで実機のMACと完全一致したという意味ではない。
+  特に既存の制御フレーム時間・形式はTJXのBPSK仕様へ校正済みではない。
+  ②で実測へ合わせただけで③の波形が自動的に校正されるわけではない。
+  実測曲線・未使用の測定条件での検証は、測定データ取得後に行う。
+
+検証
+  CTest: 実測曲線補間、BER→PER、PER長さ補正、入力拒否、共通MAC接続・再送、
+         500ms ATP切断、接続待ち時間の分離、seedとAdvance分割の再現性。
+  python3 tools/test_prepare_receiver_curve.py
+  python3 tools/validate_drone_results.py 出力先
+  python3 tools/analyze_statistical_results.py 出力先
+
+初回ビルドが必要な場合（リポジトリのルートから）
+  docker run --rm --user "$(id -u):$(id -g)" -e HOME=/tmp -v "$PWD:/workspace" -w /workspace \
+    ros2-gazebo-comms-sim:humble-harmonic bash -c \
+    'source /opt/ros/humble/setup.bash && colcon --log-base log/statistical_build build --build-base build/no_expected_rssi --install-base install/no_expected_rssi --packages-select comms_sim_pkg --cmake-args -DBUILD_TESTING=ON --parallel-workers 1'

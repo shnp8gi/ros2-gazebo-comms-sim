@@ -39,6 +39,14 @@ int main() {
     LinkProtocol clean(p,[](double){return sample(100);});
     clean.Advance(.00025); check(clean.Connected(),"高SNRで接続");
     near(clean.Stats().delivered_mb,.044); near(clean.Stats().awgn_errors,0);
+    auto prc_config=p;prc_config.data_from_prc=true;
+    bool data_seen=false,ack_seen=false;
+    LinkProtocol prc(prc_config,[](double){return sample(100);},[&](const auto&e){
+      if(e.type=="FRAME_RESULT"&&e.frame=="DATA"){check(e.direction=="B_TO_A","PRCからDATA送信");data_seen=true;}
+      if(e.type=="FRAME_RESULT"&&e.frame=="DATA_ACK"){check(e.direction=="A_TO_B","PRDEVからACK返信");ack_seen=true;}
+    });
+    prc.Advance(.00025);check(data_seen&&ack_seen&&prc.Connected(),"簡易モデルのPRCデータ方向");
+    near(prc.Stats().delivered_mb,.044);
     LinkProtocol noisy(p,[](double){return sample(-100);});
     noisy.Advance(.1); check(!noisy.Connected(),"低SNRでBeacon失敗");
     check(noisy.Stats().awgn_errors>0,"AWGNによる誤りが必要"); near(noisy.Stats().delivered_mb,0);

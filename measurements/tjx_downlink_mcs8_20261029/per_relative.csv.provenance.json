@@ -1,0 +1,1204 @@
+{
+  "manifest": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/manifest.csv",
+  "manifest_sha256": "7260a0dc46bc05d45811e3e054aebf272678cde8469a236eaa80b9ee4c6bed1d",
+  "metric": "per",
+  "allow_unknown_ber": false,
+  "allow_detect_weighted_per": true,
+  "calibration_status": "invalidated_by_user",
+  "simulator_schema_compatible": false,
+  "power_mapping": "-(attenuation_db - reference_attenuation_db); NOT dBm",
+  "sources": [
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/0.0dB.csv",
+      "sha256": "6f9e71d11295cfba77c1116e87a6ff0dd22359b216f76d39eac66285930e99c4",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "0.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/0.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "14.578402",
+        "packet": "464",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "10.99",
+        "RSSI": "256",
+        "MCS": "8"
+      },
+      "rssi_raw": 256.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 118,
+        "denominator_sum": 54050.0,
+        "rssi_raw_min": 253.0,
+        "rssi_raw_max": 257.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/2.0dB.csv",
+      "sha256": "7bfcda51589615d0fa369e378fa3410de7a440e50bbb38eace6334f04be549cd",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "2.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/2.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "14.817158",
+        "packet": "463",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "12.00",
+        "RSSI": "235",
+        "MCS": "8"
+      },
+      "rssi_raw": 235.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 120,
+        "denominator_sum": 54941.0,
+        "rssi_raw_min": 232.0,
+        "rssi_raw_max": 237.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/4.0dB.csv",
+      "sha256": "9fb2cb42545132face900a68b3e301d0864b2cdcbbf2376b48ea80795dcdc9d6",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "4.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/4.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "15.434865",
+        "packet": "460",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "12.39",
+        "RSSI": "212",
+        "MCS": "8"
+      },
+      "rssi_raw": 212.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 125,
+        "denominator_sum": 57228.0,
+        "rssi_raw_min": 207.0,
+        "rssi_raw_max": 213.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/6.0dB.csv",
+      "sha256": "e3a5e24584f516ed1677705fede93448e9e113b97dd3b8e59eadc9cf4f397543",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "6.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/6.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "16.555139",
+        "packet": "457",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "12.24",
+        "RSSI": "182",
+        "MCS": "8"
+      },
+      "rssi_raw": 182.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 134,
+        "denominator_sum": 61384.0,
+        "rssi_raw_min": 179.0,
+        "rssi_raw_max": 185.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/8.0dB.csv",
+      "sha256": "4cf47eead1b4ea0f23779968dd1e207600a14378e232766f0bdb571fc41219f0",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "8.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/8.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "18.797870",
+        "packet": "461",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "11.70",
+        "RSSI": "161",
+        "MCS": "8"
+      },
+      "rssi_raw": 161.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 152,
+        "denominator_sum": 69722.0,
+        "rssi_raw_min": 158.0,
+        "rssi_raw_max": 164.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/10dBm.csv",
+      "sha256": "41c275cacf07bd01071de8f9f8d561cca8f3169348a314533d0962fbc9a142b0",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "10.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/10dBm.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "25.637538",
+        "packet": "464",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "10.69",
+        "RSSI": "145",
+        "MCS": "8"
+      },
+      "rssi_raw": 145.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 207,
+        "denominator_sum": 95133.0,
+        "rssi_raw_min": 141.0,
+        "rssi_raw_max": 147.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/10.5dB.csv",
+      "sha256": "9540ff7ed278c0ef9db75e1e2d82c143f95df3afea471c8cf759581febda1434",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "10.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/10.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "19.920386",
+        "packet": "460",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "10.53",
+        "RSSI": "140",
+        "MCS": "8"
+      },
+      "rssi_raw": 140.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 161,
+        "denominator_sum": 73892.0,
+        "rssi_raw_min": 136.0,
+        "rssi_raw_max": 143.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/11dB.csv",
+      "sha256": "e3b109534de2c819f9faf63a8cb5ab0b6355d96414d17247bb44300902ed7a02",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "11.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/11dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "15.313564",
+        "packet": "460",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "10.22",
+        "RSSI": "133",
+        "MCS": "8"
+      },
+      "rssi_raw": 133.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 124,
+        "denominator_sum": 56776.0,
+        "rssi_raw_min": 131.0,
+        "rssi_raw_max": 137.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/11.5dB.csv",
+      "sha256": "b3475fec913cbe28ec312020dffb6b00f41f369e0ed5504bf471338105b0ffd8",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "11.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/11.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "19.049446",
+        "packet": "460",
+        "bER": "0.000e+00",
+        "PER": "0.000e+00",
+        "SNR": "9.84",
+        "RSSI": "129",
+        "MCS": "8"
+      },
+      "rssi_raw": 129.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 154,
+        "denominator_sum": 70667.0,
+        "rssi_raw_min": 125.0,
+        "rssi_raw_max": 132.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/12dB.csv",
+      "sha256": "0f6052bef038105325327da15bb2fcb800ffa68973c03880d880fde8e8f67675",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "12.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/12dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "19.413464",
+        "packet": "460",
+        "bER": "2.717e-08",
+        "PER": "2.174e-03",
+        "SNR": "9.60",
+        "RSSI": "123",
+        "MCS": "8"
+      },
+      "rssi_raw": 123.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 157,
+        "denominator_sum": 71997.0,
+        "rssi_raw_min": 120.0,
+        "rssi_raw_max": 126.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/12.5dB.csv",
+      "sha256": "43c206cb3411ff45814715c88adb4d7cd0d80f4b79303602e0969e57e6032d1f",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "12.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/12.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "19.173409",
+        "packet": "461",
+        "bER": "4.338e-08",
+        "PER": "6.508e-03",
+        "SNR": "9.40",
+        "RSSI": "117",
+        "MCS": "8"
+      },
+      "rssi_raw": 117.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 155,
+        "denominator_sum": 71114.0,
+        "rssi_raw_min": 114.0,
+        "rssi_raw_max": 121.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/13.0dB.csv",
+      "sha256": "24f5b04c94f87a75c39ec831b104911467d6752bc545022f250bc2c60504b2d2",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "13.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/13.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "19.291627",
+        "packet": "459",
+        "bER": "1.792e-06",
+        "PER": "2.179e-01",
+        "SNR": "8.97",
+        "RSSI": "112",
+        "MCS": "8"
+      },
+      "rssi_raw": 112.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 156,
+        "denominator_sum": 71558.0,
+        "rssi_raw_min": 109.0,
+        "rssi_raw_max": 115.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/13.5dB.csv",
+      "sha256": "7167219f2a6d6365c231ea663374208029290f52924d5a7bb75d1c3a2c7894c7",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "13.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/13.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "17.554611",
+        "packet": "461",
+        "bER": "3.902e-05",
+        "PER": "9.848e-01",
+        "SNR": "8.57",
+        "RSSI": "108",
+        "MCS": "8"
+      },
+      "rssi_raw": 108.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 142,
+        "denominator_sum": 65107.0,
+        "rssi_raw_min": 103.0,
+        "rssi_raw_max": 110.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/14dB.csv",
+      "sha256": "be02583e63dcb0accbfb308f93e1ea7f2e3fd0faba697bd48ebba1d2f72351b4",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "14.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/14dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "16.064753",
+        "packet": "463",
+        "bER": "5.112e-04",
+        "PER": "1.000e+00",
+        "SNR": "8.35",
+        "RSSI": "99",
+        "MCS": "8"
+      },
+      "rssi_raw": 99.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 130,
+        "denominator_sum": 59578.0,
+        "rssi_raw_min": 96.0,
+        "rssi_raw_max": 103.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/14.5.csv",
+      "sha256": "73be91ae95f117fff0f8c7aac220588f3062b9a7e68ed800d269e23768d1e667",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "14.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/14.5.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "19.038780",
+        "packet": "461",
+        "bER": "3.396e-03",
+        "PER": "1.000e+00",
+        "SNR": "8.10",
+        "RSSI": "94",
+        "MCS": "8"
+      },
+      "rssi_raw": 94.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 154,
+        "denominator_sum": 70622.0,
+        "rssi_raw_min": 90.0,
+        "rssi_raw_max": 97.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/15dB.csv",
+      "sha256": "8caaba53dcd0246b65c752a1363c23a6ee26527c618f05f6048d80f7295f1d1e",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "15.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/15dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "14.820249",
+        "packet": "463",
+        "bER": "9.266e-03",
+        "PER": "1.000e+00",
+        "SNR": "7.70",
+        "RSSI": "91",
+        "MCS": "8"
+      },
+      "rssi_raw": 91.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 120,
+        "denominator_sum": 54956.0,
+        "rssi_raw_min": 85.0,
+        "rssi_raw_max": 93.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/15.5dB.csv",
+      "sha256": "a10f59f0fa9f926b5002b2715d776e503c8b950d745105d2457d760dd0d679a7",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "15.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/15.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "19.290737",
+        "packet": "464",
+        "bER": "1.786e-02",
+        "PER": "1.000e+00",
+        "SNR": "7.27",
+        "RSSI": "83",
+        "MCS": "8"
+      },
+      "rssi_raw": 83.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 156,
+        "denominator_sum": 71542.0,
+        "rssi_raw_min": 80.0,
+        "rssi_raw_max": 86.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/16dB.csv",
+      "sha256": "9026f6e7d7f8d58eb72c8eee1124e64c4bab6f11251704bfb3441bf3436adb84",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "16.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/16dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "15.572167",
+        "packet": "461",
+        "bER": "2.464e-02",
+        "PER": "1.000e+00",
+        "SNR": "6.96",
+        "RSSI": "78",
+        "MCS": "8"
+      },
+      "rssi_raw": 78.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 126,
+        "denominator_sum": 57736.0,
+        "rssi_raw_min": 76.0,
+        "rssi_raw_max": 81.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/16.5dB.csv",
+      "sha256": "055c331111f95c97e17f1ca124eade382645ea82ce49b497909f6bb0bd1c098c",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "16.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/16.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "16.684006",
+        "packet": "464",
+        "bER": "3.158e-02",
+        "PER": "1.000e+00",
+        "SNR": "6.74",
+        "RSSI": "75",
+        "MCS": "8"
+      },
+      "rssi_raw": 75.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 135,
+        "denominator_sum": 61873.0,
+        "rssi_raw_min": 71.0,
+        "rssi_raw_max": 77.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/17dB.csv",
+      "sha256": "0940c50f79bfdaab4bef65c6845ca0990738f48cc524878ab20f3957189b6828",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "17.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/17dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "15.061459",
+        "packet": "462",
+        "bER": "4.002e-02",
+        "PER": "1.000e+00",
+        "SNR": "6.39",
+        "RSSI": "68",
+        "MCS": "8"
+      },
+      "rssi_raw": 68.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 122,
+        "denominator_sum": 55835.0,
+        "rssi_raw_min": 67.0,
+        "rssi_raw_max": 73.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/17.5dB.csv",
+      "sha256": "25273b2d04c0700285e4c8cd121c399247e4e88aa85d93f11ced886d07241858",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "17.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/17.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "16.807007",
+        "packet": "462",
+        "bER": "5.188e-02",
+        "PER": "1.000e+00",
+        "SNR": "6.02",
+        "RSSI": "67",
+        "MCS": "8"
+      },
+      "rssi_raw": 67.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 136,
+        "denominator_sum": 62329.0,
+        "rssi_raw_min": 62.0,
+        "rssi_raw_max": 68.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/18dB.csv",
+      "sha256": "059f112f7160cb6c47502e4e87c67efe977dda4e0be8c927f4187db84a982615",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "18.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/18dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "14.696467",
+        "packet": "460",
+        "bER": "7.431e-02",
+        "PER": "1.000e+00",
+        "SNR": "5.72",
+        "RSSI": "62",
+        "MCS": "8"
+      },
+      "rssi_raw": 62.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 119,
+        "denominator_sum": 54451.0,
+        "rssi_raw_min": 58.0,
+        "rssi_raw_max": 64.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/18.5dB.csv",
+      "sha256": "9ed2325f2121de654505eafb32f985e975269bfa89da01461e833da85c628475",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "18.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/18.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "24.240914",
+        "packet": "457",
+        "bER": "1.148e-01",
+        "PER": "1.000e+00",
+        "SNR": "5.60",
+        "RSSI": "55",
+        "MCS": "8"
+      },
+      "rssi_raw": 55.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 196,
+        "denominator_sum": 89869.0,
+        "rssi_raw_min": 55.0,
+        "rssi_raw_max": 61.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/19dB.csv",
+      "sha256": "c21a8a22d375486593ca28bd02d11754563eb6812ceb2b8033d6b8c76ab380a2",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "19.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/19dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "17.043848",
+        "packet": "457",
+        "bER": "2.357e-01",
+        "PER": "1.000e+00",
+        "SNR": "5.25",
+        "RSSI": "54",
+        "MCS": "8"
+      },
+      "rssi_raw": 54.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 138,
+        "denominator_sum": 63164.0,
+        "rssi_raw_min": 51.0,
+        "rssi_raw_max": 57.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/19.5dB.csv",
+      "sha256": "7268f549dd3945175467a8e3b04f481dee034f076746e28581efa763efb719e9",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "19.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/19.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "20.918235",
+        "packet": "463",
+        "bER": "3.874e-01",
+        "PER": "1.000e+00",
+        "SNR": "5.15",
+        "RSSI": "48",
+        "MCS": "8"
+      },
+      "rssi_raw": 48.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 169,
+        "denominator_sum": 77533.0,
+        "rssi_raw_min": 46.0,
+        "rssi_raw_max": 52.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/20.0dB.csv",
+      "sha256": "2c0fe7b111a5230d35411f718803516fe14a4c97a922d660caba9fce4d05a253",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "20.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/20.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "16.297583",
+        "packet": "458",
+        "bER": "4.404e-01",
+        "PER": "1.000e+00",
+        "SNR": "5.08",
+        "RSSI": "45",
+        "MCS": "8"
+      },
+      "rssi_raw": 45.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 132,
+        "denominator_sum": 60387.0,
+        "rssi_raw_min": 43.0,
+        "rssi_raw_max": 49.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/20.5dB.csv",
+      "sha256": "04a195279195b28fd8915dbee99bcf2dd05a3b7a627c1f47362a36604abfff9d",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "20.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/20.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "21.645282",
+        "packet": "461",
+        "bER": "4.834e-01",
+        "PER": "1.000e+00",
+        "SNR": "4.72",
+        "RSSI": "42",
+        "MCS": "8"
+      },
+      "rssi_raw": 42.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 175,
+        "denominator_sum": 80237.0,
+        "rssi_raw_min": 38.0,
+        "rssi_raw_max": 46.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/21.0dB.csv",
+      "sha256": "c5a298a5c45edde77ecc15f0fadd7ce7d7f1a19383c18fa0d65bc2de7d4e601a",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "21.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/21.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "17.670008",
+        "packet": "461",
+        "bER": "4.916e-01",
+        "PER": "1.000e+00",
+        "SNR": "3.82",
+        "RSSI": "40",
+        "MCS": "8"
+      },
+      "rssi_raw": 40.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 143,
+        "denominator_sum": 65490.0,
+        "rssi_raw_min": 29.0,
+        "rssi_raw_max": 41.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/21.5dB.csv",
+      "sha256": "46c733c3b706969ff36483f829d0f86336bec62e50a4dbe0bdd99258cde168de",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "21.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/21.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "16.800994",
+        "packet": "460",
+        "bER": "4.938e-01",
+        "PER": "1.000e+00",
+        "SNR": "4.34",
+        "RSSI": "21",
+        "MCS": "8"
+      },
+      "rssi_raw": 21.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 136,
+        "denominator_sum": 62255.0,
+        "rssi_raw_min": 18.0,
+        "rssi_raw_max": 35.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/22dB.csv",
+      "sha256": "8efe5387ccb9f8bc2a40094d769ce5cd8e35be94fa64e2b8dd954f7f86d0bf02",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "22.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/22dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "13.942296",
+        "packet": "456",
+        "bER": "4.958e-01",
+        "PER": "1.000e+00",
+        "SNR": "3.65",
+        "RSSI": "16",
+        "MCS": "8"
+      },
+      "rssi_raw": 16.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 113,
+        "denominator_sum": 51582.0,
+        "rssi_raw_min": 3.0,
+        "rssi_raw_max": 26.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/22.5dB.csv",
+      "sha256": "42708e2e180c148a17b6110774153fbccff79e4e37a50e1fe617b1419cf758b4",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "22.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/22.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "17.932022",
+        "packet": "454",
+        "bER": "4.970e-01",
+        "PER": "1.000e+00",
+        "SNR": "3.65",
+        "RSSI": "5",
+        "MCS": "8"
+      },
+      "rssi_raw": 5.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 145,
+        "denominator_sum": 65426.0,
+        "rssi_raw_min": 0.0,
+        "rssi_raw_max": 12.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/23.0dB.csv",
+      "sha256": "5880f58d575efe1f3e48917d0503a1fdc7e827633d813096536e46ca1507728c",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "23.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/23.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "20.307975",
+        "packet": "426",
+        "bER": "4.981e-01",
+        "PER": "1.000e+00",
+        "SNR": "4.32",
+        "RSSI": "0",
+        "MCS": "8"
+      },
+      "rssi_raw": 0.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 164,
+        "denominator_sum": 68629.0,
+        "rssi_raw_min": 0.0,
+        "rssi_raw_max": 5.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/23.5dB.csv",
+      "sha256": "30c4c98a0d0bf7038e2df7a937fc9efef5a3b8234de286489989bbb7822fda18",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "23.5",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/23.5dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "20.166888",
+        "packet": "333",
+        "bER": "4.985e-01",
+        "PER": "1.000e+00",
+        "SNR": "4.09",
+        "RSSI": "0",
+        "MCS": "8"
+      },
+      "rssi_raw": 0.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 163,
+        "denominator_sum": 54078.0,
+        "rssi_raw_min": 0.0,
+        "rssi_raw_max": 31.0
+      }
+    },
+    {
+      "source": "/home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/measurements/tjx_downlink_mcs8_20261029/raw/24.0dB.csv",
+      "sha256": "243712c81b1256575ddf0292a6c49f4142020c95ba047180d61cc14245b9e3f8",
+      "condition": {
+        "direction": "Q_A_TO_B",
+        "frame": "DATA",
+        "mcs": "8",
+        "frame_bytes": "100000",
+        "attenuation_db": "24.0",
+        "reference_attenuation_db": "0",
+        "reference_rssi_dbm": "",
+        "statistics_csv": "raw/24.0dB.csv",
+        "aggregation": "clear_write",
+        "ber_stage": "unknown",
+        "frequency_hz": "60480000000",
+        "notes": "下り・100 kB・clear writeはユーザー確認済み。100 kBを100000 bytesと解釈。DATAは試験ペイロード用の分類。絶対電力未校正。"
+      },
+      "last_measurement": {
+        "time": "15.192221",
+        "packet": "199",
+        "bER": "4.986e-01",
+        "PER": "1.000e+00",
+        "SNR": "4.14",
+        "RSSI": "0",
+        "MCS": "8"
+      },
+      "rssi_raw": 0.0,
+      "aggregation": {
+        "method": "detected_packet_weighted_per_approximation",
+        "used_rows": 123,
+        "denominator_sum": 25079.0,
+        "rssi_raw_min": 0.0,
+        "rssi_raw_max": 31.0
+      }
+    }
+  ],
+  "eligible_for_calibration": false,
+  "invalidation_reason": "ユーザーが前回測定は誤りと申告し再測定したため、校正・シミュレーションへの利用対象から除外。原本コピーと旧集計は履歴として保存。"
+}

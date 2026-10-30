@@ -1,0 +1,286 @@
+IEEE 802.15.3-2023に基づく通信設計 v4（3e形式で代替・Beacon140 us固定）（2026-10-28）
+状態: 以下は設計の参照記録。新方式hrcp.enabledを実装。実装済み範囲・暫定解釈・検査結果はruntime_hrcp_ja.txtを優先する。
+今回の確定: 基準距離30m、slot0.1us単位、RSSIは30-code、CRC8初期値0、初回TX_ENDから500ms・再送非延長。
+旧実行設定は保持し、新規drone_hrcp.yaml/drone_hrcp_smoke.yamlで有効化する。
+根拠原本: /home/rosgazebo/Downloads/802153-2023.pdf
+参照箇所: ieee_2023_reference_map.csv。Rxxはこの一覧のID。
+設定案: ieee_2023_fidelity_profile.json。実行用ROSパラメータではない。
+照合範囲は選択したSC PHY・非セキュアPairnetの関連条項。全規格への適合認証を主張しない。
+
+1. 今回の確定変更と適用範囲
+最新ユーザー方針: 独自設定と規格が競合する場合は規格を優先する。
+明示的な研究例外はX01（方向別の周波数帯）、X02（テラヘルツ側の3e物理層フレーム代替）、X03（Beacon140 us固定）。
+規格が実装に委ねる選択、実験環境、未解決の本文解釈は例外とは別に管理する。
+競合台帳: ieee_2023_conflict_resolution.csv。
+・最新ユーザー指定によりBeacon周期を140 us（0.000140秒）に固定。旧53 us採用を取り下げる。
+  周期は送信開始から次の送信開始まで。規格の周期上限との違いは明示例外X03として扱う。
+・ユーザー回答により受信の−68.5 dBm固定gateを廃止。同期・復号・CRCの実結果を使う。
+・ATPの初期提案値500 msを維持し、通知/交渉した値と規定の開始・更新条件で管理する。
+  独立した固定Response/ACK待ちgateと全Beacon無視は廃止する。半二重能力は維持する。
+・ユーザー指定: 今回の3d PHY（Physical Layer：物理層）フレームは3e側と同じもので代替する。
+・両方向のフレーム形式をHRCP-SC（High-Rate Close Proximity Single Carrier：高速近接通信の
+  単一搬送波方式）へ統一する。テラヘルツ側は搬送周波数とRF（Radio Frequency：無線周波数）
+  損益を適用した同形式の波形を使う。3dの37bitヘッダーだけを残す混成形式は作らない。
+・X01: 周波数帯が方向で異なる構成。X02: HRCP-SCフレームをテラヘルツ搬送波で使う代替。
+  3d規格への物理層適合、またはリンク全体の規格適合を主張しない。
+・PHYの中心周波数も規定チャネルへ合わせる。2.16 GHz帯域で従来272 GHzに最も近い
+  THz CHNL_ID9の271.08 GHz（Table14-1）、HRCP CHNL_ID2の60.48 GHz（Table13-1）を採用。
+  これは設計値の更新。旧272/61 GHzの実行設定は未変更であり、混同しない。
+・送信電力−1/−8 dBm、RF損益、温度/NF、ドローンの軌道とアンテナ条件は実験条件として維持。
+  RF損益は現時点の近似。実機での再校正は別途必要。FSPLは新しい中心周波数で再計算する。
+・基準モデムは2.16 GHzチャネル、1.76 Gchip/s。雑音積分帯域の2.1648 GHzと区別する。
+・SEC=0、SISO。MIMO、セキュア接続、LLPS等を実装済み能力として広告しない。
+・初期PW（Pilot Word：パイロット系列）は両方向8 chip。HRCP-SCのoptional PW8能力を明示。
+  HRCP-SCで必須のPW0対応も実装対象とする。今の実験でPW8を使うこととは区別する。
+
+2. 集約の扱い（R14）
+7.11.3の冒頭（本文311/PDF312）のTHz PHYでの集約禁止という原典の確認結果は変わらない。
+今回はPHYフレームを代替する変更であり、MAC（Medium Access Control：媒体アクセス制御）の
+集約機能まで変更する依頼ではない。比較条件を保ち、両方向とも1フレーム1サブフレームとする。
+HRCP-SC形式を採用したからといって、今回複数サブフレームの集約を自動的に有効化しない。
+この制限はv3の実験条件として記録し、3e一般の集約禁止と誤解させない。
+
+3. A/Bの独立したMAC（R09～R15）
+AはPRDEV、BはPRC。各端点にassociation状態とsync状態を別々に持たせる。
+association: UNASSOCIATED / REQUEST_PENDING / WAIT_RESPONSE / WAIT_CONFIRM / ASSOCIATED。
+sync: PSP / PAP_SYNCHRONOUS / PAP_ASYNCHRONOUS。
+共有のconnectedフラグで受信成否を相手へ即通知しない。観測器だけが両状態を集計する。
+
+B: 未接続では自身の時計でBeacon送信。Next DEVIDは同じ接続募集の間は変えない。
+A: Beaconを実際に復号→FCS/Pairnet情報/Expected RSSI条件を確認→slotを一様乱数選択。
+   RequestはSrcID=Next DEVID、DestID=PNCID、No-ACK。開始時にdata/command通番を初期化。
+B: 自分宛ての正常RequestかつNext DEVID一致でBeaconを停止する。
+   Requestの信号だけを検出した、headerだけ読めた、という状態では停止しない。
+   Responseは次のBeacon予定時刻またはそれより後。直ちに固定10 us後とはしない。
+A: 正常Responseの自身のDEV address、成功reason、能力/動作条件を確認するとassociated。
+   Stk-ACKを返す。BはそのStk-ACKまたはDATAを受信して自身のassociation完了を判断する。
+   受信失敗時、送信側にはRX_FAILED通知を与えず、自己の待ち時間で検出させる。
+B: Responseの確認が来ない場合、RIFSに従うResponse再送を行う。
+A: 同じResponseを再受信したら再度ACKするが、アプリ接続数を重複加算しない。
+
+7.5.1に沿って、接続開始後に異なるNext DEVIDのBeaconを受信した場合は無視する。
+同じPRC/Pairnet/Next DEVIDの正常Beaconは一律に捨てず、未接続ならRequestを送る機会にする。
+受信したBeaconごとにaccess slotを改めて選び、規定のRequestを送信可能とする。
+同一手続きの再試行と新規手続きを区別し、同時に複数のRequest送信予定を持たせない。
+Responseが有効なら未実行のRequest予定を取り消す。associated後はPSP再試行へ戻さない。
+これは本文のcanを利用した実装選択。毎BeaconへのRequestをshallで義務付けたとは説明しない。
+同じNext DEVIDだけでは別PRCを同一相手と扱わず、PRC addressとPairnetも照合する。
+
+4. Beacon周期とslot（R05/R13/R16）
+最新指定: 140 us固定（0.14 ms = 0.000140秒）。送信開始から次の送信開始までの時間。
+4.7.9.2のNOTE（本文50/PDF51）の推奨に沿う4 access slotsは維持する。
+これは必須値ではなく、Table7-13の許容範囲は1～6。スロットはRequest送信開始候補を意味する。
+
+HRCPのBeacon/Requestの最大送信枠は各8 us、接続前の短フレーム間隔は2.5 us。
+slot duration = 8 + 2.5 = 10.5 us
+最大枠での4スロット分の予算 = 8 + 2.5 + 4*10.5 = 52.5 us
+旧設計はこれを1 us単位へ切り上げて53 usとしたが、今回は採用しない。
+最新周期はユーザー指定の140 us。最大枠での残り87.5 usは待受け/余白とし、slotを勝手に増設しない。
+実際のBeacon/Request送信時間は生成した符号列から求め、各8 us以内に収まることを検査する。
+8 usは最大枠であり、短いframeを必ず8 us送信するわけではない。
+
+Table7-12/13の通常上限は既定短フレーム間隔で73.5 us。140 usはその規定枠を超えるため、
+X03という明示的な研究例外として記録する。他のslot/フレーム長の検査は引き続き行う。
+Beaconへ広告するsuperframe durationも140 usとし、実送信スケジュールと一致させる。
+単一の設定値を使い、別々の140 us定数を作って不整合を起こさない。
+Bが正常Requestを受理したらBeaconは停止。Responseは次の140 us周期のBeacon予定時刻以降とする。
+140 usは接続募集時のBeacon周期であり、接続後のDATA交換へ140 us待ちを追加しない。
+
+Aのslot送信時刻は受信Beaconから同期したローカル時計と広告値に従う。
+伝搬・検出・処理遅延を含む実際の送受信区間で重複を判断する。
+Table7-14の未解決解釈は今回の周期決定に使わない。slot durationのwire単位U03は別途照合する。
+設計上の周期140 usは確定。現行runtimeの周期も既に140 usだが、正式3e frame codecは未反映。
+
+5. 時間・回復・500 ms（R10～R12/R15/R24）
+SIFSは接続前2.5 us。接続後は双方が対応する最短値を交渉し、その値を使う。
+初期能力を両方2.5 usとするため、初期設計では接続後も2.5 us。
+通常RIFS: B(PRC)=2*SIFS+3.01 us、A(PRDEV)=4*SIFS+9.05 us。
+既定SIFSでは8.01/19.05 us。Long RIFSを合意した場合は74.7/152 us。
+RIFSは短期回復、500 msは長期監視として共存させる。
+
+500 msを「受信失敗したらその時間だけ処理を止める」値として使わない。
+独自の固定Response/ACK総待ちdeadlineを別に上乗せする設計は取り下げる。
+6.3.1.2のRecommended ATP、6.5.2.2の要求ATP、6.5.2.3の確定ATPを通信内容に反映する。
+初期の推奨/要求は500 ms。Responseで確定した値を採用し、常にローカル500 msで上書きしない。
+7.5.1によりAのRequest送信に伴ってassociation timerを開始し、Response後のStk-ACK送信時に
+associated状態のtimerを開始する。BはResponse送信後にassociation timerを開始する。
+送信後の時刻はTX_ENDで表す。同一手続きの再送でtimerを無条件に再開始するかは
+本文の初期化/更新条件と照合し、推測で規格動作と断定しない（U06）。
+確認待ち中も同一BeaconからのRequest機会、Response再送、RIFS回復を進める。
+既存のsetup timeout統計は実際のassociation timer失効を根拠にし、観測用の経過500 msで
+MACへ失敗通知を注入しない。
+ATPの更新は宛先・Pairnet等を満たす正常な相手フレームの受信に基づく。
+payload CRC不良はdata受領に数えない。ただし正常MAC header中のStk-ACKと同期回復は処理する。
+「headerだけ正常なpayload破損フレームでATPも更新するか」は実機照合事項。
+初期案はMACで正常受信したフレームのみ更新し、正常header-only Stk-ACKもその対象とする。
+A側は7.5.1で開始するlocal association timerと規定の手続きを扱い、
+PRC向け7.5.2の切断規則やPiconet用7.4.3を無条件にコピーしない。
+本文だけで更新/失効後の挙動が確定しないケースはU06の照合対象とする。
+
+header検出/復号の途中でRIFS送信が割り込まないよう、RX進行状態と予定TXを調停する。
+PHYのRX_START、HEADER_OK、RX_ENDを分離し、全frame終了を待たずにheader確認を通知する。
+各deadlineの起点、取消理由をログに残す。壁時計の遅さを無線タイムアウトにしない。
+setup timeoutと、接続後のATP切断を別集計。送信後の切断をsetup timeoutへ再分類しない。
+
+6. 正式bit列とframe構造（R01～R09/R17～R23/R26～R28）
+数値field/byte順、CRC送信順、LDPC符号語順を別々に定義する。
+MAC10byte: Frame Control2 / PairnetID2 / DestID1 / SrcID1 / TX and ACK3 / Stream Index1。
+独自lab_mac80や16bit Beacon参照番号、nonce64を正式MACへ流用しない。
+Beacon body: 同期情報15byte + 必須能力IE + 選択IE + FCS4。
+Request/Response: subheader4 + command type/length各2 + 規定payload/IE + FCS4。
+DATA: subheader4 + payload + FCS4。初期payload2048byte、上限は能力交渉とPHY制約に従う。
+Stk-ACKのみの場合もpreamble、PHY/MAC header、HCSとその保護処理を送信する。
+「header-only」は電波上10byteだけという意味ではない。
+
+両方向ともHRCP-SC PHY headerの36bit形式を使用する。THzの37bit形式は今回は使用しない。
+MCS（Modulation and Coding Scheme：変調・符号化方式）3bit / PW1bit / seed4bit /
+PPRE（Pilot Preamble：パイロットプリアンブル）2bit / length22bit / reserved4bit。
+lengthは両方向ともFCS（Frame Check Sequence：フレーム検査系列）を含めるHRCPの定義を使う。
+HCSはPHY+MACをscramble前に送信順で計算。poly0xA12B、初期all-one、補数、x15から送信。
+EH(8,4)、spread4、π/2BPSK、PW、64chip blockへ構成。
+HRCPでは(36+80+16)=132bit→EH264bit→stuff2bit→spread1064chip→PW込み1216chip。
+U01のTHz37bit長問題は今回の実行前条件から外す。原典解釈が解決したという意味ではない。
+PSPの長preamble5120chip、PAPの短3328chip。BAだけ接続時も短い現行仮仕様を修正する。
+Golay系列、反転、SYNC/SFD/CESの順序は13.2.4.2を基準にgolden vector化。
+
+payloadはMAC body/FCS形成→scramble→LDPC→stuff→mapping→PW/PPRE/block形成。
+LDPCは1440/1056と1440/1344。既存JSONの規定行列を利用。
+NFEC=ceil(8*LMFB/k)、Lcoded=8*LMFB+NFEC*(1440-k)。末尾0補充は送信せずshortening。
+stuffは符号化後にblock境界を満たす数だけ付け、連続したscrambler状態を使う。
+field/chunkの境界でscrambler、位相回転、filter、noise生成状態を初期化しない。
+送信時間は生成するchip列から数える。固定64byte/20us/10usの近似値を使わない。
+
+7. 受信判定とAWGN
+受信機は送信側の正しい開始sample、送信bit、選択MCSを正解情報として受け取らない。
+連続した複素basebandにAWGNを加え、RX側で以下を処理する。
+(1) 受信許可/半二重、AGC、フィルタ、preamble候補の検出。
+(2) timing/CFO推定、SFD/CES確認、チャネル推定。
+(3) headerの逆変調・despread・EH復号・descramble・HCS確認。
+(4) 読み取ったMCS/lengthでpayloadを軟判定し、LDPC復号・descramble。
+(5) subheader CRC、payload FCS、宛先/Pairnet/version/sequence/command意味を確認。
+(6) 正常受信した範囲だけ上位へ渡す。ACK情報は正常headerから独立して取り出す。
+CRCは誤り未検出の確率がある。正解bitとの一致でCRCを補強することはしない。
+LDPC syndrome=0だけではMAC受領としない。必ずCRCとMACの妥当性判定を通す。
+bit誤り数と真のSNRは観測器用であり受信判定や送信側の適応判断に渡さない。
+
+RF計算から得るSNRと波形正規化を接続する:
+SNR = P_signal_dBm - P_noise_dBm（同じ参照面、同じ帯域）。
+Es/N0[dB] = SNR[dB] + 10*log10(B_noise/R_symbol)。
+単位energy symbolと単位energy pulseを使うなら複素AWGNのI/Q各分散は1/(2*EsN0_linear)。
+oversampling数を変えてもmatched-filter後のEs/N0を一定に保つ。
+FECを導入するだけで雑音分散を都合よく下げない。Eb/N0のbit定義（coded/information/net）をログへ明示。
+同期失敗率や誤検出率も評価するため、厳密検証モードは無送信区間にもnoiseを与える。
+送信がある窓だけ受信機を起動する現行方式は、比較用の近似モードとしてのみ扱う。
+受信機アルゴリズムや検出閾値、filter形状、LDPC min-sum係数は規格の指定そのものではない。
+初期LDPC復号器はlayered normalized min-sum、係数0.8、最大50反復、syndrome早期停止を設計値とする。
+これらは実機に合わせて校正し、受信感度試験で性能を検証する。
+
+Expected RSSI（R05）はPHYの受信gateとは別。Beaconの復号後、Request送信の可否に使う。
+条件を実質的に無効化するための−200 dBm固定候補は取り下げる。
+6.3.1.2の説明に沿って、設定した接続基準距離でExpected RSSI = PRC EIRP − Path Lossを算出する。
+基準距離は規格が一意に決める数値ではなく実験パラメータ。現時点は未設定とし、
+勝手に10 m等を採用しない。field符号化とともに実行前に確定する（U07）。
+MACの接続許可条件を無効にする操作と、PHYの−68.5 dBm固定gate廃止を混同しない。
+測定RSSIはRxアンテナ利得/ケーブル損失を含む参照面補正を行う。TJX入力値と直接比較しない。
+受信したがRequestを送らない場合はBEACON_ADMISSION_REJECTとして記録する。
+
+8. Stk-ACK、再送、適応変調（R04/R14/R15/R30）
+command/dataの10bit sequence空間は分離。初期送信0、初期Last Receivedは0x3FF。
+連続受信できた最後の番号を返す。エラー以後のsubframeを正常ACKしない。
+再送順序を保ち、受信済みDATAを二重に上位へ渡さない。
+PHY header正常/body不良なら正常header中のACKは扱え、bodyの再送を促せる。
+header不良/返信なしはRIFSで同期回復。単発body誤りで500 ms全停止する挙動を廃止する。
+
+MCSの値と切替アルゴリズムは区別。規格がMCStable.csvのRSSI閾値を規定しているわけではない。
+両方向ともHRCPのTable13-6を使い、ABの初期データ候補を0/1/2/3、両方向の制御を0とする。
+MCS0/1はπ/2 QPSK（Quadrature Phase Shift Keying：四相位相偏移変調）で符号化率11/15・14/15。
+MCS2/3は16-QAM（Quadrature Amplitude Modulation：直交振幅変調）で符号化率11/15・14/15。
+旧THz候補のBPSK（Binary Phase Shift Keying：二相位相偏移変調）payloadやMCS8/9は使用しない。
+ただしヘッダーのπ/2 BPSKはHRCPの正式処理であり引き続き使う。
+能力として実装・受信可能な方式だけを広告。元の6段RSSI表を、この4方式へ番号順に割り当てない。
+RSSI（Received Signal Strength Indicator：受信信号強度指標）の表との対応は引き続き未確認。
+初期の適応方針は送信側で見えるStk-ACK成功/失敗に基づく。アルゴリズムは実装依存。
+具体案: 最低MCSから開始、連続10回確認成功で次段を1回試行、未確認で1段下げ成功数リセット。
+Buffer Fullやbody破損が分かるケースを別記録し、制御方向の障害による誤った降格も評価対象とする。
+逆方向RSSIから順方向RSSIを推定して使わない。順方向品質がほしい場合はBからの情報が必要。
+旧案のACKへ独自4byteを直接追加する案は採用しない。
+6.5.8はPiconet用でありPairnetの規定品質feedbackとは扱わない。
+新しい独自RSSIfeedback commandはこの設計に追加しない。
+Vendor Defined commandという拡張枠が規格に存在しても、今回それを理由に独自機能を増やさない。
+送信側のACK観測に基づく適応アルゴリズムは規格が固定する値との競合ではなく、実装選択として残す。
+
+9. Beacon index・ログ・計算落ち防止
+beacon_uid(uint64)とattempt_uidは観測用。規定frameへ独自fieldを挿入しない。
+Aがどの受信BeaconからRequestを作ったかをselected_beacon_uidとしてログで関連付ける。
+BのMACはその解析UIDを読むことができない。同一Next DEVIDで反復したBeaconの個別識別を
+Bが電波だけで確定できない場合、B側のselected_beacon_uidはunknownとする。事後解析でjoinする。
+request_sent / request_accepted / association_A / association_Bの時刻を分ける。
+状態滞在はA/B独立、RSSI別状態割合もA/B別。setup両端完了時間と片端成立時間を別列にする。
+APP受領bit（受信側重複除外）とACK確認済みbit（送信側）を分離してgoodputを算出する。
+失敗理由: HALF_DUPLEX / PREAMBLE_MISS / HEADER_FEC / HCS / PAYLOAD_FEC /
+SUBHEADER_CRC / FCS / ADDRESS / ADMISSION / SETUP_TIMEOUT / ATP_EXPIRED等を区別。
+未完了の試行は右打切りとして扱い、実行終了をtimeout失敗へ変換しない。
+
+整数sample時計を基本とし、propagationの端数はfractional delayで保持する。
+同時刻はRX_END/HEADER通知→timer取消→deadline→新TXの順を定義し、ちょうど境界で二重処理しない。
+TX/RX区間は[start,end)。半二重中の受信は復号できない。区間をまたぐ処理の履歴を保持する。
+Gazebo poseはtimestamp付きで使い、通信eventをGazebo100 us境界へ丸めない。
+初期はpose区間内hold、補間との比較で誤差確認。RF値を未来の真値へ先読みして判断しない。
+外部wall clockは性能計測専用。CPUが遅ければ実行時間を延ばし、sample/eventを捨てない。
+全期間波形をメモリ保存せずblock処理。厳密noise-only受信は重くなるため短い試験で先にbenchmark。
+速度改善のため近似を導入する場合は別profileにし、厳密モードと同一結果と無条件に主張しない。
+
+10. 本文の未確定点と扱い
+U01 THz header長: 原典の37+80+16=133bit、EH(8,4)、Table14-7の整合は未解決のまま保存。
+    3eフレーム代替により今回の実行前条件から除外。正式THz-SCへ戻す場合に再開する。
+U02 Table7-14: 原典の表題・式の不整合は未解決のまま保存。
+    今回は共通HRCP-SC形式のTable7-13を採用するため、周期140 usの決定を妨げない。
+U03 6.3.1.2: slot duration 1octetと小数usの対応。確認箇所に明示的なwire単位を見つけられていない。
+    勝手に0.1usコードと断定せず、wire互換serializer実装前に補足資料/実機traceで照合する。
+U04 subheader CRC8: 多項式・補数・送信順は確認。初期register状態は図/既知vectorで独立照合する。
+U05 異PHY能力交渉: 今回は両方向ともHRCP-SCの能力情報を用い、THz固有の能力情報は使わない。
+    異なるPHY形式間の交渉は不要となるため旧課題を保留へ移す。
+    方向別の搬送周波数への対応付けは事前設定する研究拡張として残す。
+    THzの周波数表のchannel 9をHRCPのchannel 9として広告・解釈しない。
+    予約fieldへ独自内容を入れず、実験周波数の対応付けはメタデータに明示する。
+U06 association timer: 再送時の再開始、A側の更新/失効、header正常/body不良時のATP更新を
+    本文の該当状態・primitive・図と照合する。独自500 ms総待ちを代替の規格値にしない。
+U07 Expected RSSI: 基準距離とfield符号化を確定する。基準距離の選択は実験条件であり、
+    値が未設定なら新しいprofileの実行前検証で明示的に止める。
+追加: Table13-9の概算符号長とshortening式13-2～5の扱いを照合する。THzのFCS除外は今回のprofileへ適用しない。
+解釈保留があってもLDPC・HRCP・MAC状態機械の独立検証は進められる。
+この設計書が存在するだけでは旧実行結果が新方式の結果に変わることはない。
+
+11. 実装時の受入条件
+・CRCは既知wire vectorと独立実装で照合。EH全16入力と1bit誤り、複数誤りを検証。
+・LDPC全rate、0/1/random入力、k境界±1、shortening、Hc=0、soft復号、復号後CRC。
+・chip数と送信時間一致。HRCP header1216chip、長/短preambleの境界を確認。
+・無雑音で全対応MCS復号。AWGN BER/FERを複数seedで測り信頼区間を表示。
+・noise-onlyの誤検出、CFO/timing offset、半二重の開始/末尾/跨index重複を試験。
+・Response/ACK損失、片端のみassociated、RIFS競合、再送、通番1023→0、重複配送を試験。
+・250/500/750 ms遮断、timeout境界の同時受信、ATP更新とsetup timeout分離を試験。
+・同一/異なるNext DEVIDのBeacon、同一IDだが別PRC、Response直前のRequest予定取消を試験。
+・推奨/要求/確定ATPを意図的に異なる値にし、確定値で動くことを試験。
+・新しい271.08/60.48 GHzと旧272/61 GHzの結果を別profileにし、周波数をログへ保存する。
+・blockサイズを変えて結果一致、CPU遅延を挿入してsim時刻/受領bit一致を確認。
+・固定位置・短時間Gazebo4条件→複数seed→通常40秒の順。旧結果との比較はPHY版を明記。
+・実験の1サブフレーム制限、未実装能力の広告禁止、独自Beacon番号のon-air混入禁止を検査。
+・両方向の36bitヘッダー・length定義・HRCP方式番号を検証。THz旧番号8/9を受理しない。
+・Beacon周期140 us、最大送信枠各8 us、4 access slots、各slot10.5 usと待受け余白を検証。
+・X03が有効な場合のみ通常superframe上限の例外を認め、他の規格検査は維持する。
+
+12. 競合の扱い（v4更新）
+規格のshallと競合するものは撤去、shouldは原則採用、may/canは能力と実験目的に沿って選択する。
+本文が未確定のものを「独自設定で代用して解決済み」としない。
+受信機アルゴリズム、ACKに基づくMCS選択、4 access slots、半二重能力、実験チャネルは
+規格の固定値を上書きするものではない。選択値と出典・責任範囲を記録する。
+物理層/媒体アクセス制御の規定に競合する条件はX01/X02/X03へ無制限に包含せず、別途明示する。
+
+13. 代替範囲と略語
+今回の指示は3dフレームを3e形式で代替するもの。現行labの独自形式を正式3e形式と見なさない。
+正式HRCP-SCの送受信器を実装してから、両方向へ同じframe codecを適用する。
+この更新は設計のみ。ソースコード、ROS実行設定、既存シミュレーション結果は変更していない。
+その他の主要略語: HCS=Header Check Sequence（ヘッダー検査系列）、
+EH=Extended Hamming（拡張ハミング符号）、LDPC=Low-Density Parity-Check（低密度パリティ検査符号）、
+SIFS=Short Interframe Space（短フレーム間隔）、RIFS=Retransmission Interframe Space（再送フレーム間隔）、
+ATP=Association Timeout Period（接続タイムアウト期間）、Stk-ACK=Stack Acknowledgment（スタック型受領確認）。
