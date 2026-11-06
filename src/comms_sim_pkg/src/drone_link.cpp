@@ -32,6 +32,8 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
     d.speed_kmh = number(y[key], "speed_kmh", d.speed_kmh);
     d.altitude_m = number(y[key], "altitude_m", d.altitude_m);
     d.fixed_elevation_deg = number(y[key], "fixed_elevation_deg", d.fixed_elevation_deg);
+    if (y[key]["fixed_azimuth_offset_deg"] && !y[key]["fixed_azimuth_offset_deg"].IsNull())
+      d.fixed_azimuth_offset_deg = y[key]["fixed_azimuth_offset_deg"].as<double>();
   };
   drone("drone_a", c.a); drone("drone_b", c.b);
   auto radio = [&](const char *key, RadioConfig &r) {
@@ -45,8 +47,12 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
     r.rx_insertion_loss_db = number(node, "rx_insertion_loss_db", 0);
     r.rx_lna_gain_db = number(node, "rx_lna_gain_db", 0);
     r.rx_conversion_gain_db = number(node, "rx_conversion_gain_db", 0);
+    // 旧回路設定を含むYAMLは従来の参照面を維持する。新規設定はアンテナ端基準。
+    r.receiver_model = node["receiver_model"] ? node["receiver_model"].as<std::string>()
+      : (node["rx_lna_gain_db"] || node["rx_conversion_gain_db"] || node["rx_insertion_loss_db"]
+          ? "rf_chain" : "equivalent_nf");
     r.noise_bandwidth_hz = number(node, "noise_bandwidth_hz", 0);
-    r.noise_temperature_k = number(node, "noise_temperature_k", 300);
+    r.noise_temperature_k = number(node, "noise_temperature_k", r.noise_temperature_k);
     r.receiver_noise_figure_db = number(node, "receiver_noise_figure_db", 0);
     if (node["required_snr_db"] && !node["required_snr_db"].IsNull())
       r.required_snr_db = node["required_snr_db"].as<double>();
@@ -130,7 +136,15 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
   };
   c.e_plane = resolve(y["antenna"]["e_plane"].as<std::string>());
   c.h_plane = resolve(y["antenna"]["h_plane"].as<std::string>());
-  c.mcs_table = resolve(y["mcs_table"].as<std::string>());
+  auto theory=y["theoretical_phy"];
+  if(theory && theory["enabled"] && theory["enabled"].as<bool>()){
+    auto &t=c.protocol.hrcp.theoretical;t.enabled=true;t.table=resolve(theory["table"].as<std::string>());
+    if(theory["seed"])t.seed=theory["seed"].as<uint64_t>();
+    if(theory["control_mcs"])t.control_mcs=theory["control_mcs"].as<unsigned>();
+    if(theory["pilot"])t.pilot=theory["pilot"].as<bool>();
+  }
+  // 理論モデルのMCS選択・送信時間は旧電力閾値表に依存しない。
+  if(!c.protocol.hrcp.theoretical.enabled)c.mcs_table = resolve(y["mcs_table"].as<std::string>());
   auto empirical=y["empirical_phy"];
   if(empirical && empirical["enabled"] && empirical["enabled"].as<bool>()){
     auto &e=c.protocol.hrcp.empirical;e.enabled=true;
@@ -163,7 +177,14 @@ void ScenarioConfig::Validate() const {
     throw std::invalid_argument("antenna_mode は fixed または tracking です");
   positive(a.speed_kmh, "drone_a.speed_kmh"); positive(b.speed_kmh, "drone_b.speed_kmh");
   positive(a.altitude_m, "drone_a.altitude_m"); positive(b.altitude_m, "drone_b.altitude_m");
-  positive(duration_s, "duration_s"); positive(encounter_s, "encounter_time_s");
+  for (const auto &d : {a,b}) {
+    if (!std::isfinite(d.fixed_elevation_deg) ||
+        (d.fixed_azimuth_offset_deg && !std::isfinite(*d.fixed_azimuth_offset_deg)))
+      throw std::invalid_argument("固定アンテナ角度は有限値で指定してください");
+  }
+  positive(duration_s, "duration_s");
+  if (!std::isfinite(encounter_s) || encounter_s < 0)
+    throw std::invalid_argument("encounter_time_s は0以上の有限値です");
   if (encounter_s >= duration_s && !allow_pre_encounter_end)
     throw std::invalid_argument("すれ違い時刻は実行時間の内側に設定してください");
   if (a.altitude_m >= b.altitude_m) throw std::invalid_argument("Aを低い機体、Bを高い機体に設定してください");
@@ -171,6 +192,11 @@ void ScenarioConfig::Validate() const {
   for (const auto &r : {ab, ba}) {
     positive(r.frequency_hz, "frequency_hz"); positive(r.power_mw, "power_mw");
     if (!std::isfinite(r.sensitivity_dbm)) throw std::invalid_argument("受信感度が不正です");
+    if (r.receiver_model != "equivalent_nf" && r.receiver_model != "rf_chain")
+      throw std::invalid_argument("receiver_model は equivalent_nf または rf_chain です");
+    if (r.receiver_model == "equivalent_nf" &&
+        (r.rx_lna_gain_db != 0 || r.rx_conversion_gain_db != 0 || r.rx_insertion_loss_db != 0))
+      throw std::invalid_argument("equivalent_nfでは受信回路の利得・損失を省略または0にしてください。受信系全体のNFとアンテナ端基準の感度・受信曲線を指定します");
     for (auto gain : {r.tx_antenna_gain_dbi, r.rx_antenna_gain_dbi})
       if (gain && !std::isfinite(*gain)) throw std::invalid_argument("アンテナ利得が不正です");
     for (double loss : {r.tx_insertion_loss_db, r.rx_insertion_loss_db})
@@ -203,6 +229,14 @@ void ScenarioConfig::Validate() const {
       throw std::invalid_argument("実測モデルはExpected RSSIと波形モニターを無効にしてください");
     if(ab.required_snr_db||ba.required_snr_db)throw std::invalid_argument("実測モデルではrequired_snr_dbをnullにしてください");
     EmpiricalPhy check(protocol.hrcp.empirical);
+  }
+  if(protocol.hrcp.theoretical.enabled){
+    if(!protocol.hrcp.enabled||protocol.hrcp.empirical.enabled||protocol.awgn.enabled||protocol.lab_phy.enabled||preview_mode||monitor_only)
+      throw std::invalid_argument("TJX理論モデルはHRCP有効、実測モデル/AWGN波形/他PHY/preview無効で使用してください");
+    if(protocol.hrcp.expected_rssi_admission_enabled||protocol.hrcp.monitor_waveforms||ab.required_snr_db||ba.required_snr_db)
+      throw std::invalid_argument("TJX理論モデルはExpected RSSI/波形表示/SNR閾値を無効にしてください");
+    positive(ab.noise_bandwidth_hz,"TJX AB雑音帯域");positive(ba.noise_bandwidth_hz,"TJX BA雑音帯域");
+    TjxTheoreticalPhy check(protocol.hrcp.theoretical);check.ValidateLengths(protocol.hrcp.data_bytes);
   }
   if (protocol.hrcp.enabled) {
     if (protocol.lab_phy.enabled)
@@ -252,10 +286,11 @@ Geometry geometry(const ScenarioConfig &c, double time) {
     g.antenna_a_rpy = point_at(g.b - g.a);
     g.antenna_b_rpy = point_at(g.a - g.b);
   } else {
-    // 並行は両機の左側、十字はAの左側/Bの右側へ固定搭載。
-    // 十字では交差後に相手のいる側を向く。最接近時の相手は真上/真下。
-    const double az_a = g.heading_a + pi / 2;
-    const double az_b = c.scenario == "parallel" ? -pi / 2 : g.heading_b - pi / 2;
+    // 水平偏角0度なら進行方向を向く。未指定の旧設定は従来の横向きを保持。
+    const double az_a = g.heading_a + c.a.fixed_azimuth_offset_deg.value_or(90.) * pi / 180;
+    const double az_b = c.b.fixed_azimuth_offset_deg
+        ? g.heading_b + *c.b.fixed_azimuth_offset_deg * pi / 180
+        : (c.scenario == "parallel" ? -pi / 2 : g.heading_b - pi / 2);
     g.antenna_a_rpy = {0, -c.a.fixed_elevation_deg * pi / 180, az_a};
     g.antenna_b_rpy = {0, -c.b.fixed_elevation_deg * pi / 180, az_b};
   }
@@ -271,15 +306,22 @@ PowerBudget calculate_power_budget(const RadioConfig &r, double path_loss,
   b.eirp_dbm = b.tx_after_loss_dbm + tx_gain;
   b.isotropic_rx_dbm = b.eirp_dbm - path_loss;
   b.antenna_rx_dbm = b.isotropic_rx_dbm + rx_gain;
-  b.after_lna_dbm = b.antenna_rx_dbm + r.rx_lna_gain_db;
-  b.after_mixer_dbm = b.after_lna_dbm + r.rx_conversion_gain_db;
-  b.receiver_input_dbm = b.after_mixer_dbm - r.rx_insertion_loss_db;
+  const bool equivalent_nf = r.receiver_model == "equivalent_nf";
+  if (equivalent_nf) {
+    // 独立したLNA/Mixer段を持たない。旧CSV列は未適用として残す。
+    b.after_lna_dbm = b.after_mixer_dbm = std::numeric_limits<double>::quiet_NaN();
+    b.receiver_input_dbm = b.antenna_rx_dbm;
+  } else {
+    b.after_lna_dbm = b.antenna_rx_dbm + r.rx_lna_gain_db;
+    b.after_mixer_dbm = b.after_lna_dbm + r.rx_conversion_gain_db;
+    b.receiver_input_dbm = b.after_mixer_dbm - r.rx_insertion_loss_db;
+  }
   if (r.noise_bandwidth_hz > 0) {
     b.thermal_noise_dbm = 10*std::log10(1.380649e-23 * r.noise_temperature_k * r.noise_bandwidth_hz)+30;
     // NFはアンテナ出力を基準とした受信系全体の等価値として扱う。
     b.input_referred_noise_dbm = b.thermal_noise_dbm + r.receiver_noise_figure_db;
-    b.receiver_noise_dbm = b.input_referred_noise_dbm + r.rx_lna_gain_db
-      + r.rx_conversion_gain_db - r.rx_insertion_loss_db;
+    b.receiver_noise_dbm = equivalent_nf ? b.input_referred_noise_dbm
+      : b.input_referred_noise_dbm + r.rx_lna_gain_db + r.rx_conversion_gain_db - r.rx_insertion_loss_db;
     b.snr_db = b.receiver_input_dbm - b.receiver_noise_dbm;
   }
   return b;
@@ -305,8 +347,14 @@ LinkSample RadioModel::Evaluate(double time) const {
   const double ab_rx = gain(gains.rx_total, config_.ab.rx_antenna_gain_dbi);
   const double ba_tx = gain(gains.rx_total, config_.ba.tx_antenna_gain_dbi);
   const double ba_rx = gain(gains.tx_total, config_.ba.rx_antenna_gain_dbi);
-  auto ab = ab_->calculate_all(g.a, g.b, ab_tx + ab_rx, false);
-  auto ba = ba_->calculate_all(g.b, g.a, ba_tx + ba_rx, false);
+  auto calculate=[&](CommsCalculator&calculator,const Eigen::Vector3d&tx,const Eigen::Vector3d&rx,double gain){
+    if(!config_.protocol.hrcp.theoretical.enabled)return calculator.calculate_all(tx,rx,gain,false);
+    const double distance=calculator.calculate_distance(tx,rx);
+    auto [rssi,loss]=calculator.calculate_rssi(distance,gain,false);
+    return CommsMetrics{distance,rssi,loss,std::numeric_limits<double>::quiet_NaN(),"TJX_THEORETICAL"};
+  };
+  auto ab = calculate(*ab_,g.a,g.b,ab_tx+ab_rx);
+  auto ba = calculate(*ba_,g.b,g.a,ba_tx+ba_rx);
   const auto budget_ab = calculate_power_budget(config_.ab, ab.path_loss, ab_tx, ab_rx);
   const auto budget_ba = calculate_power_budget(config_.ba, ba.path_loss, ba_tx, ba_rx);
   const bool snr_ab_ok = !config_.ab.required_snr_db || budget_ab.snr_db >= *config_.ab.required_snr_db;
@@ -667,7 +715,7 @@ DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(c
     output_->frames.open(config_.output_dir + "/frames.csv");
     if (!output_->frames) throw std::runtime_error("フレームログを開けません");
     output_->frames << std::setprecision(17)
-      << "frame_start_s,frame_end_s,frame,direction,success,reason,rssi_at_end_dbm,minimum_snr_db,eb_no_db,frame_bits,ber,per,random_draw,beacon_index,phy_model,tx_start_sample,tx_samples,rx_start_sample,processed_samples,bit_errors,checked_bits,sync_metric,wire_sequence,wire_reference,mcs,empirical_curve,lookup_rssi_dbm\n";
+      << "frame_start_s,frame_end_s,frame,direction,success,reason,rssi_at_end_dbm,minimum_snr_db,eb_no_db,frame_bits,ber,per,random_draw,beacon_index,phy_model,tx_start_sample,tx_samples,rx_start_sample,processed_samples,bit_errors,checked_bits,sync_metric,wire_sequence,wire_reference,mcs,empirical_curve,lookup_rssi_dbm,lookup_es_no_db,header_per,body_per,header_random_draw,lut_outside_range\n";
   }
   if (!output_->samples || !output_->events) throw std::runtime_error("CSV出力先を開けません");
   output_->samples << std::fixed << std::setprecision(9);
@@ -709,10 +757,11 @@ DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(c
         output_->frames << e.frame_start_s << ',' << e.time << ',' << e.frame << ',' << e.direction
           << ',' << e.detail.empty() << ',' << e.detail << ',' << e.rssi << ',' << e.minimum_snr_db
           << ',' << e.eb_no_db << ',' << e.frame_bits << ',' << e.ber << ',' << e.per << ',' << e.random_draw << ',' << e.beacon_index
-          << ',' << (config_.protocol.hrcp.empirical.enabled?"empirical_packet_v1":config_.protocol.hrcp.enabled?"hrcp_iq_continuous_ldpc_v1":config_.protocol.lab_phy.enabled?"lab_iq_rect_v0_uncoded":"statistical_qpsk")
+          << ',' << (config_.protocol.hrcp.theoretical.enabled?"tjx_ldpc_awgn_v1":config_.protocol.hrcp.empirical.enabled?"empirical_packet_v1":config_.protocol.hrcp.enabled?"hrcp_iq_continuous_ldpc_v1":config_.protocol.lab_phy.enabled?"lab_iq_rect_v0_uncoded":"statistical_qpsk")
           << ',' << e.tx_sample << ',' << e.tx_samples << ',' << e.rx_sample << ',' << e.processed_samples
           << ',' << e.bit_errors << ',' << e.checked_bits << ',' << e.sync_metric
-          << ',' << e.wire_sequence << ',' << e.wire_reference << ',' << e.mcs << ',' << e.empirical_curve << ',' << e.lookup_rssi_dbm << '\n';
+          << ',' << e.wire_sequence << ',' << e.wire_reference << ',' << e.mcs << ',' << e.empirical_curve << ',' << e.lookup_rssi_dbm
+          << ',' << e.lookup_es_no_db << ',' << e.header_per << ',' << e.body_per << ',' << e.header_random_draw << ',' << e.lut_outside_range << '\n';
         return;
       }
       output_->events << e.time << ',' << e.type << ',' << e.frame

@@ -21,18 +21,22 @@ struct DroneConfig {
   double speed_kmh = 50.0;
   double altitude_m = 20.0;
   double fixed_elevation_deg = 45.0;
+  // 機首からの水平偏角。0度は進行方向。未指定は旧記録の横向き配置を維持。
+  std::optional<double> fixed_azimuth_offset_deg = std::nullopt;
 };
 struct RadioConfig {
   double frequency_hz = 272e9;
-  double power_mw = 1.0;
+  double power_mw = 1.0;  // 送信機損失の前。送信アンテナ給電端の値ならtx_insertion_loss_dbを0にする。
   double sensitivity_dbm = -68.5;
   // 未指定なら従来CSVの絶対利得を使用。指定時はCSVを正面基準に正規化する。
   std::optional<double> tx_antenna_gain_dbi = std::nullopt, rx_antenna_gain_dbi = std::nullopt;
   double tx_insertion_loss_db = 0, rx_insertion_loss_db = 0;  // 損失は正値
   double rx_lna_gain_db = 0, rx_conversion_gain_db = 0;
   double noise_bandwidth_hz = 0;  // 0なら従来互換で雑音計算なし
-  double noise_temperature_k = 300, receiver_noise_figure_db = 0;
+  double noise_temperature_k = 290, receiver_noise_figure_db = 0;  // kTBの基準温度。NFは受信系全体。
   std::optional<double> required_snr_db = std::nullopt;  // 未指定なら記録のみ
+  // equivalent_nf: アンテナ端の信号・雑音で評価。rf_chain: 従来のTJX入力端で評価。
+  std::string receiver_model = "rf_chain";  // C++で直接構成する既存呼出元の互換性を維持。
 };
 struct PowerBudget {
   double tx_gain_dbi = 0, rx_gain_dbi = 0, path_loss_db = 0;
@@ -121,6 +125,11 @@ struct LinkEvent {
   unsigned wire_sequence = 0, wire_reference = 0;
   uint64_t beacon_index = 0;  // 実験内で1始まり。応答・データも接続の起点を保持。
   std::string empirical_curve="";
+  double lookup_es_no_db = std::numeric_limits<double>::quiet_NaN();
+  double header_per = std::numeric_limits<double>::quiet_NaN();
+  double header_random_draw = std::numeric_limits<double>::quiet_NaN();
+  double body_per = std::numeric_limits<double>::quiet_NaN();
+  bool lut_outside_range = false;
   double lookup_rssi_dbm = std::numeric_limits<double>::quiet_NaN();
   int mcs = -1;
 };

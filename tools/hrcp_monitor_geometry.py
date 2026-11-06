@@ -52,9 +52,15 @@ def positions(config, seconds):
 def antenna_angles(config, seconds):
     """C++ geometry()と同じ指向角。方位は+X基準、仰角は上向き正。"""
     if config.get('antenna_mode', 'fixed') != 'tracking':
-        return ((90., float(config['drone_a'].get('fixed_elevation_deg', 45))),
-                (-90. if config['scenario'] == 'parallel' else 0.,
-                 float(config['drone_b'].get('fixed_elevation_deg', -45))))
+        parallel=config['scenario']=='parallel'
+        heading_b=180. if parallel else 90.
+        offset_a=config['drone_a'].get('fixed_azimuth_offset_deg')
+        offset_b=config['drone_b'].get('fixed_azimuth_offset_deg')
+        az_a=90. if offset_a is None else float(offset_a)
+        az_b=heading_b+((90. if parallel else -90.) if offset_b is None else float(offset_b))
+        normalize=lambda angle:(angle+180.)%360.-180.
+        return ((normalize(az_a),float(config['drone_a'].get('fixed_elevation_deg',45))),
+                (normalize(az_b),float(config['drone_b'].get('fixed_elevation_deg',-45))))
     a, b = positions(config, [seconds])
     delta = np.r_[b[0] - a[0],
                   config['drone_b']['altitude_m'] - config['drone_a']['altitude_m']]

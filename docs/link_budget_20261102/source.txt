@@ -1,0 +1,10 @@
+入力設定: /home/rosgazebo/ros2_ws/src/ros2-gazebo-comms-sim/src/comms_sim_pkg/config/drone_params.yaml
+SHA256: f35256c83dea8287d8ef3754158c2cae9720946aab9d3118ac7884e0ecfd1e06
+正対時の静的計算。方向名は本プロジェクトのA=PRDEV、B=PRCに対応。
+送信出力・感度は全距離で固定。大気吸収、偏波ずれ、指向誤差、遮蔽等は含まない。
+SNRは既存実装に合わせkTB+NFで計算。NFは受信系全体のアンテナ端換算値。
+逆算例のみ: 必要SNR=10 dB、設計余裕=6 dB。
+逆算例は実機仕様・目標BER/PERを保証しない。
+必要送信出力はNF・利得を固定し電力閾値とSNRの両方から算出する。
+NF上限と最小利得は、送信出力など他の値を現状に固定した個別の制約。
+負のNF上限はこの熱雑音モデルではNF改善だけで目標を満たせないことを示す。

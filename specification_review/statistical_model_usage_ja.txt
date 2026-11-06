@@ -10,15 +10,15 @@
   ・CSVとYAMLを変更した後、C++を再ビルドせず実行できる。
 
 動作確認用設定（実測未校正）
-  src/comms_sim_pkg/config/drone_statistical_parallel_1mps.yaml
-  src/comms_sim_pkg/config/receiver_curve_demo.csv
+  src/comms_sim_pkg/config/scenarios/drone_statistical_parallel_1mps.yaml
+  src/comms_sim_pkg/config/phy/receiver_curve_demo.csv
   デモ曲線は人工データ。実機のBER/PER/NFを表していない。
   デモCSVのper列も実測ではなく、ber列と2048bytesから算出した検証用の値。
   calibration_status=synthetic_demoとして結果とモニターに明示する。
 
 実行（リポジトリのルートから）
   python3 tools/run_statistical_model.py --replay
-  python3 tools/run_statistical_model.py --config src/comms_sim_pkg/config/drone_statistical_parallel_1mps.yaml --seed 12345
+  python3 tools/run_statistical_model.py --config src/comms_sim_pkg/config/scenarios/drone_statistical_parallel_1mps.yaml --seed 12345
   --output sim_results/任意の新規名 も指定できる。既存結果を上書きしない。
   Dockerイメージros2-gazebo-comms-sim:humble-harmonicとinstall/no_expected_rssiを使用。
   設定YAMLと参照CSVはリポジトリ内に置く。

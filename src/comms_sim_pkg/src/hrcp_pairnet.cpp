@@ -44,14 +44,18 @@ struct HrcpPairnet::Impl {
     std::string frame,reason="NO_SYNC_OR_HEADER";
     uint64_t bits=0;double minimum_snr=0;
     uint64_t tx_samples=0,header_end=0;
-    bool packet_ok=false,header_sent=false,packet_sent=false;
+    bool packet_ok=false,packet_header_ok=false,header_sent=false,packet_sent=false;
     double sampled_rssi=0,draw=-1;
     EmpiricalDecision decision;
+    TjxTheoryDecision theory_decision;
+    double sampled_snr=0,header_draw=-1;
     HrcpReception packet;
     HrcpReception decoded;unsigned sequence=0,reference=0,mcs=0;
   };
   std::unique_ptr<HrcpSignalMonitor> monitor;
   std::unique_ptr<EmpiricalPhy> empirical;
+  std::unique_ptr<TjxTheoreticalPhy> theoretical;
+  bool PacketMode()const{return bool(empirical)||bool(theoretical);}
   uint64_t packet_number=0;
   HrcpSignalMonitor::Reception observed_ab,observed_ba;
   bool admission_known=false,admission_ok=false;
@@ -71,6 +75,11 @@ struct HrcpPairnet::Impl {
   double amp[2]={0,0},rx_watts_per_unit[2]={0,0};LinkSample channel;std::mt19937_64 rng;
   bool observed_connected=false;
   Impl(HrcpConfig config,Evaluate e,Log l):c(config),evaluate(std::move(e)),log(std::move(l)),codec(config.decode_threads),modem(codec),rng(c.seed){
+    if(c.theoretical.enabled){
+      if(c.empirical.enabled||c.noise_enabled||c.expected_rssi_admission_enabled||c.monitor_waveforms)
+        throw std::invalid_argument("TJX理論LUTモデルと実測/連続AWGN/Expected RSSI/波形表示は併用できません");
+      theoretical=std::make_unique<TjxTheoreticalPhy>(c.theoretical);theoretical->ValidateLengths(c.data_bytes);
+    }
     if(c.empirical.enabled){
       if(c.noise_enabled||c.expected_rssi_admission_enabled||c.monitor_waveforms)
         throw std::invalid_argument("実測モデルではAWGN/Expected RSSI/波形表示を無効にしてください");
@@ -83,11 +92,11 @@ struct HrcpPairnet::Impl {
 #endif
     if(c.noise_enabled&&c.noise_threads>1)noise_buffer.resize(65536);
     if(!c.data_bytes||c.data_bytes>2048||c.requested_atp_ms>65535||!c.atp_ms||c.atp_ms>65535||!std::isfinite(c.expected_rssi_dbm)||c.expected_rssi_dbm< -225||c.expected_rssi_dbm>30||!std::isfinite(c.channel_sample_s)||c.channel_sample_s<=0||c.bandwidth_ab_hz<=0||c.bandwidth_ba_hz<=0)throw std::invalid_argument("HRCP設定範囲外");
-    if(c.monitor_enabled){if(c.monitor_path.empty())throw std::invalid_argument("信号モニター出力先が未指定です");monitor=std::make_unique<HrcpSignalMonitor>(c.monitor_path,ticks(c.monitor_rssi_interval_s),empirical?0:ticks(c.monitor_rssi_window_s),c.monitor_only||bool(empirical),c.noise_enabled);}
+    if(c.monitor_enabled){if(c.monitor_path.empty())throw std::invalid_argument("信号モニター出力先が未指定です");monitor=std::make_unique<HrcpSignalMonitor>(c.monitor_path,ticks(c.monitor_rssi_interval_s),PacketMode()?0:ticks(c.monitor_rssi_window_s),c.monitor_only||PacketMode(),c.noise_enabled);}
     a.atp_ms=c.requested_atp_ms?c.requested_atp_ms:c.atp_ms;b.atp_ms=c.atp_ms;
     // 無効時もBeaconのフィールド幅は維持。-225は未使用値で、閾値の引下げで代用しない。
     beacon.period_us=period/3520;beacon.atp_ms=c.atp_ms;beacon.expected_rssi_dbm=c.expected_rssi_admission_enabled?int(std::ceil(c.expected_rssi_dbm)):-225;NewId();
-    if(!empirical)for(unsigned endpoint=0;endpoint<2;++endpoint)for(unsigned phase=0;phase<2;++phase)
+    if(!PacketMode())for(unsigned endpoint=0;endpoint<2;++endpoint)for(unsigned phase=0;phase<2;++phase)
       receivers[endpoint][phase]=std::make_unique<HrcpStreamReceiver>(codec,[this,endpoint,phase](const HrcpReception&r){if(r.header_event)Receive(endpoint,phase,r);else {pending_rx.push_back({endpoint,phase,r});next_event=std::min(next_event,now+1);}});
     if(empirical){
       // 必要な曲線・PER長さの不足は、長いシナリオを開始する前に検出する。
@@ -100,7 +109,9 @@ struct HrcpPairnet::Impl {
       for(auto [rate,mcs]:c.empirical.mcs_by_rate)empirical->Evaluate(!c.data_from_prc,"DATA",mcs,c.data_bytes,-60);
     }
     HrcpHeader h;for(const auto &body:{hrcp_beacon_encode(beacon),hrcp_command(0,0,hrcp_request_payload(c.atp_ms))}){
-      h.body_bytes=body.size();if(double(HrcpCodec::FrameChips(h,true))/1.76e9>8e-6)throw std::invalid_argument("Beacon/Requestが8usを超えます");}
+      h.body_bytes=body.size();
+      const auto chips=theoretical?tjx_frame_chips(c.theoretical.control_mcs,body.size(),true,c.theoretical.pilot):HrcpCodec::FrameChips(h,true);
+      if(double(chips)/1.76e9>8e-6)throw std::invalid_argument("Beacon/Requestが8usを超えます");}
   }
   const char* ProtocolStage()const{
     return observed_connected?"DATA":a.associated?"ACK":
@@ -163,10 +174,11 @@ struct HrcpPairnet::Impl {
     else if(action==Action::Disassociate){mac.type=3;mac.subframes=1;mac.destination=e.reject_destination;body=hrcp_command(1,2,{0});setup=true;}
     else if(action==Action::DataAck){mac.type=4;mac.ack_policy=2;mac.last_type=1;mac.last_sequence=e.last_data;}
     else return;
-    const auto frame_channel=empirical?evaluate(double(now)/clock_hz):channel;
+    const auto frame_channel=PacketMode()?evaluate(double(now)/clock_hz):channel;
     double rate=0;unsigned actual_mcs=c.empirical.control_mcs;
     if(empirical&&action==Action::Data){rate=is_a?frame_channel.rate_ab_gbps:frame_channel.rate_ba_gbps;
       actual_mcs=empirical->Mcs(rate>0?rate:c.empirical.mcs_by_rate.begin()->first);}
+    if(theoretical)actual_mcs=action==Action::Data?tjx_mcs_ids().at(e.mcs):c.theoretical.control_mcs;
     HrcpHeader header;header.mac=hrcp_mac_encode(mac);header.seed=rng()%16;header.mcs=action==Action::Data?e.mcs:0;
     Wave w;w.ab=is_a;w.start=now;w.index=index;header.body_bytes=body.size();
     w.arrival=now+uint64_t(std::ceil(frame_channel.distance/299792458.*clock_hz));
@@ -186,22 +198,42 @@ struct HrcpPairnet::Impl {
       w.packet_ok=w.draw>=w.decision.per;
       w.reason=w.decision.below_range?"EMPIRICAL_BELOW_RANGE":"EMPIRICAL_PACKET_ERROR";
       if(action==Action::Data&&rate<=0){w.packet_ok=false;w.reason="NO_PAYLOAD_MCS";}
+      w.packet_header_ok=w.packet_ok;
       w.packet.header=header;w.packet.body=body;w.packet.header_ok=w.packet.body_ok=true;
       w.packet.sfd_end_chip=(w.arrival+128)/2;
+      w.half_duplex=(is_a?b:a).tx_end>w.arrival;
+      for(auto &old:waves)if(old.ab!=is_a&&now<old.end&&now+w.tx_samples>old.arrival)old.half_duplex=true;
+    }else if(theoretical){
+      // LUTは短縮LDPCブロック単位。headerとbodyを別抽選し、正常headerのACKはbody失敗でも処理する。
+      header.mcs=0;header.pilot=c.theoretical.pilot;
+      w.tx_samples=2*tjx_frame_chips(actual_mcs,body.size(),setup,header.pilot);
+      w.header_end=w.arrival+2*((setup?5120:3328)+1216);w.end=w.arrival+w.tx_samples;
+      w.sampled_rssi=is_a?frame_channel.rssi_ab:frame_channel.rssi_ba;
+      w.sampled_snr=is_a?frame_channel.budget_ab.snr_db:frame_channel.budget_ba.snr_db;
+      w.theory_decision=theoretical->Evaluate(actual_mcs,body.size(),w.sampled_snr,is_a?c.bandwidth_ab_hz:c.bandwidth_ba_hz);
+      const auto key=c.theoretical.seed^(++packet_number*0x9e3779b97f4a7c15ULL);
+      w.header_draw=(mix(key^0xd1b54a32d192ed03ULL)>>11)*0x1p-53;
+      w.draw=(mix(key)>>11)*0x1p-53;
+      w.packet_header_ok=w.header_draw>=w.theory_decision.header_per;
+      w.packet_ok=w.packet_header_ok&&w.draw>=w.theory_decision.body_per;
+      w.reason=w.packet_header_ok?"TJX_LDPC_BODY_ERROR":"TJX_EH_HEADER_ERROR";
+      w.bits=tjx_coded_bits(actual_mcs,body.size())*tjx_mcs(actual_mcs).repetition+266*4;
+      w.packet.header=header;w.packet.body=body;w.packet.header_ok=w.packet_header_ok;w.packet.body_ok=w.packet_ok;
+      w.packet.reason=w.packet_ok?"":w.reason;w.packet.sfd_end_chip=(w.arrival+128)/2;
       w.half_duplex=(is_a?b:a).tx_end>w.arrival;
       for(auto &old:waves)if(old.ab!=is_a&&now<old.end&&now+w.tx_samples>old.arrival)old.half_duplex=true;
     }else{
       w.chips=modem.Transmit(header,body,setup);w.tx_samples=2*w.chips.size();w.end=w.arrival+w.tx_samples;
       w.bits=w.chips.size()+HrcpCodec::BodyBlocks(header)*(header.pilot?56:64)*(HrcpCodec::BitsPerSymbol(header.mcs)-1);
     }
-    w.minimum_snr=is_a?channel.budget_ab.snr_db:channel.budget_ba.snr_db;
-    w.frame=name(mac,body);e.last_tx=w.frame;w.sequence=action==Action::Data?e.data_sequence:0;w.reference=mac.last_sequence;w.mcs=empirical?actual_mcs:header.mcs;
+    w.minimum_snr=is_a?frame_channel.budget_ab.snr_db:frame_channel.budget_ba.snr_db;
+    w.frame=name(mac,body);e.last_tx=w.frame;w.sequence=action==Action::Data?e.data_sequence:0;w.reference=mac.last_sequence;w.mcs=PacketMode()?actual_mcs:header.mcs;
     w.link_setup=!observed_connected&&(action==Action::Beacon||action==Action::Request||action==Action::Response||action==Action::CommandAck);
     e.tx_end=now+w.tx_samples;e.send_at=never;e.send=Action::None;e.recover_at=never;
     if(action!=Action::Beacon&&action!=Action::Request&&action!=Action::Disassociate){e.recover=action;e.recover_at=e.tx_end+(is_a?rifs_a:rifs_b);}
     if(action==Action::Request||action==Action::Response)e.timer.StartOnce(e.tx_end,c.setup_timeout_ms?ticks(c.setup_timeout_ms*.001):Atp(e));
     if(action==Action::CommandAck&&e.timer.start==never)e.timer.Refresh(e.tx_end,Atp(e));
-    if(!empirical){receivers[is_a?0:1][0]->Reset();receivers[is_a?0:1][1]->Reset();}
+    if(!PacketMode()){receivers[is_a?0:1][0]->Reset();receivers[is_a?0:1][1]->Reset();}
     if(log){LinkEvent event{double(now)/clock_hz,"TX",name(mac,body),is_a?"A_TO_B":"B_TO_A","HRCP_SC"};event.tx_sample=now;event.tx_samples=w.tx_samples;event.rx_sample=w.arrival;event.frame_start_s=double(now)/clock_hz;event.frame_bits=w.bits;event.mcs=w.mcs;event.beacon_index=index;event.wire_sequence=action==Action::Data?e.data_sequence:0;event.wire_reference=mac.last_sequence;if(e.timer.start!=never){event.wait_start_s=double(e.timer.start)/clock_hz;event.deadline_s=double(e.timer.deadline)/clock_hz;}event.rssi=is_a?channel.rssi_ab:channel.rssi_ba;event.minimum_snr_db=is_a?channel.budget_ab.snr_db:channel.budget_ba.snr_db;log(event);}
     waves.push_back(std::move(w));UpdateObserver();
   }
@@ -282,7 +314,7 @@ struct HrcpPairnet::Impl {
     }
     if(DataSender(is_a)&&mac.last_type==1&&mac.last_sequence==e.data_sequence){
       ++stats.data_frames;++e.data_generation;e.data_sequence=(e.data_sequence+1)%1024;
-      if(++e.successes>=10){e.mcs=std::min(3u,e.mcs+1);e.successes=0;}
+      if(++e.successes>=10){e.mcs=std::min(theoretical?5u:3u,e.mcs+1);e.successes=0;}
     }else if(DataSender(is_a)&&mac.type==4&&mac.last_type==1){e.mcs=e.mcs? e.mcs-1:0;e.successes=0;}
     if(mac.ack_policy==2)Schedule(e,DataSender(is_a)?Action::Data:Action::DataAck,end+sifs);
   }
@@ -310,20 +342,20 @@ struct HrcpPairnet::Impl {
     for(auto &w:waves){
       if(!w.header_sent&&now>=w.header_end){
         w.header_sent=true;
-        if(w.packet_ok&&!w.half_duplex){auto r=w.packet;r.header_event=true;r.end_chip=w.header_end/2;Receive(w.ab?1:0,w.header_end%2,r);}
+        if(w.packet_header_ok&&!w.half_duplex){auto r=w.packet;r.header_event=true;r.end_chip=w.header_end/2;Receive(w.ab?1:0,w.header_end%2,r);}
       }
       if(!w.packet_sent&&now>=w.end){
         w.packet_sent=true;
-        if(w.packet_ok&&!w.half_duplex){auto r=w.packet;r.end_chip=w.end/2;Receive(w.ab?1:0,w.end%2,r);}
+        if((w.packet_ok||(theoretical&&w.packet_header_ok))&&!w.half_duplex){auto r=w.packet;r.end_chip=w.end/2;Receive(w.ab?1:0,w.end%2,r);}
       }
     }
   }
   void Events(){
     Dispatch();
-    if(empirical)PacketEvents();
+    if(PacketMode())PacketEvents();
     if(now>=next_channel){channel=evaluate(double(now)/clock_hz);channel_sample=now;next_channel=now+ticks(c.channel_sample_s);
       if(!std::isfinite(channel.distance)||channel.distance<0)throw std::invalid_argument("伝搬距離が不正です");
-      if(!empirical)for(unsigned i=0;i<2;++i){double snr=i?channel.budget_ab.snr_db:channel.budget_ba.snr_db,bw=i?c.bandwidth_ab_hz:c.bandwidth_ba_hz;
+      if(!PacketMode())for(unsigned i=0;i<2;++i){double snr=i?channel.budget_ab.snr_db:channel.budget_ba.snr_db,bw=i?c.bandwidth_ab_hz:c.bandwidth_ba_hz;
         if(!std::isfinite(snr))throw std::invalid_argument("HRCPには有限のSNRが必要です");
         amp[i]=std::sqrt(std::pow(10.,snr/10.)*bw/1.76e9);
         // 位相0の整合フィルタ出力: 雑音の正規化電力は1、等価雑音帯域は1.76GHz。
@@ -351,23 +383,27 @@ struct HrcpPairnet::Impl {
           if(!w.received)monitor->MarkFailure(w.arrival,w.end,w.ab,w.ab?channel.rssi_ab:channel.rssi_ba,w.frame,o.reason);
         }}
       if(log){LinkEvent event{double(w.end)/clock_hz,"FRAME_RESULT",w.frame,w.ab?"A_TO_B":"B_TO_A",w.received?"":w.half_duplex?"HALF_DUPLEX_OVERLAP":w.reason};
-        event.frame_start_s=double(w.start)/clock_hz;event.tx_sample=w.start;event.tx_samples=w.tx_samples;event.rx_sample=w.arrival;event.processed_samples=empirical?0:w.tx_samples;event.frame_bits=w.bits;event.mcs=w.mcs;event.beacon_index=w.index;
+        event.frame_start_s=double(w.start)/clock_hz;event.tx_sample=w.start;event.tx_samples=w.tx_samples;event.rx_sample=w.arrival;event.processed_samples=PacketMode()?0:w.tx_samples;event.frame_bits=w.bits;event.mcs=w.mcs;event.beacon_index=w.index;
         event.minimum_snr_db=w.minimum_snr;event.rssi=w.ab?channel.rssi_ab:channel.rssi_ba;event.sync_metric=w.decoded.sync_metric;event.wire_sequence=w.sequence;event.wire_reference=w.reference;
         if(empirical){event.rssi=w.sampled_rssi;event.minimum_snr_db=std::numeric_limits<double>::quiet_NaN();
           event.ber=w.decision.ber<0?std::numeric_limits<double>::quiet_NaN():w.decision.ber;
           event.per=w.decision.per;event.random_draw=w.draw;event.empirical_curve=w.decision.curve;event.lookup_rssi_dbm=w.decision.lookup_dbm;}
+        if(theoretical){event.rssi=w.sampled_rssi;event.minimum_snr_db=w.sampled_snr;
+          event.per=w.theory_decision.per;event.ber=w.theory_decision.ber;event.random_draw=w.draw;
+          event.header_random_draw=w.header_draw;event.header_per=w.theory_decision.header_per;event.body_per=w.theory_decision.body_per;
+          event.lookup_es_no_db=w.theory_decision.es_no_db;event.lut_outside_range=w.theory_decision.outside_range;}
         log(event);}
     }
     while(!waves.empty()&&waves.front().reported)waves.pop_front();
     if(monitor)monitor->ObserveStage(now,ProtocolStage());
-    if(empirical&&monitor&&now>=next_monitor){
+    if(PacketMode()&&monitor&&now>=next_monitor){
       next_monitor=now+ticks(std::max(c.monitor_rssi_interval_s,.00001));
       monitor->ObserveTime(now?now-1:0);monitor->PushRssi(now,channel.rssi_ba,channel.rssi_ab);
       if(monitor->Due())monitor->Publish(MonitorStatus());
     }
     next_event=std::min({next_channel,next_beacon,a.send_at,b.send_at,a.recover_at,b.recover_at,a.timer.deadline,b.timer.deadline});
     for(const auto&w:waves)if(!w.reported)next_event=std::min(next_event,w.end+4);
-    if(empirical){
+    if(PacketMode()){
       if(monitor)next_event=std::min(next_event,next_monitor);
       for(const auto &w:waves){if(!w.header_sent)next_event=std::min(next_event,w.header_end);if(!w.packet_sent)next_event=std::min(next_event,w.end);}
     }
@@ -376,7 +412,7 @@ struct HrcpPairnet::Impl {
   }
   void Advance(double time){
     uint64_t until=ticks(time);if(until<now)throw std::invalid_argument("HRCP時刻を逆行できません");
-    if(empirical){
+    if(PacketMode()){
       while(now<until){if(now>=next_event)Events();auto stop=std::min(until,next_event);
         if(observed_connected)connected_samples+=stop-now;
         now=stop;}

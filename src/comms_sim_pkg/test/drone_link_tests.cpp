@@ -22,7 +22,7 @@ int main(int argc, char **argv) {
   try {
     check(argc == 2, "設定ディレクトリが必要です");
     // 無効時は基準距離・正面利得を使ったExpected RSSI計算を必要としない。
-    auto hrcp_file=std::filesystem::path(argv[1])/"drone_hrcp_fspl.yaml";
+    auto hrcp_file=std::filesystem::path(argv[1])/"scenarios"/"drone_hrcp_fspl.yaml";
     check(!ScenarioConfig::Load(hrcp_file.string()).protocol.hrcp.expected_rssi_admission_enabled,"今回の設定で期待RSSIが有効です");
     auto hrcp_yaml=YAML::LoadFile(hrcp_file.string());
     for(const char*key:{"e_plane","h_plane"})hrcp_yaml["antenna"][key]=std::filesystem::absolute(hrcp_file.parent_path()/hrcp_yaml["antenna"][key].as<std::string>()).string();
@@ -53,6 +53,45 @@ int main(int argc, char **argv) {
     check(short_config.allow_pre_encounter_end&&short_config.duration_s==.01,"最接近前の再生記録を設定できません");
     near((geometry(short_config,.005).a-geometry(raw_config,.005).a).norm(),0);
     near((geometry(short_config,.005).b-geometry(raw_config,.005).b).norm(),0);
+    hrcp_yaml["drone_a"]["fixed_azimuth_offset_deg"]=0;
+    hrcp_yaml["drone_b"]["fixed_azimuth_offset_deg"]=0;
+    const auto forward_config=load_hrcp();
+    check(forward_config.a.fixed_azimuth_offset_deg==0. && forward_config.b.fixed_azimuth_offset_deg==0.,
+          "進行方向への水平偏角0度を読み込めません");
+    // 新旧YAMLの受信モデル選択と、参照面の混在を防ぐ検証。
+    for (const char *direction : {"radio_ab", "radio_ba"})
+      for (const char *key : {"rx_lna_gain_db", "rx_conversion_gain_db", "rx_insertion_loss_db"})
+        hrcp_yaml[direction].remove(key);
+    const auto nf_config = load_hrcp();
+    check(nf_config.ab.receiver_model=="equivalent_nf" && nf_config.ba.receiver_model=="equivalent_nf",
+          "旧回路キーなしでは等価NFモデルを選択してください");
+    hrcp_yaml["radio_ab"]["receiver_model"] = "unknown";
+    bool rejected_model=false;try{load_hrcp();}catch(const std::invalid_argument&){rejected_model=true;}
+    check(rejected_model,"未知の受信モデルを受理しています");
+    hrcp_yaml["radio_ab"]["receiver_model"] = "equivalent_nf";
+    for (const char *key : {"rx_lna_gain_db", "rx_conversion_gain_db", "rx_insertion_loss_db"}) {
+      hrcp_yaml["radio_ab"][key] = 3.;
+      bool rejected_chain=false;try{load_hrcp();}catch(const std::invalid_argument&){rejected_chain=true;}
+      check(rejected_chain,"等価NFモデルと独立受信回路の混在を受理しています");
+      hrcp_yaml["radio_ab"][key] = 0.;
+      check(load_hrcp().ab.receiver_model=="equivalent_nf","明示モデルより旧キー判定が優先されています");
+      hrcp_yaml["radio_ab"].remove(key);
+    }
+    hrcp_yaml["radio_ab"]["receiver_model"] = "rf_chain";
+    check(load_hrcp().ab.receiver_model=="rf_chain","明示的な旧モデルを選択できません");
+    hrcp_yaml["radio_ab"].remove("noise_temperature_k");
+    hrcp_yaml["radio_ba"]["noise_temperature_k"] = 300.;
+    const auto temperature_config = load_hrcp();
+    near(temperature_config.ab.noise_temperature_k, 290);
+    near(temperature_config.ba.noise_temperature_k, 300);
+    // 開始距離0mの掃引では、交錯時刻0秒から離脱側を計算する。
+    hrcp_yaml["encounter_time_s"] = 0.;
+    const auto at_encounter = load_hrcp();
+    near(at_encounter.encounter_s, 0);
+    near(geometry(at_encounter, 0).a.x(), 0);
+    hrcp_yaml["encounter_time_s"] = -.1;
+    bool rejected_negative_encounter=false;try{load_hrcp();}catch(const std::invalid_argument&){rejected_negative_encounter=true;}
+    check(rejected_negative_encounter,"負の交錯時刻を受理しています");
     std::filesystem::remove(loader_file);
     ScenarioConfig c;
     auto g = geometry(c, 20);
@@ -86,6 +125,52 @@ int main(int argc, char **argv) {
       Eigen::Vector3d axis = AntennaPatternParser::rpy_to_rotmat(rpy.x(),rpy.y(),rpy.z())*Eigen::Vector3d::UnitX();
       check(axis.dot(delta)>0, "十字の固定アンテナは交差後に相手のいる側を向く");
     }
+    // 修正条件：十字固定は機首方向にA上45度、B下45度。
+    c.a.fixed_azimuth_offset_deg=0.;c.b.fixed_azimuth_offset_deg=0.;
+    for (double t : {0.,20.,40.}) {
+      auto forward=geometry(c,t);
+      const auto axis_a=AntennaPatternParser::rpy_to_rotmat(forward.antenna_a_rpy.x(),forward.antenna_a_rpy.y(),forward.antenna_a_rpy.z())*Eigen::Vector3d::UnitX();
+      const auto axis_b=AntennaPatternParser::rpy_to_rotmat(forward.antenna_b_rpy.x(),forward.antenna_b_rpy.y(),forward.antenna_b_rpy.z())*Eigen::Vector3d::UnitX();
+      near(axis_a.x(),std::sqrt(.5));near(axis_a.y(),0);near(axis_a.z(),std::sqrt(.5));
+      near(axis_b.x(),0);near(axis_b.y(),std::sqrt(.5));near(axis_b.z(),-std::sqrt(.5));
+    }
+    c.a.fixed_azimuth_offset_deg.reset();c.b.fixed_azimuth_offset_deg.reset();
+    // 双方向60 GHz：roll=0、各進行方向からyaw/pitchを±45度に固定。
+    // 設定ファイルを読み込み、両機が交錯点の手前10/sqrt(2) mで正対する。
+    for (const char *model : {"threshold", "statistical"}) {
+      const auto facing_config=ScenarioConfig::Load(
+          (std::filesystem::path(argv[1])/"scenarios"/(std::string("drone_dual60_cross_fixed_")+model+".yaml")).string());
+      near(facing_config.ab.frequency_hz,60e9);near(facing_config.ba.frequency_hz,60e9);
+      check(facing_config.scenario=="cross" && facing_config.antenna_mode=="fixed","正対設定は十字固定です");
+      for (double speed : {1.,3.,5.}) {
+        auto facing=facing_config;
+        facing.a.speed_kmh=facing.b.speed_kmh=speed*3.6;
+        facing.encounter_s=30./speed;facing.duration_s=90./speed;
+        const double remaining=10./std::sqrt(2.);
+        const double time=facing.encounter_s-remaining/speed;
+        const auto pose=geometry(facing,time);
+        near(pose.a.x(),-remaining);near(pose.b.y(),-remaining);
+        near((pose.b-pose.a).norm(),std::sqrt(200.));
+        near(pose.antenna_a_rpy.x(),0);near(pose.antenna_b_rpy.x(),0);
+        near(pose.antenna_a_rpy.y(),-M_PI/4);near(pose.antenna_b_rpy.y(),M_PI/4);
+        near(pose.antenna_a_rpy.z()-pose.heading_a,-M_PI/4);
+        near(pose.antenna_b_rpy.z()-pose.heading_b,M_PI/4);
+        const Eigen::Vector3d axis_a=AntennaPatternParser::rpy_to_rotmat(0,pose.antenna_a_rpy.y(),pose.antenna_a_rpy.z())*Eigen::Vector3d::UnitX();
+        const Eigen::Vector3d axis_b=AntennaPatternParser::rpy_to_rotmat(0,pose.antenna_b_rpy.y(),pose.antenna_b_rpy.z())*Eigen::Vector3d::UnitX();
+        near((axis_a-(pose.b-pose.a).normalized()).norm(),0);
+        near((axis_b-(pose.a-pose.b).normalized()).norm(),0);
+        near(axis_a.dot(axis_b),-1);
+        const auto angles_a=parser.calculate_antenna_frame_angles(pose.a,pose.b,pose.antenna_a_rpy);
+        const auto angles_b=parser.calculate_antenna_frame_angles(pose.b,pose.a,pose.antenna_b_rpy);
+        near(angles_a.first,0);near(angles_a.second,0);
+        near(angles_b.first,0);near(angles_b.second,0);
+        for (double offset : {-1.,1.}) {
+          const auto adjacent=geometry(facing,time+offset);
+          near((adjacent.antenna_a_rpy-pose.antenna_a_rpy).norm(),0);
+          near((adjacent.antenna_b_rpy-pose.antenna_b_rpy).norm(),0);
+        }
+      }
+    }
     c.scenario = "parallel";
     g = geometry(c, 20);
     auto fixed_a = parser.calculate_antenna_frame_angles(g.a, g.b, g.antenna_a_rpy);
@@ -100,9 +185,9 @@ int main(int argc, char **argv) {
     bool invalid = false; try { c.Validate(); } catch (const std::invalid_argument &) { invalid = true; }
     check(invalid,"負の速度を拒否");
     c = ScenarioConfig{};
-    c.e_plane = std::string(argv[1])+"/e_plane.csv";
-    c.h_plane = std::string(argv[1])+"/h_plane.csv";
-    c.mcs_table = std::string(argv[1])+"/MCStable.csv";
+    c.e_plane = std::string(argv[1])+"/antennas/e_plane.csv";
+    c.h_plane = std::string(argv[1])+"/antennas/h_plane.csv";
+    c.mcs_table = std::string(argv[1])+"/phy/MCStable.csv";
     c.antenna_mode = "tracking";
     RadioModel radio(c); auto r = radio.Evaluate(20);
     near(r.rssi_ab-r.rssi_ba, 10*std::log10(1/0.4)-20*std::log10(272./60));

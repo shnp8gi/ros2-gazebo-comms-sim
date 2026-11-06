@@ -31,12 +31,47 @@ Gazebo Harmonicのworldプラグイン `DroneEncounterPlugin` が2機の軌道�
 
 初期値は `h_a=20 m`、`h_b=30 m`、`d_y=10 m`、両機50 km/h、`t_c=20 s`、終了40 s。
 最接近距離は並行で√200 m、十字で10 m。速度を個別に変えても、各機は`t_c`に各経路の中央へ到達する。
+`encounter_time_s: 0` は航路中央から離脱を開始する条件。開始位置0 mの掃引に使用できる。負の交錯時刻は受理しない。
 
 FuelのParrot Bebop 2モデルを2個配置し、`Model::SetWorldPoseCmd`で理想軌道を指定する。機体とアンテナの原点を通信位置とし、機体形状の遮蔽は計算しない。`gazebo_poses.csv`はPhysics更新後の実位置であり、解析式から再生成した位置ではない。
 
 固定アンテナはAの仰角+45°、Bの仰角−45°。並行ではAが+Y側（方位角+90°）、Bが−Y側（−90°）を向くため、高度差・横間隔が各10 mの最接近時に正対する。十字も横向きの固定搭載とし、Aは機首の左90°（世界方位+90°）、Bは機首の右90°（世界方位0°）を向く。これは交差後に相手のいる側を向く配置。十字の最接近時には相手が真上／真下に来るため、仰角±45°の固定方式では正対しない。追従アンテナは相手方向へ瞬時に向く。機体姿勢とアンテナ姿勢を分離し、Gazeboのpitch符号と仰角の符号を反転して扱う。`off_axis_*_deg` はアンテナ正面軸と相手方向のなす3次元角度。E/H各面の角度とは異なる。
 
 ## 無線計算
+
+### アンテナ端基準・等価NFモデル
+
+`radio_ab` / `radio_ba` の `receiver_model: equivalent_nf` は次の構成で計算する。
+
+```text
+送信電力 → 送信機損失 → 送信アンテナ利得 → 通信路 → 受信アンテナ利得 → 受信系の等価NF
+Pantenna = 10 log10(power_mw) − tx_insertion_loss_db + Gtx − PL + Grx  [dBm]
+Ninput = 10 log10(k × T × B) + 30 + receiver_noise_figure_db           [dBm]
+SNR = Pantenna − Ninput                                             [dB]
+```
+
+NFは雑音に適用し、信号電力からは差し引かない。送信機損失は受信系のNFに含めない。
+`power_mw` が送信アンテナ給電端の電力なら `tx_insertion_loss_db: 0` にする。
+受信側のLNA・変換利得・挿入損失は独立して計算せず、各設定は省略または0とする。
+`receiver_noise_figure_db` はLNA等を含む受信系全体の等価値であり、増幅利得をNFへ加算しない。
+
+RSSI・`receiver_input_dbm`・`sensitivity_dbm`・MCS表の電力はアンテナ端基準。
+`receiver_noise_dbm` は `input_referred_noise_dbm` と一致する。互換用のCSV列
+`after_lna_dbm` / `after_mixer_dbm` は未適用を示す `nan` を記録する。
+実測曲線は同じ参照面で用意するか、既存の `empirical_phy.rssi_offset_ab_db` /
+`rssi_offset_ba_db` で曲線の参照面に合わせる。曲線に含まれる雑音劣化にNFを重ねて適用しない。
+閾値のみ・実測RSSI曲線のモデルではNFは記録用であり、受信判定への追加のSNR劣化は導入しない。
+SNRを用いる理論PHY・AWGNモデルではNFが受信成否に反映される。
+
+`receiver_model` 省略時は、旧受信回路キー（`rx_lna_gain_db`, `rx_conversion_gain_db`,
+`rx_insertion_loss_db`）が一つでもあれば `rf_chain`、なければ `equivalent_nf` を選ぶ。
+旧設定の再現には明示的な `receiver_model: rf_chain` も使用できる。
+双方向60 GHzの `drone_dual60_cross_fixed_{threshold,statistical,theoretical}.yaml` は等価NFモデルを使用する。
+これらは従来の総受信利得が0 dBなので、電力・SNR・閾値・曲線の数値は維持できる。
+総受信利得が0でない旧設定を切り替える場合は、感度を旧総利得だけ引き下げ、MCS表や曲線も同じ参照面へ換算する。
+以下のExcel照合と `drone_params.yaml` は従来の `rf_chain` の説明である。
+
+### 従来回路モデル・Excel照合
 
 参照資料はユーザー提供の `260828_リンクバジェット試算03_5.xlsx`。
 「リンク_4m_1」の構成・送信電力・周波数を採用することをユーザーが選択した。
@@ -88,20 +123,25 @@ LNA等は線形・一定利得のモデルであり、飽和・圧縮・AGCは�
 
 ### 熱雑音
 
-資料の300 K、1.76 Gbaud、ロールオフ0.23から、帯域幅を2.1648 GHzとする。
+熱雑音電力は基準温度290 KでkTBから計算する。現行の実行設定と温度省略時の既定値は290 K。
+資料の1.76 Gbaud、ロールオフ0.23から、帯域幅を2.1648 GHzとする。
 ここではこの帯域を雑音等価帯域として近似する。受信フィルタの実測等価帯域が分かれば変更する。
 
 ```text
 B = 1.76e9 × (1 + 0.23) = 2.1648e9 Hz
 Nthermal = 10 × log10(k × T × B) + 30  [dBm]
 k = 1.380649e−23 J/K
+T = 290 K（noise_temperature_kで明示変更可能）
 Ninput = Nthermal + NF
 Grx_chain = GLNA + Gconversion − Lrx
 Ntjx = Ninput + Grx_chain
 SNR = Ptjx − Ntjx = Pantenna − Ninput  [dB]
 ```
 
-`Nthermal ≈ −80.473777 dBm`。NF=10 dBなら入力換算雑音は約−70.473777 dBm。
+`Nthermal ≈ −80.621009 dBm`。受信系全体のNF=8 dBなら入力換算雑音は約−72.621009 dBm、
+NF=10 dBなら約−70.621009 dBm。NFはkTBに一度だけ加算する。
+従来の300 Kに比べ、信号電力は変わらず、雑音は約0.147233 dB低下しSNRは同量改善する。
+原Excelと保存済み結果の300 K条件は保持し、Excel照合テストでは300 Kを明示指定する。
 272 GHzのNF=10 dBはExcelから採用し、アンテナ出力を基準とした受信系全体の等価NFと解釈する。
 61 GHz側のNFはExcelに記載がなく、ユーザー指定で0 dBの理想受信機とする。実測値が分かれば変更する。
 0 dB設定では挿入損失等による実機の雑音劣化まで再現するものではない。
@@ -229,7 +269,7 @@ RSSIそのものにGaussian乱数を加える処理ではない。`ab_reachable`
 
 ## 試作I/Q PHY
 
-[drone_lab_phy.yaml](src/comms_sim_pkg/config/drone_lab_phy.yaml) は40秒、[drone_lab_phy_smoke.yaml](src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml) は1.1秒の試作PHY実行設定。出力設定の `phy_error_model` は `lab_iq_rect_v0_uncoded`、`protocol_revision` は `indexed_beacon_lab_mac80_v0` となる。
+[drone_lab_phy.yaml](src/comms_sim_pkg/config/scenarios/drone_lab_phy.yaml) は40秒、[drone_lab_phy_smoke.yaml](src/comms_sim_pkg/config/scenarios/drone_lab_phy_smoke.yaml) は1.1秒の試作PHY実行設定。出力設定の `phy_error_model` は `lab_iq_rect_v0_uncoded`、`protocol_revision` は `indexed_beacon_lab_mac80_v0` となる。
 
 独自のMAC／PHYヘッダー、ヘッダー誤り訂正、CRC、preambleを含むビット系列を生成する。A→BはQPSK、B→Aはπ/2回転QPSK、1.76 Gbaud・2 sample/symbolの矩形パルスを使う。受信フレーム窓に実際のGaussian雑音を加算し、相関・復調・ヘッダー検査・body CRCから成否を決める。理論PERによる抽選は行わない。
 

@@ -14,7 +14,7 @@ import yaml
 def main():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', type=Path, default=root/'src/comms_sim_pkg/config/drone_statistical_parallel_1mps.yaml')
+    parser.add_argument('--config', type=Path, default=root/'src/comms_sim_pkg/config/scenarios/drone_statistical_parallel_1mps.yaml')
     parser.add_argument('--output', type=Path)
     parser.add_argument('--seed', type=int, help='受信成否の乱数seedを上書き')
     parser.add_argument('--replay', action='store_true')

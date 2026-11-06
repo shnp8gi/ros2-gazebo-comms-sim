@@ -18,7 +18,7 @@ import yaml
 
 def main():
     parser=argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config',default='src/comms_sim_pkg/config/drone_hrcp_fspl.yaml')
+    parser.add_argument('--config',default='src/comms_sim_pkg/config/scenarios/drone_hrcp_fspl.yaml')
     parser.add_argument('--output',required=True)
     parser.add_argument('--jobs',type=int,default=1,help='同時に実行する条件数')
     parser.add_argument('--cpu-budget',type=int,default=0,help='各段階の復号スレッド総数。0なら設定値を維持')

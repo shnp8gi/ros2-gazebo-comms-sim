@@ -9,6 +9,8 @@ Ubuntu 22.04 / ROS 2 Humble / Gazebo Harmonicで動作する通信シミュレ�
 
 ## 初めて使う場合
 
+環境構築からシナリオ変更・実行・結果確認までの手順は、[社内利用マニュアル](docs/internal_manual_ja.md)を参照してください。編集用のサンプル設定と、モデル別の実行・解析手順も同梱しています。
+
 1. [起動](#起動)の手順で既定設定を実行する。
 2. 条件を変える場合は、[設定とモデルの選択](#設定とモデルの選択)から対象のYAMLを開く。
 3. 実行後は、[結果の確認](#結果の確認)に従って保存先の設定・集計・ログを見る。
@@ -80,24 +82,51 @@ GUIの有無はシミュレーション起動時に選ぶ。通常の実験で�
 
 設定ファイルは [src/comms_sim_pkg/config/](src/comms_sim_pkg/config/) にある。用途に合うYAMLを選び、内部の設定と参照CSVを確認する。
 
+```text
+config/
+├── drone_params.yaml  # 既定の起動設定
+├── scenarios/        # モデル別・実験別・動作確認用のYAML
+├── antennas/         # E面・H面のCSVとグラフ（PNG）
+├── phy/              # MCS表、受信曲線と出典情報、理論LUT
+└── dds/              # Fast DDSのXML設定
+```
+
+YAML内の参照パスはそのYAMLの配置先を基準にする。`scenarios/` の設定では
+`../antennas/e_plane.csv`、`../phy/MCStable.csv` のように指定する。
+設定を別の場所へコピーする場合は参照パスも調整する。
+
 | 用途 | 設定・説明の入口 |
 |---|---|
 | 既定の統計AWGNモデルを使う | [drone_params.yaml](src/comms_sim_pkg/config/drone_params.yaml)、[基本仕様](specification.md) |
-| 受信電力の閾値によるモデルを使う | [drone_threshold_parallel_1mps.yaml](src/comms_sim_pkg/config/drone_threshold_parallel_1mps.yaml) |
-| BER/PERの受信曲線による確率モデルを使う | [drone_statistical_parallel_1mps.yaml](src/comms_sim_pkg/config/drone_statistical_parallel_1mps.yaml)、[統計モデルの使い方](specification_review/statistical_model_usage_ja.txt) |
-| HRCPの波形・接続処理を使う | [drone_hrcp.yaml](src/comms_sim_pkg/config/drone_hrcp.yaml)、[HRCP実装の説明](specification_review/runtime_hrcp_ja.txt) |
-| 試作I/Q PHYを使う | [drone_lab_phy.yaml](src/comms_sim_pkg/config/drone_lab_phy.yaml)、[試作PHYの説明](specification_review/runtime_lab_phy_ja.txt) |
+| 受信電力の閾値によるモデルを使う | [drone_threshold_parallel_1mps.yaml](src/comms_sim_pkg/config/scenarios/drone_threshold_parallel_1mps.yaml) |
+| BER/PERの受信曲線による確率モデルを使う | [drone_statistical_parallel_1mps.yaml](src/comms_sim_pkg/config/scenarios/drone_statistical_parallel_1mps.yaml)、[統計モデルの使い方](specification_review/statistical_model_usage_ja.txt) |
+| HRCPの波形・接続処理を使う | [drone_hrcp.yaml](src/comms_sim_pkg/config/scenarios/drone_hrcp.yaml)、[HRCP実装の説明](specification_review/runtime_hrcp_ja.txt) |
+| 試作I/Q PHYを使う | [drone_lab_phy.yaml](src/comms_sim_pkg/config/scenarios/drone_lab_phy.yaml)、[試作PHYの説明](specification_review/runtime_lab_phy_ja.txt) |
 
-`config/` には短時間の動作確認用やモニター用の設定もある。モデルによって受信判定・接続処理・集計の定義が異なるため、比較する設定の説明を先に確認する。
+`config/scenarios/` には短時間の動作確認用やモニター用の設定もある。モデルによって受信判定・接続処理・集計の定義が異なるため、比較する設定の説明を先に確認する。
 
 ### 別の設定ファイルを指定する
 
+双方向60 GHz・十字固定で正対させる場合は
+`drone_dual60_cross_fixed_threshold.yaml`（閾値モデル）または
+`drone_dual60_cross_fixed_statistical.yaml`（受信曲線モデル）を指定する。
+各機の進行方向座標系で、Aはroll/pitch/yaw = 0/−45/−45度、
+Bは0/＋45/＋45度に固定する（YAMLの仰角はpitchと逆符号）。
+高度20 m・30 m、同速度のため、各機が交錯点の手前7.071067812 mにいるとき正対する。
+この時の機体間距離は14.142135624 m。既定の速度1 m/sでは開始22.928932188秒後。
+開始位置は各機とも交錯点の手前30 m、交錯時刻30秒、走行時間90秒（交錯後60 mまで）。
+新規の生CSVキャンペーンでも`dual60`にこの角度を適用する。保存済みの結果・設定は以前の条件の記録として保持する。
+
+```bash
+bash tools/start_gui.sh config_file:=/workspace/src/comms_sim_pkg/config/scenarios/drone_dual60_cross_fixed_threshold.yaml
+```
+
 ```bash
 # 単独実行：ROS launchの引数で指定
-bash tools/start_headless.sh config_file:=/workspace/src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml
+bash tools/start_headless.sh config_file:=/workspace/src/comms_sim_pkg/config/scenarios/drone_lab_phy_smoke.yaml
 
 # 全組み合わせ：実行ツールの引数で指定
-bash tools/start_headless.sh --all --config src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml
+bash tools/start_headless.sh --all --config src/comms_sim_pkg/config/scenarios/drone_lab_phy_smoke.yaml
 ```
 
 Docker内ではリポジトリのルートが `/workspace` になる。YAML内のCSVの相対パスは、そのYAMLの所在ディレクトリが基準。
@@ -202,6 +231,40 @@ ros2 launch comms_sim_pkg sim_launch.py headless:=true
 モデルはリポジトリに同梱しており、実行時の取得は不要。
 
 ## ブランチの使い分け
+
+`feature/tjx-theoretical-phy` はTJXの6種類のMCSとLDPC/AWGNシミュレーションから作る理論モデル。
+実測受信曲線・従来の `MCStable.csv` を使わず、共通MACで送信時間・ACK・再送を評価する。
+設定は `src/comms_sim_pkg/config/scenarios/drone_dual60_cross_fixed_theoretical.yaml`。
+生成・実行・30試行の集計手順は [TJX理論モデルの開発メモ](docs/tjx_theoretical_model_ja.md) を参照。
+
+双方向60 GHzの閾値・実測曲線・理論PHY設定は `receiver_model: equivalent_nf` を使う。
+送信電力→送信機損失→送信アンテナ利得→通信路→受信アンテナ利得で信号電力を求め、受信系全体のNFを雑音へ反映する。
+送信電力がアンテナ給電端の値なら `tx_insertion_loss_db: 0` とする。
+旧回路設定の互換性と感度の参照面は [無線計算の仕様](specification.md#アンテナ端基準等価nfモデル) を参照。
+
+### ミリ波・テラヘルツの4パターン比較
+
+[run_mmwave_thz_study.py](tools/run_mmwave_thz_study.py) は、実測PERモデルとTJX理論モデルを各条件30試行で比較する。
+4パターンの速度比較（開始30 m、1～5 m/sを0.1 m/s刻み）と、追従2パターンの開始距離比較（速度1～5 m/sの整数値、開始1～60 m）を実行し、分類が変わる距離区間を0.1 m刻みで追加評価する。
+評価対象は初回リンク確立までのTimeoutであり、接続後の総通信量はこの計算には含まない。
+十字固定は進行方向基準のroll/pitch/yawをA=(0°,−45°,−45°)、B=(0°,+45°,+45°)とする。
+
+```bash
+cmake -S tools/tjx_theory -B build/tjx_theory -DCMAKE_BUILD_TYPE=Release
+cmake --build build/tjx_theory --target initial_connection_sweep radio_profile -j4
+python3 tools/run_mmwave_thz_study.py --jobs 6 --output sim_results/mmwave_thz_example
+for pattern in parallel_fixed parallel_tracking cross_fixed cross_tracking; do
+  build/tjx_theory/radio_profile \
+    "sim_results/mmwave_thz_example/configs/${pattern}_theoretical.yaml" \
+    "sim_results/mmwave_thz_example/internal/${pattern}_radio.csv"
+done
+python3 tools/write_mmwave_thz_report.py sim_results/mmwave_thz_example
+```
+
+参照資料は既定で `~/Downloads/初回リンク確立までのTimeout回数評価.docx` を使用する。別の保存場所は `--reference` で指定する。
+中断後は同じ引数に `--resume` を加えると、保存済みの条件を検証して続行する。
+`report/` にPDF・編集可能なWord・HTML・平均と分散のCSVを出力し、入力・ソース・校正等の内部情報は `internal/` と `inputs/` に保存する。
+レポート出力にはNumPy、Matplotlib、ReportLab、Pillow、fontToolsと日本語フォントを使用する。
 
 `main` はドローン通信実験用。車両HO（ハンドオーバー）の開発は別系統で保持する。
 

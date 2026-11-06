@@ -252,8 +252,8 @@
     "U02_slot_table_scope": "substitute_profile_uses_Table7-13; original_Table7-14_ambiguity_not_resolved",
     "U05_hybrid_capability_exchange": "different_PHY_capability_translation_not_used; direction_specific_RF_mapping_retained"
   },
-  "runtime_config": "../src/comms_sim_pkg/config/drone_hrcp.yaml",
-  "runtime_smoke_config": "../src/comms_sim_pkg/config/drone_hrcp_smoke.yaml",
+  "runtime_config": "../src/comms_sim_pkg/config/scenarios/drone_hrcp.yaml",
+  "runtime_smoke_config": "../src/comms_sim_pkg/config/scenarios/drone_hrcp_smoke.yaml",
   "runtime_notes": "runtime_hrcp_ja.txt",
   "provisional_interpretations": {
     "slot_encoding": "0.1us_per_unit_user_approved",

@@ -1,0 +1,84 @@
+# 双方向60 GHz・十字固定。roll=0、進行方向基準のpitch/yawはA=-45/-45度、B=+45/+45度。
+# 仰角はpitchと逆符号。高度差10 m・同速度で交錯点の手前7.071067812 mにて正対。
+# 各機1 m/s、開始30 m手前：正対時刻22.928932188 s、機体間距離14.142135624 m。
+scenario: cross
+antenna_mode: fixed
+drone_a:
+  speed_kmh: 3.6
+  altitude_m: 20.0
+  fixed_elevation_deg: 45.0
+  fixed_azimuth_offset_deg: -45.0
+drone_b:
+  speed_kmh: 3.6
+  altitude_m: 30.0
+  fixed_elevation_deg: -45.0
+  fixed_azimuth_offset_deg: 45.0
+lateral_separation_m: 10.0
+encounter_time_s: 30.0
+duration_s: 90.0
+radio_ab:
+  frequency_hz: 60000000000.0
+  power_mw: 0.19952623149688797
+  sensitivity_dbm: -68.5
+  tx_insertion_loss_db: 3.0 # power_mwが送信アンテナ給電端の値なら0にする
+  receiver_model: equivalent_nf # アンテナ端基準。受信回路は全体の等価NFに集約
+  noise_temperature_k: 290.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 10.0
+  required_snr_db: null
+radio_ba:
+  frequency_hz: 60000000000.0
+  power_mw: 0.19952623149688797
+  sensitivity_dbm: -68.5
+  tx_insertion_loss_db: 3.0 # power_mwが送信アンテナ給電端の値なら0にする
+  receiver_model: equivalent_nf # アンテナ端基準。受信回路は全体の等価NFに集約
+  noise_temperature_k: 290.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 10.0
+  required_snr_db: null
+propagation:
+  exponent: 2.0
+antenna:
+  e_plane: ../antennas/e_plane.csv
+  h_plane: ../antennas/h_plane.csv
+  max_attenuation_db: null
+mcs_table: ../phy/MCStable.csv
+awgn:
+  enabled: false
+  seed: 20261027
+  bit_rate_bps: 3.52e9
+  control_frame_bytes: 64
+protocol:
+  data_from_prc: true
+  response_timeout_ms: 500.0
+  ack_timeout_ms: 500.0
+  inactivity_timeout_ms: 500.0
+  beacon_interval_ms: 0.14
+  control_frame_us: 20.0
+  ifs_us: 10.0
+  data_frame_us: 100.0
+simulation:
+  physics_step_s: 0.01
+  real_time_factor: 20.0
+  log_interval_s: 0.01
+lab_phy:
+  enabled: false
+hrcp:
+  enabled: false
+  data_bytes: 2048
+  atp_ms: 500
+  expected_rssi_admission_enabled: false
+  association_reference_distance_m: 30.0
+  monitor_enabled: false
+  monitor_waveforms: false
+  noise_threads: 4
+  monitor_rssi_interval_s: 0.01
+  decode_threads: 4
+preview_mode: true
+campaign_note: 生CSV合成利得、正面利得補正なし、減衰打切りなし。初回リンク確立までのTimeout。
+output_dir: /workspace/sim_results/dual60_cross_facing_threshold
+raw_antenna_campaign:
+  profile: dual60
+  boresight_override: false
+  attenuation_clipping: false
+antenna_mount_revision: cross_facing_yaw_pitch_45deg

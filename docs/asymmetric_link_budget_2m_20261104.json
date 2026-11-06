@@ -1,0 +1,34 @@
+{
+  "source": "src/comms_sim_pkg/config/drone_statistical_measured_provisional.yaml",
+  "source_sha256": "ca04056bd7e5cff0e1b6e7275a4b95722c9b766843a9c288b6b722803b251fca",
+  "formula": "Pr_dBm = 10*log10(power_mw) - tx_insertion_loss_db + Gtx_dBi - 20*log10(4*pi*frequency_hz*distance_m/299792458) + Grx_dBi",
+  "reference": "受信アンテナ端の信号電力。受信回路利得・受信回路損失は加減算しない。NFは信号電力に適用しない。",
+  "assumptions": [
+    "アンテナ正対・同一偏波",
+    "自由空間伝搬",
+    "大気吸収・遮蔽・反射・ケーブル追加損失・指向ずれを含めない",
+    "送信機損失と正面利得は既存設定の仮定値であり実機測定値の確認前",
+    "距離は両アンテナ間の直線距離"
+  ],
+  "profiles": {
+    "thz_ba": {
+      "frequency_hz": 272000000000.0,
+      "power_mw": 0.7943282347242815,
+      "tx_insertion_loss_db": 0.0,
+      "tx_antenna_gain_dbi": 24.0,
+      "rx_antenna_gain_dbi": 24.0
+    },
+    "mmwave_ab": {
+      "frequency_hz": 61000000000.0,
+      "power_mw": 0.15848931924611134,
+      "tx_insertion_loss_db": 3.0,
+      "tx_antenna_gain_dbi": 23.0,
+      "rx_antenna_gain_dbi": 23.0
+    }
+  },
+  "overrides": {
+    "reason": "ユーザー指定によりテラ波272 GHz・ミリ波61 GHzへ変更",
+    "radio_ba.frequency_hz": 272000000000.0,
+    "radio_ab.frequency_hz": 61000000000.0
+  }
+}

@@ -1,6 +1,7 @@
 #pragma once
 #include <cstdint>
 #include "comms_sim_pkg/empirical_phy.hpp"
+#include "comms_sim_pkg/tjx_theoretical_phy.hpp"
 #include <functional>
 #include <memory>
 #include <string>
@@ -18,6 +19,7 @@ struct HrcpConfig {
   std::string monitor_path;
   uint64_t seed=20261027;
   EmpiricalConfig empirical;
+  TjxTheoryConfig theoretical;
   unsigned setup_timeout_ms=0; // 0は旧動作（交渉ATP）を維持。
   unsigned data_bytes=2048,atp_ms=500,requested_atp_ms=0; // 0ならatp_msを要求
   double reference_distance_m=30;

@@ -34,8 +34,8 @@ Gazebo接続済み仮PHY: lab_iq_rect_v0_uncoded
 
 設定と起動
 既存drone_params.yamlは従来の統計AWGNを維持。
-新モード: src/comms_sim_pkg/config/drone_lab_phy.yaml（通常40秒、最接近20秒）。
-動作確認: src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml（1.1秒、最接近0.55秒）。
+新モード: src/comms_sim_pkg/config/scenarios/drone_lab_phy.yaml（通常40秒、最接近20秒）。
+動作確認: src/comms_sim_pkg/config/scenarios/drone_lab_phy_smoke.yaml（1.1秒、最接近0.55秒）。
 lab_phy.enabled=trueのとき、awgn.control_frame_bytes、protocol.control_frame_us、protocol.data_frame_usは従来方式用の値として残るが、仮PHYの長さ/送信時間には使わない。
 仮PHYはcontrol body16 byte、ACK0、DATAはlab_phy.data_bytes、送信時間は実際の符号化ビット数から算出する。
 
@@ -44,7 +44,7 @@ sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 100
 テスト:
 sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp sim bash -c "ctest --test-dir build/drone/comms_sim_pkg --output-on-failure"'
 4条件headless動作確認（新しい結果ディレクトリを自動作成）:
-sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp -e DISPLAY= -e GZ_PARTITION=lab_phy_run sim python3 tools/run_drone_scenarios.py --config src/comms_sim_pkg/config/drone_lab_phy_smoke.yaml'
+sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp -e DISPLAY= -e GZ_PARTITION=lab_phy_run sim python3 tools/run_drone_scenarios.py --config src/comms_sim_pkg/config/scenarios/drone_lab_phy_smoke.yaml'
 通常40秒を実行する場合はconfigをdrone_lab_phy.yamlへ変更する。今回確認したのは短時間の動作であり、40秒の4条件比較結果とは異なる。
 
 検証と出力

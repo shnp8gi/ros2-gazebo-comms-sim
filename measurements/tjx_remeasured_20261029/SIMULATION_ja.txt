@@ -1,14 +1,14 @@
 ② 実測曲線＋仮定による通しシミュレーション
 
 設定:
- src/comms_sim_pkg/config/drone_statistical_measured_provisional.yaml
+ src/comms_sim_pkg/config/scenarios/drone_statistical_measured_provisional.yaml
 受信曲線:
- src/comms_sim_pkg/config/receiver_curve_measured_provisional.csv
+ src/comms_sim_pkg/config/phy/receiver_curve_measured_provisional.csv
 曲線の出典・仮定:
  同CSV.provenance.json。実行時に結果のinputs/へコピーされる。
 
 実行（リポジトリルートから）:
- python3 tools/run_statistical_model.py --config src/comms_sim_pkg/config/drone_statistical_measured_provisional.yaml --replay
+ python3 tools/run_statistical_model.py --config src/comms_sim_pkg/config/scenarios/drone_statistical_measured_provisional.yaml --replay
 
 並行固定、各機1 m/s、50秒。強制減衰なし。
 ③と共通のMAC処理を用い、受信だけ実測PER曲線からフレームごとに独立抽選する。

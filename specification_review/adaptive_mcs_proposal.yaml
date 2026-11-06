@@ -2,7 +2,7 @@
 profile_id: adaptive_mcs_design_v0
 status: proposal_only_not_loaded
 user_confirmed_adaptive_modulation: true
-reference_table: src/comms_sim_pkg/config/MCStable.csv
+reference_table: src/comms_sim_pkg/config/phy/MCStable.csv
 reference_rate_definition: unknown
 rssi_reference_plane: null
 reference_plane_candidates:

@@ -11,8 +11,8 @@ drone_b:
   altitude_m: 30.0
   fixed_elevation_deg: -45.0
 lateral_separation_m: 10.0     # parallelのみ。crossは平面上で経路が交差。
-encounter_time_s: 20.0         # この時刻に両機が経路中央を通過する
-duration_s: 40.0
+encounter_time_s: 0.001         # この時刻に両機が経路中央を通過する
+duration_s: 0.002
 radio_ab:
   frequency_hz: 60.48e9
   power_mw: 0.15848931924611134 # -8 dBm。Excel「リンク_4m_1」W11
@@ -23,7 +23,7 @@ radio_ab:
   rx_lna_gain_db: 0.0
   rx_conversion_gain_db: 0.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9
   receiver_noise_figure_db: 0.0 # ユーザー指定：理想受信機。実測値が分かってから変更
   required_snr_db: null
@@ -37,7 +37,7 @@ radio_ba:
   rx_lna_gain_db: 25.0
   rx_conversion_gain_db: 3.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9 # 1.76 Gbaud × (1 + 0.23)。雑音等価帯域の近似
   receiver_noise_figure_db: 10.0 # アンテナ端換算の受信系等価NFとして採用
   required_snr_db: null      # 固定SNR閾値なし。HRCPは実際の波形復号で受信成否を判定
@@ -45,10 +45,10 @@ propagation:
   exponent: 2.0
   # c=299792458 m/s。Excelの近似値3e8とはPLが約0.006 dB異なる。
 antenna:
-  e_plane: e_plane.csv
-  h_plane: h_plane.csv
+  e_plane: ../antennas/e_plane.csv
+  h_plane: ../antennas/h_plane.csv
   max_attenuation_db: 30.0
-mcs_table: MCStable.csv         # 両帯域の実測値ではなく比較専用テーブル（新方式のMCS選択には使用しない）
+mcs_table: ../phy/MCStable.csv         # 両帯域の実測値ではなく比較専用テーブル（新方式のMCS選択には使用しない）
 awgn:
   enabled: true                # HRCPの連続I/Q受信とAWGNを有効化
   seed: 20261027               # 再現用。別シードで独立の乱数系列を試せる
@@ -67,7 +67,7 @@ protocol:
 simulation:
   physics_step_s: 0.0001
   real_time_factor: 5.0
-  log_interval_s: 0.01
+  log_interval_s: 0.0001
 
 # IEEE由来のHRCPフィールドとLDPCを使う研究実装。完全規格適合ではない。
 lab_phy:

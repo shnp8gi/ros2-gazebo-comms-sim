@@ -42,6 +42,70 @@ int main(int argc, char **argv) {
     near(defaults.ab.rx_lna_gain_db, 0, "PRC受信LNAなし");
     near(defaults.ab.sensitivity_dbm, -68.5, "設定AB感度維持");
     near(defaults.ba.sensitivity_dbm, -68.5, "設定BA感度維持");
+    if (defaults.ab.receiver_model != "rf_chain" || defaults.ba.receiver_model != "rf_chain")
+      throw std::runtime_error("旧回路設定の参照面が変わっています");
+    // 新構成の検証: 0 dBm - 3 dB + 20 dBi - 100 dB + 24 dBi = -59 dBm。
+    RadioConfig nf;
+    near(nf.noise_temperature_k, 290, "kTBの既定温度は290K");
+    near(defaults.ab.noise_temperature_k, 290, "AB設定の雑音温度");
+    near(defaults.ba.noise_temperature_k, 290, "BA設定の雑音温度");
+    nf.receiver_model = "equivalent_nf";
+    nf.power_mw = 1; nf.tx_insertion_loss_db = 3;
+    nf.noise_bandwidth_hz = 2.1648e9;
+    nf.receiver_noise_figure_db = 10;
+    const auto nf_budget = calculate_power_budget(nf, 100, 20, 24);
+    near(nf_budget.eirp_dbm, 17, "送信機損失を送信アンテナ前に適用");
+    near(nf_budget.receiver_input_dbm, -59, "等価NFモデルのアンテナ端信号");
+    near(nf_budget.thermal_noise_dbm, -80.6210094016926, "290K・2.1648GHzのkTB");
+    near(nf_budget.receiver_noise_dbm, -70.6210094016926, "等価NFモデルの入力換算雑音");
+    near(nf_budget.snr_db, 11.6210094016926, "等価NFモデルのSNR");
+    auto warm = nf; warm.noise_temperature_k = 300;
+    const auto warm_budget = calculate_power_budget(warm, 100, 20, 24);
+    near(nf_budget.receiver_input_dbm, warm_budget.receiver_input_dbm, "温度変更で信号電力は変わらない");
+    near(nf_budget.snr_db - warm_budget.snr_db, 0.147232568207064, "300Kから290KへのSNR改善");
+    if (!std::isnan(nf_budget.after_lna_dbm) || !std::isnan(nf_budget.after_mixer_dbm))
+      throw std::runtime_error("存在しない受信回路段に電力を記録しています");
+    // 送信電力の参照位置を移し、損失を0にすれば同じリンクを再現できる。
+    auto at_terminal = nf;
+    at_terminal.power_mw = std::pow(10., -3./10); at_terminal.tx_insertion_loss_db = 0;
+    const auto terminal_budget = calculate_power_budget(at_terminal, 100, 20, 24);
+    near(terminal_budget.receiver_input_dbm, nf_budget.receiver_input_dbm, "給電端電力と送信損失0の等価性");
+    near(terminal_budget.snr_db, nf_budget.snr_db, "送信電力基準の変更でSNRを維持");
+    auto less_loss = nf; less_loss.tx_insertion_loss_db = 0;
+    const auto less_loss_budget = calculate_power_budget(less_loss, 100, 20, 24);
+    near(less_loss_budget.snr_db - nf_budget.snr_db, 3, "送信損失3dBを外すとSNRが3dB上昇");
+    near(less_loss_budget.receiver_noise_dbm, nf_budget.receiver_noise_dbm, "送信損失は受信雑音に含めない");
+    nf.receiver_noise_figure_db += 3;
+    const auto noisy_budget = calculate_power_budget(nf, 100, 20, 24);
+    near(noisy_budget.receiver_input_dbm, nf_budget.receiver_input_dbm, "NFは信号を減衰させない");
+    near(noisy_budget.snr_db - nf_budget.snr_db, -3, "NF増加はSNRに一度だけ反映");
+    // 現行60GHz設定は旧総受信利得0dB。閾値・MCS・曲線の参照電力を維持する。
+    for (const std::string model : {"threshold", "statistical", "theoretical"}) {
+      const auto current = ScenarioConfig::Load(std::string(argv[1])+"/scenarios/drone_dual60_cross_fixed_"+model+".yaml");
+      if (current.ab.receiver_model != "equivalent_nf" || current.ba.receiver_model != "equivalent_nf")
+        throw std::runtime_error("双方向60GHzに等価NFモデルが適用されていません");
+      auto legacy = current;
+      for (auto *r : {&legacy.ab, &legacy.ba}) {
+        r->receiver_model = "rf_chain"; r->rx_conversion_gain_db = 3; r->rx_insertion_loss_db = 3;
+      }
+      const RadioModel current_radio(current), legacy_radio(legacy);
+      for (double t : {0., 19., 22.928932188, 30., 40.}) {
+        const auto actual = current_radio.Evaluate(t), previous = legacy_radio.Evaluate(t);
+        near(actual.rssi_ab, previous.rssi_ab, "60GHz AB参照電力の維持");
+        near(actual.rssi_ba, previous.rssi_ba, "60GHz BA参照電力の維持");
+        near(actual.budget_ab.snr_db, previous.budget_ab.snr_db, "60GHz AB SNRの維持");
+        near(actual.budget_ba.snr_db, previous.budget_ba.snr_db, "60GHz BA SNRの維持");
+        if (current.protocol.hrcp.theoretical.enabled) {
+          if (!std::isnan(actual.rate_ab_gbps) || !std::isnan(actual.rate_ba_gbps))
+            throw std::runtime_error("理論PHYが旧MCS表のレートを参照しています");
+        } else {
+          near(actual.rate_ab_gbps, previous.rate_ab_gbps, "60GHz AB MCS表参照の維持");
+          near(actual.rate_ba_gbps, previous.rate_ba_gbps, "60GHz BA MCS表参照の維持");
+        }
+        if (actual.ab_ok != previous.ab_ok || actual.ba_ok != previous.ba_ok)
+          throw std::runtime_error("60GHzの閾値判定が変わっています");
+      }
+    }
     auto fixture = YAML::LoadFile(argv[2]);
     // Excelはc=3e8。シミュレータの厳密なcによりPLが増える分だけ受信電力が下がる。
     const double correction = 20*std::log10(3e8/299792458.0);
@@ -49,6 +113,8 @@ int main(int argc, char **argv) {
       const auto cells = sheet.second;
       auto value = [&](const std::string &cell) { return cells[cell]["value"].as<double>(); };
       auto c = defaults;
+      // 原資料の300K条件を明示して照合する。現行の既定温度は290K。
+      c.ab.noise_temperature_k = c.ba.noise_temperature_k = 300;
       c.scenario = "cross"; c.antenna_mode = "tracking";
       c.b.altitude_m = c.a.altitude_m + value("B3");
       c.ba.power_mw = std::pow(10., value("B11")/10);
@@ -119,6 +185,6 @@ int main(int argc, char **argv) {
     bool rejected = false;
     try { c.Validate(); } catch (const std::invalid_argument &) { rejected = true; }
     if (!rejected) throw std::runtime_error("負値の損失を拒否できていません");
-    std::cout << "Excel全4距離の各段電力、方向別利得、既定値、損失符号の検証成功\n";
+    std::cout << "等価NF・送信機損失・60GHz互換性、Excel全4距離の各段電力、方向別利得、既定値、損失符号の検証成功\n";
   } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }
 }

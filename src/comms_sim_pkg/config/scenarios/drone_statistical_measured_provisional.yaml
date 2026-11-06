@@ -22,7 +22,7 @@ radio_ab:
   rx_lna_gain_db: 0.0
   rx_conversion_gain_db: 0.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9
   receiver_noise_figure_db: 0.0
   required_snr_db: null
@@ -36,17 +36,17 @@ radio_ba:
   rx_lna_gain_db: 25.0
   rx_conversion_gain_db: 3.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9
   receiver_noise_figure_db: 10.0
   required_snr_db: null
 propagation:
   exponent: 2.0
 antenna:
-  e_plane: e_plane.csv
-  h_plane: h_plane.csv
+  e_plane: ../antennas/e_plane.csv
+  h_plane: ../antennas/h_plane.csv
   max_attenuation_db: 30.0
-mcs_table: MCStable.csv
+mcs_table: ../phy/MCStable.csv
 awgn:
   enabled: false
   seed: 20261027
@@ -83,7 +83,7 @@ preview_mode: false
 monitor_only: false
 empirical_phy:
   enabled: true
-  table: receiver_curve_measured_provisional.csv
+  table: ../phy/receiver_curve_measured_provisional.csv
   metric: per
   per_length_policy: independent
   calibration_status: measured_with_assumptions

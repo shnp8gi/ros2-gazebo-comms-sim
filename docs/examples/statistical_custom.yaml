@@ -1,17 +1,19 @@
-# ② BER/PERモデル。波形モデルとMACを共用。実測未校正の動作確認用設定。
+# 社内マニュアルの変更例。両機18 km/h、高度20/28 m、横間隔6 m、最接近5 s、終了10 s。
+# YAMLを別のディレクトリへ移動する場合は、CSVの相対パスも変更してください。
+# BER/PERモデル。receiver_curve_demo.csvは人工曲線で、実機校正済みではありません。
 scenario: parallel
 antenna_mode: fixed
 drone_a:
-  speed_kmh: 3.6
+  speed_kmh: 18.0
   altitude_m: 20.0
-  fixed_elevation_deg: 45.0
+  fixed_elevation_deg: 53.1301023542
 drone_b:
-  speed_kmh: 3.6
-  altitude_m: 30.0
-  fixed_elevation_deg: -45.0
-lateral_separation_m: 10.0
-encounter_time_s: 25.0
-duration_s: 50.0
+  speed_kmh: 18.0
+  altitude_m: 28.0
+  fixed_elevation_deg: -53.1301023542
+lateral_separation_m: 6.0
+encounter_time_s: 5.0
+duration_s: 10.0
 radio_ab:
   frequency_hz: 60.48e9
   power_mw: 0.15848931924611134
@@ -22,7 +24,7 @@ radio_ab:
   rx_lna_gain_db: 0.0
   rx_conversion_gain_db: 0.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9
   receiver_noise_figure_db: 0.0
   required_snr_db: null
@@ -36,17 +38,17 @@ radio_ba:
   rx_lna_gain_db: 25.0
   rx_conversion_gain_db: 3.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9
   receiver_noise_figure_db: 10.0
   required_snr_db: null
 propagation:
   exponent: 2.0
 antenna:
-  e_plane: e_plane.csv
-  h_plane: h_plane.csv
+  e_plane: ../../src/comms_sim_pkg/config/antennas/e_plane.csv
+  h_plane: ../../src/comms_sim_pkg/config/antennas/h_plane.csv
   max_attenuation_db: 30.0
-mcs_table: MCStable.csv
+mcs_table: ../../src/comms_sim_pkg/config/phy/MCStable.csv
 awgn:
   enabled: false
   seed: 20261027
@@ -83,7 +85,7 @@ preview_mode: false
 monitor_only: false
 empirical_phy:
   enabled: true
-  table: receiver_curve_demo.csv
+  table: ../../src/comms_sim_pkg/config/phy/receiver_curve_demo.csv
   metric: ber                         # ber または per
   per_length_policy: exact            # per時のみ。長さ違いを近似する場合はindependentを明示
   calibration_status: synthetic_demo  # 実測値へ差し替え後はmeasured_unvalidated等へ変更

@@ -36,7 +36,8 @@ def main():
         bases={m:yaml.safe_load((source/f'{m}.yaml').read_text()) for m in ['threshold','statistical']}
         for name in ['e_plane.csv','h_plane.csv','MCStable.csv','receiver_curve_measured_provisional.csv',
                      'receiver_curve_measured_provisional.csv.provenance.json']:
-            shutil.copy2(ROOT/'src/comms_sim_pkg/config'/name,root/'inputs'/name)
+            category='antennas' if name in ('e_plane.csv','h_plane.csv') else 'phy'
+            shutil.copy2(ROOT/'src/comms_sim_pkg/config'/category/name,root/'inputs'/name)
         for profile in ['original','dual60']:
             (root/'configs'/profile).mkdir()
             for model,base in bases.items():
@@ -48,6 +49,11 @@ def main():
                 c['mcs_table']=container_path(root/'inputs/MCStable.csv')
                 if model=='statistical':c['empirical_phy']['table']=container_path(root/'inputs/receiver_curve_measured_provisional.csv')
                 if profile=='dual60':
+                    # 各進行方向から水平・上下に45度。高度差10 m・同速度なら
+                    # 交錯点の手前10/sqrt(2) mで両方の指向軸が相手へ一致する。
+                    c['drone_a'].update(fixed_elevation_deg=45.,fixed_azimuth_offset_deg=-45.)
+                    c['drone_b'].update(fixed_elevation_deg=-45.,fixed_azimuth_offset_deg=45.)
+                    c['antenna_mount_revision']='cross_facing_yaw_pitch_45deg'
                     radio=copy.deepcopy(c['radio_ab'])
                     radio.update(frequency_hz=60e9,power_mw=10**(-7/10),
                         tx_insertion_loss_db=base['radio_ab']['tx_insertion_loss_db'],rx_lna_gain_db=0.,

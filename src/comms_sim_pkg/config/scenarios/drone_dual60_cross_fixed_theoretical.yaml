@@ -1,0 +1,101 @@
+# TJX理論モデル。各機1 m/s、十字固定、交錯点手前7.071 mで正対。
+scenario: cross
+antenna_mode: fixed
+drone_a:
+  speed_kmh: 3.6
+  altitude_m: 20.0
+  fixed_elevation_deg: 45.0
+  fixed_azimuth_offset_deg: -45.0
+drone_b:
+  speed_kmh: 3.6
+  altitude_m: 30.0
+  fixed_elevation_deg: -45.0
+  fixed_azimuth_offset_deg: 45.0
+lateral_separation_m: 10.0
+encounter_time_s: 30.0
+duration_s: 90.0
+radio_ab:
+  frequency_hz: 60000000000.0
+  power_mw: 0.19952623149688797
+  sensitivity_dbm: -68.5
+  tx_insertion_loss_db: 3.0 # power_mwが送信アンテナ給電端の値なら0にする
+  receiver_model: equivalent_nf # アンテナ端基準。受信回路は全体の等価NFに集約
+  noise_temperature_k: 290.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 10.0
+  required_snr_db: null
+radio_ba:
+  frequency_hz: 60000000000.0
+  power_mw: 0.19952623149688797
+  sensitivity_dbm: -68.5
+  tx_insertion_loss_db: 3.0 # power_mwが送信アンテナ給電端の値なら0にする
+  receiver_model: equivalent_nf # アンテナ端基準。受信回路は全体の等価NFに集約
+  noise_temperature_k: 290.0
+  noise_bandwidth_hz: 2.1648e9
+  receiver_noise_figure_db: 10.0
+  required_snr_db: null
+propagation:
+  exponent: 2.0
+antenna:
+  e_plane: ../antennas/e_plane.csv
+  h_plane: ../antennas/h_plane.csv
+  max_attenuation_db: null
+awgn:
+  enabled: false
+  seed: 20261027
+  bit_rate_bps: 3.52e9
+  control_frame_bytes: 64
+protocol:
+  data_from_prc: true
+  response_timeout_ms: 500.0
+  ack_timeout_ms: 500.0
+  inactivity_timeout_ms: 500.0
+  beacon_interval_ms: 0.14
+  control_frame_us: 20.0
+  ifs_us: 10.0
+  data_frame_us: 100.0
+simulation:
+  physics_step_s: 0.01
+  real_time_factor: 20.0
+  log_interval_s: 0.01
+lab_phy:
+  enabled: false
+hrcp:
+  enabled: true
+  data_bytes: 2048
+  atp_ms: 10000
+  setup_timeout_ms: 500
+  expected_rssi_admission_enabled: false
+  association_reference_distance_m: 30.0
+  monitor_enabled: true
+  monitor_waveforms: false
+  noise_threads: 1
+  monitor_rssi_interval_s: 0.01
+  decode_threads: 1
+preview_mode: false
+monitor_only: false
+output_dir: sim_results/tjx_theoretical_cross
+raw_antenna_campaign:
+  profile: dual60
+  boresight_override: false
+  attenuation_clipping: false
+antenna_mount_revision: cross_facing_yaw_pitch_45deg
+theoretical_phy:
+  enabled: true
+  table: ../phy/tjx_theoretical_lut.yaml
+  control_mcs: 3
+  pilot: true
+  seed: 20261102
+model_assumptions:
+  profile: TJX_MCS_with_HRCP_LDPC_and_frame_timing
+  channel: ideal_sync_known_channel_awgn
+  chip_rate_hz: 1760000000
+  header: EH_8_4_spreading_4_common_to_all_TJX_modes
+  bpsk_fec: HRCP_LDPC_1440_1056_assumed
+  mcs0: two_repetitions_soft_combined_same_power_per_symbol
+  mcs_selection: ACK_feedback_10_successes_up_1_failure_down
+  per: exact_shortened_LDPC_block_LUT; independent_block_success_product
+  power_sampling: frame_start_hold
+  lut_extrapolation: below_min_PER1; above_max_hold_last
+  finite_trials: zero_errors_is_not_proof_of_zero_PER
+  reporting: implementation_assumptions_internal_log_only; antenna_gain_details_in_materials

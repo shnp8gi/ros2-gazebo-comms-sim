@@ -71,7 +71,7 @@ def delivered(frames):
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('directory', type=Path)
-    parser.add_argument('--table', type=Path, default=Path(__file__).resolve().parents[1]/'src/comms_sim_pkg/config/MCStable.csv')
+    parser.add_argument('--table', type=Path, default=Path(__file__).resolve().parents[1]/'src/comms_sim_pkg/config/phy/MCStable.csv')
     args = parser.parse_args()
     font = Path('/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc')
     if font.exists():

@@ -9,8 +9,8 @@ ROOT = Path(__file__).resolve().parent
 REPO = ROOT.parents[1]
 CONFIG = REPO / 'src/comms_sim_pkg/config'
 SOURCE = ROOT / 'ideal_linear/per_relative.csv'
-TABLE = CONFIG / 'receiver_curve_measured_provisional.csv'
-YAML = CONFIG / 'drone_statistical_measured_provisional.yaml'
+TABLE = CONFIG / 'phy/receiver_curve_measured_provisional.csv'
+YAML = CONFIG / 'scenarios/drone_statistical_measured_provisional.yaml'
 REFERENCE_DBM = -12.2  # 0 dB減衰時の仮基準。56.3 dB減衰を-68.5 dBmへ置く。
 if TABLE.exists() or YAML.exists():
     raise ValueError('設定の既存出力を上書きしません')
@@ -56,8 +56,8 @@ provenance = dict(calibration_status='measured_with_assumptions', source=str(SOU
     ideal_linear_provenance=json.loads((ROOT/'ideal_linear/provenance.json').read_text()),
     assumptions=assumptions, row_origins=origins)
 TABLE.with_suffix('.csv.provenance.json').write_text(json.dumps(provenance, ensure_ascii=False, indent=2))
-config = yaml.safe_load((CONFIG/'drone_statistical_parallel_1mps.yaml').read_text())
-config['empirical_phy'].update(table=TABLE.name, metric='per', per_length_policy='independent',
+config = yaml.safe_load((CONFIG/'scenarios/drone_statistical_parallel_1mps.yaml').read_text())
+config['empirical_phy'].update(table='../phy/'+TABLE.name, metric='per', per_length_policy='independent',
                                calibration_status='measured_with_assumptions', seed=20261029, control_mcs=3)
 config['measurement_assumptions'] = assumptions
 YAML.write_text('# 実測曲線＋未測定条件の仮定による通し試験。詳細はmeasurement_assumptions。\n'+

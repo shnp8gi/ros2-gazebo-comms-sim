@@ -8,8 +8,8 @@ HRCP実験実装 v1（2026-10-28）
   原本:/home/rosgazebo/Downloads/802153-2023.pdf。参照一覧:ieee_2023_reference_map.csv。
 
 起動設定
-  src/comms_sim_pkg/config/drone_hrcp_smoke.yaml:最接近を中心に2ms、Gazebo動作確認用。
-  src/comms_sim_pkg/config/drone_hrcp.yaml:従来の40秒軌道。今回は40秒評価を未実施。
+  src/comms_sim_pkg/config/scenarios/drone_hrcp_smoke.yaml:最接近を中心に2ms、Gazebo動作確認用。
+  src/comms_sim_pkg/config/scenarios/drone_hrcp.yaml:従来の40秒軌道。今回は40秒評価を未実施。
   hrcp.enabled:trueで新しい通信コアへ切替。既存の統計モデルとlab_phyは別設定で使用可能。
   速度はA/B別に指定でき、初期値は各50km/h。高度20m/30m。
   並行は横10m差・高度10m差、十字は高度10m差。固定アンテナは横向き仰角+45/-45度。
@@ -119,7 +119,7 @@ HRCP実験実装 v1（2026-10-28）
   実機の既知bit列との相互検証、RFスペクトル/同期性能の規格試験は未実施。
 
 再実行（sudo不要。リポジトリのルートで実行）
-  sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp -e DISPLAY= sim bash -c "source /opt/ros/humble/setup.bash && source install/drone/setup.bash && python3 tools/run_drone_scenarios.py --config src/comms_sim_pkg/config/drone_hrcp_smoke.yaml"'
+  sg docker -c 'docker compose -f docker-compose.yml run --rm --no-deps --user 1001:1001 -e HOME=/tmp -e DISPLAY= sim bash -c "source /opt/ros/humble/setup.bash && source install/drone/setup.bash && python3 tools/run_drone_scenarios.py --config src/comms_sim_pkg/config/scenarios/drone_hrcp_smoke.yaml"'
   出力先は毎回新規生成する。40秒設定を使う場合はconfig名をdrone_hrcp.yamlへ変更する。
   最新の動作確認結果: ../sim_results/hrcp_gazebo_20261028_v3/（4条件各2ms）。
 
@@ -223,7 +223,7 @@ RSSIスクロール表示と実受信失敗の表示（2026-10-28、上記の波
   状態の色帯は通常表示、確立用フレーム個々の失敗印は「詳細」で表示する。
 
 2026-10-28 全航程の簡易プレビュー（正式HRCPモデルとは別設定）
-  起動: python3 tools/run_hrcp_monitor.py --config src/comms_sim_pkg/config/drone_preview.yaml
+  起動: python3 tools/run_hrcp_monitor.py --config src/comms_sim_pkg/config/scenarios/drone_preview.yaml
   固定並行40秒・最接近20秒。速度50km/h、高度差10m、横差10m。
   Gazeboステップ10ms、ログ10ms、目標実時間倍率1。通信イベントはその内部で時刻順に処理し、10msに丸めない。
   RF・熱雑音電力・アンテナ・幾何計算を維持。受信判定は既存の統計QPSK/AWGN（符号化なし）に置換。
@@ -328,7 +328,7 @@ RSSIスクロール表示と実受信失敗の表示（2026-10-28、上記の波
 最新（2026-10-29、受信電力閾値モデルへ切替。この記述を優先）:
   ユーザー指示で詳細PHY/NFの検討は保留。受信回路出力 >= -68.5dBmで受信、未満で未受信。
   速度は既存MCStable.csv。DATA方向B→Aのフレーム内最低MCS速度を使いACK確認分だけ加算。
-  新設定: src/comms_sim_pkg/config/drone_threshold_parallel_1mps.yaml
+  新設定: src/comms_sim_pkg/config/scenarios/drone_threshold_parallel_1mps.yaml
   並行固定・各機1m/s・50秒、強制減衰なし。既存簡易MAC/500ms待ちを使用。
   AWGN=false, required_snr=null, Expected RSSI=false。詳細PHYと同等とは主張しない。
   結果: sim_results/threshold_parallel_1mps_20261029。起動込み15.66秒で完走。

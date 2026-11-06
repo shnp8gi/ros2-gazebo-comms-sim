@@ -17,8 +17,8 @@ import yaml
 
 ROOT = Path(__file__).resolve().parents[1]
 PATTERNS = [('parallel','fixed'), ('parallel','tracking'), ('cross','fixed'), ('cross','tracking')]
-BASE = {'threshold':ROOT/'src/comms_sim_pkg/config/drone_threshold_parallel_1mps.yaml',
-        'statistical':ROOT/'src/comms_sim_pkg/config/drone_statistical_measured_provisional.yaml'}
+BASE = {'threshold':ROOT/'src/comms_sim_pkg/config/scenarios/drone_threshold_parallel_1mps.yaml',
+        'statistical':ROOT/'src/comms_sim_pkg/config/scenarios/drone_statistical_measured_provisional.yaml'}
 
 
 def container_path(path):

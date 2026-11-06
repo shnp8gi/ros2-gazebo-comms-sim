@@ -1,6 +1,4 @@
-# 受信回路出力（TJX入力）の計算電力 >= -68.5 dBmで受信。雑音/SNR判定なし。
-# MCS速度はMCStable.csv、ACK確認後に転送量加算。各機1m/s・並行固定・50秒。
-# 既存簡易MAC（制御20us、IFS10us）、タイムアウト500ms。強制減衰なし。
+# ② BER/PERモデル。波形モデルとMACを共用。実測未校正の動作確認用設定。
 scenario: parallel
 antenna_mode: fixed
 drone_a:
@@ -24,7 +22,7 @@ radio_ab:
   rx_lna_gain_db: 0.0
   rx_conversion_gain_db: 0.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9
   receiver_noise_figure_db: 0.0
   required_snr_db: null
@@ -38,17 +36,17 @@ radio_ba:
   rx_lna_gain_db: 25.0
   rx_conversion_gain_db: 3.0
   rx_insertion_loss_db: 3.0
-  noise_temperature_k: 300.0
+  noise_temperature_k: 290.0
   noise_bandwidth_hz: 2.1648e9
   receiver_noise_figure_db: 10.0
   required_snr_db: null
 propagation:
   exponent: 2.0
 antenna:
-  e_plane: e_plane.csv
-  h_plane: h_plane.csv
+  e_plane: ../antennas/e_plane.csv
+  h_plane: ../antennas/h_plane.csv
   max_attenuation_db: 30.0
-mcs_table: MCStable.csv
+mcs_table: ../phy/MCStable.csv
 awgn:
   enabled: false
   seed: 20261027
@@ -70,14 +68,27 @@ simulation:
 lab_phy:
   enabled: false
 hrcp:
-  enabled: false
+  enabled: true
   data_bytes: 2048
-  atp_ms: 500
+  atp_ms: 10000 # 資料の既定値。実機のMU_TJX_ATPに合わせて変更する。
+  setup_timeout_ms: 500
   expected_rssi_admission_enabled: false
   association_reference_distance_m: 30.0
-  monitor_enabled: false
+  monitor_enabled: true
   monitor_waveforms: false
   noise_threads: 4
   monitor_rssi_interval_s: 0.01
   decode_threads: 4
-preview_mode: true
+preview_mode: false
+monitor_only: false
+empirical_phy:
+  enabled: true
+  table: ../phy/receiver_curve_demo.csv
+  metric: ber                         # ber または per
+  per_length_policy: exact            # per時のみ。長さ違いを近似する場合はindependentを明示
+  calibration_status: synthetic_demo  # 実測値へ差し替え後はmeasured_unvalidated等へ変更
+  seed: 20261029
+  control_mcs: 0
+  rssi_offset_ab_db: 0.0              # 曲線を参照する電力への補正。正なら受信しやすくなる
+  rssi_offset_ba_db: 0.0
+  mcs_by_rate_gbps: {0.5: 0, 1.1: 3, 2.15: 6, 2.7: 8, 4.6: 9, 6.0: 11}

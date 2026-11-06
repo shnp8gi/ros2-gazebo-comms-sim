@@ -15,7 +15,7 @@ import yaml
 def main():
     root = Path(__file__).resolve().parents[1]
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--config', default='src/comms_sim_pkg/config/drone_hrcp_monitor.yaml')
+    parser.add_argument('--config', default='src/comms_sim_pkg/config/scenarios/drone_hrcp_monitor.yaml')
     parser.add_argument('--scenario', choices=('parallel','cross'))
     parser.add_argument('--antenna-mode', choices=('fixed','tracking'))
     parser.add_argument('--no-viewer', action='store_true', help='描画負荷の比較用。通信とモニター記録は同じ条件で実行')
