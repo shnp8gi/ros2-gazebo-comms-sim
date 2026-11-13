@@ -1,5 +1,6 @@
 # 拡張仕様書 §6.7 の構成③-4。下りリンク（B→A、データ）= 300 GHz帯、戻りリンク（A→B）= 60 GHz帯。
 # 受信判定とレートは IEEE Std 802.15.3-2023 の表（phy で選択）。しきい値は各表の MCS0 の基準受信感度。
+# 受信電力 = 送信電力 + 送信アンテナ利得 − パスロス + 受信アンテナ利得（アンテナ端）。回路の損失・LNA・変換利得は 0。
 # リンク確立は簡易モデル：両リンクがしきい値以上の状態が 2 ms 続いたら接続。
 config_id: "3-4"
 scenario: parallel
@@ -19,19 +20,19 @@ drone_b:
 lateral_separation_m: 3.5355339059
 encounter_time_s: 20.0
 duration_s: 40.0
-radio_ab:                       # 戻りリンク（60 GHz帯、−8 dBm、LNA なし）
+radio_ab:                       # 戻りリンク（60 GHz帯、−8 dBm）
   frequency_hz: 60.48e9
   power_mw: 0.15848931924611134
   phy: hrcp_sc
   tx_antenna_gain_dbi: 23.0
   rx_antenna_gain_dbi: 23.0
-  tx_insertion_loss_db: 3.0
+  tx_insertion_loss_db: 0.0
   rx_lna_gain_db: 0.0
   rx_conversion_gain_db: 0.0
-  rx_insertion_loss_db: 3.0
+  rx_insertion_loss_db: 0.0
   noise_bandwidth_hz: 2.1648e9
   required_snr_db: null
-radio_ba:                       # 下りリンク（300 GHz帯、−1 dBm、LNA 25 dB）
+radio_ba:                       # 下りリンク（300 GHz帯、−1 dBm）
   frequency_hz: 271.08e9
   power_mw: 0.7943282347242815
   phy: thz_sc
@@ -39,9 +40,9 @@ radio_ba:                       # 下りリンク（300 GHz帯、−1 dBm、LNA 
   tx_antenna_gain_dbi: 24.0
   rx_antenna_gain_dbi: 24.0
   tx_insertion_loss_db: 0.0
-  rx_lna_gain_db: 25.0
-  rx_conversion_gain_db: 3.0
-  rx_insertion_loss_db: 3.0
+  rx_lna_gain_db: 0.0
+  rx_conversion_gain_db: 0.0
+  rx_insertion_loss_db: 0.0
   noise_bandwidth_hz: 8.6592e9
   receiver_noise_figure_db: 10.0
   required_snr_db: null
