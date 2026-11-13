@@ -1,0 +1,45 @@
+# 物理ベースの飛行（physics バックエンド）の条件。tools/run_flight_record.py が読む。
+# 機体・揺れのパラメータは実機に合わせた校正値ではなく、オーダーの目安（拡張仕様書 §3、§4）。
+scenario:
+  speed_mps: 2.0              # 代表速度（暫定）
+  acceleration_mps2: 1.0      # 助走の加速度
+  start_time_s: 2.0           # この時刻まではホバリングして落ち着かせる
+  encounter_time_s: 20.0      # 計画上、この時刻に両機が経路の中央を通過する
+  duration_s: 40.0
+  altitude_a_m: 20.0
+  d_min_m: 5.0                # 計画上の最接近距離。横方向間隔と高度差はどちらも d_min/√2
+vehicle:
+  mass_kg: 1.5                # 全備質量（ロータとアンテナを含む）
+  arm_m: 0.25
+  inertia_kgm2: [0.03, 0.03, 0.05]
+  motor_constant: 8.54858e-06 # 推力 = motor_constant·ω² [N]
+  moment_constant: 0.016
+  max_rot_velocity: 1000.0
+  motor_time_constant_up_s: 0.0125
+  motor_time_constant_down_s: 0.025
+  rotor_blades: 2
+drag:
+  enabled: true
+  air_density: 1.2
+  cd_area_m2: 0.03
+  wind_mps: [0.0, 0.0, 0.0]   # 将来の風の入力口。今回は無風
+controller:
+  kp_position: 1.2
+  kp_velocity: 3.0
+  ki_velocity: 1.0
+  kp_attitude: 10.0
+  kp_rate: 40.0
+  max_tilt_deg: 35.0
+antenna:
+  mass_kg: 0.15
+  elevation_deg: 45.0         # A は上向き、B は下向きに同じ角度
+  joint: fixed                # fixed / spring
+  natural_frequency_hz: 40.0  # spring のとき
+  damping_ratio: 0.07
+vibration:
+  enabled: false
+  unbalance_kgm: 1.0e-06      # m·e（ロータ1つあたり）
+  thrust_ripple: 0.015        # 推力の脈動の割合 α
+  seed: 20261113
+simulation:
+  physics_step_s: 0.0001
