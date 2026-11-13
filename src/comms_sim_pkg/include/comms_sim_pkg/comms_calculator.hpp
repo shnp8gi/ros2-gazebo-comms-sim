@@ -62,6 +62,8 @@ public:
   double calculate_distance(const Eigen::Vector3d& tx_pos, const Eigen::Vector3d& bs_pos) const;
   std::pair<double, double> calculate_rssi(double distance, double antenna_gain_db = 0.0, bool add_noise = true);
 
+  double calculate_throughput(double rssi) const;
+
   double rssi_min, rssi_max;
   double noise_variance;
   double tx_power_dbm_;
@@ -73,7 +75,6 @@ private:
 
   void load_mcs_table(const std::string& path);
   void init_default_mcs_table();
-  double calculate_throughput(double rssi) const;
 };
 
 }  // namespace comms_sim

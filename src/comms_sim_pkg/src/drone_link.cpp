@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <sstream>
 #include <stdexcept>
 
 namespace comms_sim {
@@ -32,7 +33,10 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
     d.speed_kmh = number(y[key], "speed_kmh", d.speed_kmh);
     d.altitude_m = number(y[key], "altitude_m", d.altitude_m);
     d.fixed_elevation_deg = number(y[key], "fixed_elevation_deg", d.fixed_elevation_deg);
+    d.mount_azimuth_offset_deg = number(y[key], "mount_azimuth_offset_deg", 0);
+    d.mount_elevation_offset_deg = number(y[key], "mount_elevation_offset_deg", 0);
   };
+  if (y["config_id"]) c.config_id = y["config_id"].as<std::string>();
   drone("drone_a", c.a); drone("drone_b", c.b);
   auto radio = [&](const char *key, RadioConfig &r) {
     r.frequency_hz = number(y[key], "frequency_hz", r.frequency_hz);
@@ -50,6 +54,9 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
     r.receiver_noise_figure_db = number(node, "receiver_noise_figure_db", 0);
     if (node["required_snr_db"] && !node["required_snr_db"].IsNull())
       r.required_snr_db = node["required_snr_db"].as<double>();
+    if (node["phy"]) r.phy = node["phy"].as<std::string>();
+    if (node["bonding_channels"]) r.bonding_channels = node["bonding_channels"].as<unsigned>();
+    if (node["rate_table"]) r.rate_table = node["rate_table"].as<std::string>();
   };
   radio("radio_ab", c.ab); radio("radio_ba", c.ba);
   c.encounter_s = number(y, "encounter_time_s", c.encounter_s);
@@ -77,6 +84,12 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
   c.protocol.ack_timeout_s = number(p, "ack_timeout_ms", 500) / 1000;
   c.protocol.inactivity_timeout_s = number(p, "inactivity_timeout_ms", 500) / 1000;
   c.protocol.channel_sample_s = c.physics_step_s;
+  if (p["mode"]) {
+    const auto mode = p["mode"].as<std::string>();
+    if (mode == "simple_setup") c.protocol.simple_setup = true;
+    else if (mode != "frames") throw std::invalid_argument("protocol.mode は frames または simple_setup です");
+  }
+  c.protocol.simple_setup_s = number(p, "setup_time_ms", 2.0) / 1000;
   auto awgn = y["awgn"];
   if (awgn) {
     c.protocol.awgn.enabled = awgn["enabled"] ? awgn["enabled"].as<bool>() : false;
@@ -130,7 +143,28 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
   };
   c.e_plane = resolve(y["antenna"]["e_plane"].as<std::string>());
   c.h_plane = resolve(y["antenna"]["h_plane"].as<std::string>());
-  c.mcs_table = resolve(y["mcs_table"].as<std::string>());
+  if (y["mcs_table"]) c.mcs_table = resolve(y["mcs_table"].as<std::string>());
+  for (auto *r : {&c.ab, &c.ba}) {
+    if (!r->phy.empty()) {
+      if (!r->rate_table.empty()) throw std::invalid_argument("phy と rate_table は同時に指定できません");
+      if (r->phy == "hrcp_sc") {
+        if (r->bonding_channels != 1) throw std::invalid_argument("hrcp_sc の bonding_channels は 1 です");
+        r->rate_table = "hrcp_rate_2p16.csv";
+      } else if (r->phy == "thz_sc") {
+        const unsigned n = r->bonding_channels;
+        if (n != 1 && n != 2 && n != 4) throw std::invalid_argument("thz_sc の bonding_channels は 1, 2, 4 です");
+        r->rate_table = n == 1 ? "thz_rate_2p16.csv" : n == 2 ? "thz_rate_4p32.csv" : "thz_rate_8p64.csv";
+      } else throw std::invalid_argument("phy は thz_sc または hrcp_sc です");
+    } else if (r->bonding_channels != 1) {
+      throw std::invalid_argument("bonding_channels には phy: thz_sc が必要です");
+    }
+    if (r->rate_table.empty()) continue;
+    r->rate_table = resolve(r->rate_table);
+    // しきい値は表の最低値（MCS0 の基準受信感度）。これを下回ると使える MCS がない。
+    if (!r->phy.empty()) r->sensitivity_dbm = CommsCalculator(nullptr, 0, 0, r->rate_table).rssi_min;
+  }
+  if (c.mcs_table.empty() && (c.ab.rate_table.empty() || c.ba.rate_table.empty()))
+    throw std::invalid_argument("mcs_table か、両リンクの phy / rate_table が必要です");
   auto empirical=y["empirical_phy"];
   if(empirical && empirical["enabled"] && empirical["enabled"].as<bool>()){
     auto &e=c.protocol.hrcp.empirical;e.enabled=true;
@@ -185,6 +219,22 @@ void ScenarioConfig::Validate() const {
   }
   for (double angle : {a.fixed_elevation_deg, b.fixed_elevation_deg})
     if (!std::isfinite(angle) || std::abs(angle) > 90) throw std::invalid_argument("仰角は-90～90度です");
+  for (const auto &d : {a, b}) {
+    if (!std::isfinite(d.mount_azimuth_offset_deg) || !std::isfinite(d.mount_elevation_offset_deg))
+      throw std::invalid_argument("取り付けオフセットが不正です");
+    if ((d.mount_azimuth_offset_deg != 0 || d.mount_elevation_offset_deg != 0) && antenna_mode != "fixed")
+      throw std::invalid_argument("取り付けオフセットは固定アンテナでのみ使えます");
+  }
+  if (protocol.simple_setup) {
+    positive(protocol.simple_setup_s, "setup_time_ms");
+    if (protocol.awgn.enabled || protocol.hrcp.enabled || protocol.lab_phy.enabled ||
+        protocol.hrcp.empirical.enabled || preview_mode || monitor_only)
+      throw std::invalid_argument("simple_setup は AWGN/HRCP/lab_phy/実測モデル/モニターと併用できません");
+    if (ab.rate_table.empty() || ba.rate_table.empty())
+      throw std::invalid_argument("simple_setup には両リンクの phy または rate_table が必要です");
+    if (ab.required_snr_db || ba.required_snr_db)
+      throw std::invalid_argument("simple_setup では required_snr_db を null にしてください");
+  }
   positive(physics_step_s, "physics_step_s"); positive(real_time_factor, "real_time_factor");
   positive(log_interval_s, "log_interval_s"); positive(path_loss_exponent, "exponent");
   if (attenuation_limit_db != std::numeric_limits<double>::infinity())
@@ -254,12 +304,22 @@ Geometry geometry(const ScenarioConfig &c, double time) {
   } else {
     // 並行は両機の左側、十字はAの左側/Bの右側へ固定搭載。
     // 十字では交差後に相手のいる側を向く。最接近時の相手は真上/真下。
-    const double az_a = g.heading_a + pi / 2;
-    const double az_b = c.scenario == "parallel" ? -pi / 2 : g.heading_b - pi / 2;
-    g.antenna_a_rpy = {0, -c.a.fixed_elevation_deg * pi / 180, az_a};
-    g.antenna_b_rpy = {0, -c.b.fixed_elevation_deg * pi / 180, az_b};
+    // 取り付けオフセットは方位・仰角にそのまま足す（機体座標での回転量）。
+    const double az_a = g.heading_a + pi / 2 + c.a.mount_azimuth_offset_deg * pi / 180;
+    const double az_b = (c.scenario == "parallel" ? -pi / 2 : g.heading_b - pi / 2)
+      + c.b.mount_azimuth_offset_deg * pi / 180;
+    g.antenna_a_rpy = {0, -(c.a.fixed_elevation_deg + c.a.mount_elevation_offset_deg) * pi / 180, az_a};
+    g.antenna_b_rpy = {0, -(c.b.fixed_elevation_deg + c.b.mount_elevation_offset_deg) * pi / 180, az_b};
   }
   return g;
+}
+Poses analytic_poses(const ScenarioConfig &c, double time) {
+  const auto g = geometry(c, time);
+  auto rot = [](const Eigen::Vector3d &rpy) {
+    return AntennaPatternParser::rpy_to_rotmat(rpy.x(), rpy.y(), rpy.z());
+  };
+  return {g.a, g.b, rot({0, 0, g.heading_a}), rot({0, 0, g.heading_b}),
+          rot(g.antenna_a_rpy), rot(g.antenna_b_rpy)};
 }
 
 PowerBudget calculate_power_budget(const RadioConfig &r, double path_loss,
@@ -285,19 +345,41 @@ PowerBudget calculate_power_budget(const RadioConfig &r, double path_loss,
   return b;
 }
 
-RadioModel::RadioModel(const ScenarioConfig &c) : config_(c), pattern_(c.attenuation_limit_db) {
+RadioModel::RadioModel(const ScenarioConfig &c, PoseSource source)
+    : config_(c), source_(std::move(source)), pattern_(c.attenuation_limit_db) {
+  fixed_mount_ = c.antenna_mode == "fixed";
+  if (fixed_mount_) {
+    // 固定搭載では機体←アンテナの回転は時刻によらない。
+    auto zero = c;
+    zero.a.mount_azimuth_offset_deg = zero.a.mount_elevation_offset_deg = 0;
+    zero.b.mount_azimuth_offset_deg = zero.b.mount_elevation_offset_deg = 0;
+    const auto with = analytic_poses(c, 0), without = analytic_poses(zero, 0);
+    mount_a_ = with.body_a.transpose() * with.antenna_a;
+    mount_b_ = with.body_b.transpose() * with.antenna_b;
+    offset_a_ = (without.body_a.transpose() * without.antenna_a).transpose() * mount_a_;
+    offset_b_ = (without.body_b.transpose() * without.antenna_b).transpose() * mount_b_;
+  }
   pattern_.load_e_plane(c.e_plane); pattern_.load_h_plane(c.h_plane);
   pattern_boresight_gain_ = pattern_.get_gain_from_angles(0, 0).total;
   auto create = [&](const RadioConfig &r) {
     return std::make_unique<CommsCalculator>(std::make_unique<LogDistancePathLossModel>(
       r.frequency_hz, 299792458.0, c.path_loss_exponent, 1.0, -1.0),
-      calculate_power_budget(r, 0, 0, 0).receiver_input_dbm, 0.0, c.mcs_table);
+      calculate_power_budget(r, 0, 0, 0).receiver_input_dbm, 0.0,
+      r.rate_table.empty() ? c.mcs_table : r.rate_table);
   };
   ab_ = create(c.ab); ba_ = create(c.ba);
 }
 LinkSample RadioModel::Evaluate(double time) const {
-  auto g = geometry(config_, time);
-  auto gains = pattern_.get_tx_rx_gains(g.a, g.antenna_a_rpy, g.b, g.antenna_b_rpy);
+  Poses g;
+  if (source_) {
+    // 記録・実測のアンテナ姿勢は既定の取り付けのもの。オフセットは一定の回転として掛ける。
+    g = source_(time);
+    if (fixed_mount_) { g.antenna_a = g.antenna_a * offset_a_; g.antenna_b = g.antenna_b * offset_b_; }
+  } else {
+    g = analytic_poses(config_, time);
+  }
+  const Eigen::Vector3d unused = Eigen::Vector3d::Zero();
+  auto gains = pattern_.get_tx_rx_gains(g.a, unused, g.b, unused, &g.antenna_a, &g.antenna_b);
   auto gain = [&](double pattern_gain, std::optional<double> boresight) {
     return boresight ? *boresight + pattern_gain - pattern_boresight_gain_ : pattern_gain;
   };
@@ -311,22 +393,71 @@ LinkSample RadioModel::Evaluate(double time) const {
   const auto budget_ba = calculate_power_budget(config_.ba, ba.path_loss, ba_tx, ba_rx);
   const bool snr_ab_ok = !config_.ab.required_snr_db || budget_ab.snr_db >= *config_.ab.required_snr_db;
   const bool snr_ba_ok = !config_.ba.required_snr_db || budget_ba.snr_db >= *config_.ba.required_snr_db;
-  auto off_axis = [](const Eigen::Vector3d &direction, const Eigen::Vector3d &rpy) {
-    const Eigen::Vector3d forward = AntennaPatternParser::rpy_to_rotmat(rpy.x(), rpy.y(), rpy.z()) * Eigen::Vector3d::UnitX();
-    return std::acos(std::clamp(forward.dot(direction.normalized()), -1.0, 1.0)) * 180 / pi;
+  auto off_axis = [](const Eigen::Vector3d &direction, const Eigen::Matrix3d &antenna) {
+    // acos は 0° 付近で桁落ちするので、外積と内積から求める。
+    const Eigen::Vector3d forward = antenna * Eigen::Vector3d::UnitX();
+    return std::atan2(forward.cross(direction).norm(), forward.dot(direction)) * 180 / pi;
+  };
+  // ぶれ角：取り付けどおりの向き（機体の姿勢×取り付け）と実際のアンテナ正面のなす角。
+  auto deflection = [&](const Eigen::Matrix3d &body, const Eigen::Matrix3d &mount, const Eigen::Matrix3d &antenna) {
+    if (!fixed_mount_) return 0.0;
+    const Eigen::Vector3d nominal = body * mount * Eigen::Vector3d::UnitX();
+    return off_axis(nominal, antenna);
   };
   return {ab.distance, ab.rssi, ba.rssi,
           config_.protocol.awgn.enabled ? config_.protocol.awgn.bit_rate_bps / 1e9 : ab.throughput,
           gains.tx_total, gains.rx_total,
           ab.rssi >= config_.ab.sensitivity_dbm && snr_ab_ok,
           ba.rssi >= config_.ba.sensitivity_dbm && snr_ba_ok,
-          off_axis(g.b-g.a, g.antenna_a_rpy), off_axis(g.a-g.b, g.antenna_b_rpy),
+          off_axis(g.b-g.a, g.antenna_a), off_axis(g.a-g.b, g.antenna_b),
           budget_ab, budget_ba, snr_ab_ok, snr_ba_ok,
-          config_.protocol.awgn.enabled ? config_.protocol.awgn.bit_rate_bps / 1e9 : ba.throughput};
+          config_.protocol.awgn.enabled ? config_.protocol.awgn.bit_rate_bps / 1e9 : ba.throughput,
+          g, deflection(g.body_a, mount_a_, g.antenna_a), deflection(g.body_b, mount_b_, g.antenna_b)};
 }
 
+SimpleSetup::SimpleSetup(const ProtocolConfig &config, Evaluate evaluate, Log log)
+  : step_(config.channel_sample_s), setup_s_(config.simple_setup_s), data_ba_(config.data_from_prc),
+    evaluate_(std::move(evaluate)), log_(std::move(log)) {
+  positive(step_, "channel_sample"); positive(setup_s_, "setup_time");
+}
+void SimpleSetup::Emit(double time, const std::string &type, const std::string &detail, double rssi) {
+  if (log_) log_({time, type, "", data_ba_ ? "B_TO_A" : "A_TO_B", detail, rssi});
+}
+void SimpleSetup::Advance(double time) {
+  if (!std::isfinite(time)) throw std::invalid_argument("シミュレーション時刻が不正です");
+  // サンプル k は区間 [k·step, (k+1)·step) を代表する。区間が終わってから集計する。
+  while ((index_ + 1) * step_ <= time + 1e-12) {
+    const double t = index_++ * step_;
+    const auto s = evaluate_(t);
+    const double rssi = data_ba_ ? s.rssi_ba : s.rssi_ab;
+    if (!s.ab_ok || !s.ba_ok) {
+      if (connected_) {
+        connected_ = false; ++stats_.disconnections;
+        Emit(t, "DISCONNECTED", !s.ab_ok ? "AB_BELOW_THRESHOLD" : "BA_BELOW_THRESHOLD", rssi);
+      }
+      ok_since_ = -1; state_ = "SCANNING";
+      continue;
+    }
+    if (ok_since_ < 0) { ok_since_ = t; ++stats_.attempts; state_ = "SETUP"; }
+    stats_.window_s += step_;
+    if (!connected_ && t - ok_since_ >= setup_s_ - 1e-12) {
+      connected_ = true; state_ = "CONNECTED"; ++stats_.connections;
+      stats_.last_setup_ms = (t - ok_since_) * 1000;
+      if (stats_.first_connected_s < 0) stats_.first_connected_s = t;
+      Emit(t, "CONNECTED", "", rssi);
+    }
+    if (connected_) {
+      stats_.connected_s += step_;
+      stats_.delivered_mb += (data_ba_ ? s.rate_ba_gbps : s.rate_ab_gbps) * step_ * 125.0;
+    }
+  }
+}
 LinkProtocol::LinkProtocol(ProtocolConfig config, Evaluate evaluate, Log log)
   : config_(config), awgn_sampler_(config.awgn.seed), evaluate_(std::move(evaluate)), log_(std::move(log)) {
+  if (config.simple_setup) {
+    simple_ = std::make_unique<SimpleSetup>(config, evaluate_, log_);
+    return;
+  }
   if (config.hrcp.enabled) {
     hrcp_ = std::make_unique<HrcpPairnet>(config.hrcp,evaluate_,log_);
     return;
@@ -361,6 +492,7 @@ void LinkProtocol::Integrate(double until) {
   accounted_ = until;
 }
 void LinkProtocol::Advance(double time) {
+  if (simple_) { simple_->Advance(time); return; }
   if (hrcp_) { hrcp_->Advance(time); return; }
   if (!std::isfinite(time) || time + 1e-12 < accounted_)
     throw std::invalid_argument("シミュレーション時刻は単調増加である必要があります");
@@ -641,7 +773,35 @@ struct DroneRun::Output {
   bool preview_connected=false;
   bool preview_setup_started=false;
 };
-DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(config_) {
+namespace {
+// ワールド←機体の回転行列から roll・pitch・yaw [deg]（Gazebo と同じ Z-Y-X の順）。
+Eigen::Vector3d rpy_deg(const Eigen::Matrix3d &r) {
+  return Eigen::Vector3d(std::atan2(r(2,1), r(2,2)), -std::asin(std::clamp(r(2,0), -1.0, 1.0)),
+                         std::atan2(r(1,0), r(0,0))) * 180 / pi;
+}
+}
+std::string encounter_summary_header() {
+  return "config_id,bonding_channels,d_min_m,min_relative_angle_a_deg,min_relative_angle_b_deg,"
+         "window_s,delivered_mb,mean_throughput_gbps,setup_time_ms";
+}
+std::string encounter_summary_row(const ScenarioConfig &c, const LinkStats &s,
+                                  const DroneRun::Encounter &e) {
+  std::ostringstream row;
+  // 平均スループット = 総転送量 ÷ 両リンクがしきい値以上だった時間。時間が 0 なら 0。
+  const double mean = s.window_s > 0 ? s.delivered_mb * 8 / 1000 / s.window_s : 0;
+  row << std::fixed << std::setprecision(9) << c.config_id << ','
+      << (c.protocol.data_from_prc ? c.ba : c.ab).bonding_channels << ',' << e.d_min_m << ','
+      << e.min_angle_a_deg << ',' << e.min_angle_b_deg << ',' << s.window_s << ',' << s.delivered_mb
+      << ',' << mean << ',' << s.last_setup_ms;
+  return row.str();
+}
+LinkSample DroneRun::Sample(double time) {
+  auto s = radio_.Evaluate(time);
+  encounter_.Observe(s);
+  return s;
+}
+DroneRun::DroneRun(ScenarioConfig config, PoseSource source)
+    : config_(std::move(config)), radio_(config_, std::move(source)) {
   config_.Validate();
   std::filesystem::create_directories(config_.output_dir);
   // 同じ出力先への再実行で過去の実験を上書きしない。
@@ -652,7 +812,7 @@ DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(c
   if(config_.monitor_only){
     if(!config_.protocol.hrcp.enabled||!config_.protocol.hrcp.monitor_enabled)
       throw std::invalid_argument("monitor_onlyには詳細HRCPモニターが必要です");
-    protocol_=std::make_unique<LinkProtocol>(config_.protocol,[this](double t){return radio_.Evaluate(t);},LinkProtocol::Log{});
+    protocol_=std::make_unique<LinkProtocol>(config_.protocol,[this](double t){return Sample(t);},LinkProtocol::Log{});
     return;
   }
   if(config_.preview_mode){
@@ -679,10 +839,11 @@ DroneRun::DroneRun(ScenarioConfig config) : config_(std::move(config)), radio_(c
          "after_lna_dbm", "after_mixer_dbm", "receiver_input_dbm", "thermal_noise_dbm",
          "input_referred_noise_dbm", "receiver_noise_dbm", "snr_db"})
       output_->samples << ',' << direction << '_' << field;
-  output_->samples << ",ab_reachable,ba_reachable\n";
+  output_->samples << ",ab_reachable,ba_reachable,a_roll_deg,a_pitch_deg,a_yaw_deg,b_roll_deg,b_pitch_deg,b_yaw_deg,"
+                      "antenna_a_deflection_deg,antenna_b_deflection_deg,rate_ab_gbps,rate_ba_gbps\n";
   output_->events << "time_s,event,frame,direction,rssi_dbm,reason,wait_start_s,deadline_s,failure_sample_s,observation_time_s,distance_m,rssi_ab_dbm,rssi_ba_dbm,margin_ab_db,margin_ba_db,off_axis_a_deg,off_axis_b_deg,snr_ab_db,snr_ba_db,ab_reachable,ba_reachable,frame_start_s,frame_bits,minimum_snr_db,eb_no_db,ber,per,random_draw,beacon_index\n";
   protocol_ = std::make_unique<LinkProtocol>(config_.protocol,
-    [this](double t) { return radio_.Evaluate(t); },
+    [this](double t) { return Sample(t); },
     [this](const LinkEvent &e) {
       if(output_->preview){
         auto &m=*output_->preview;auto &s=output_->preview_status;
@@ -736,12 +897,16 @@ void DroneRun::Advance(double time) {
   if(config_.monitor_only){protocol_->Advance(time);time_=time;return;}
   while (next_log_ <= time + 1e-12) {
     protocol_->Advance(next_log_);
-    auto g = geometry(config_, next_log_); auto r = radio_.Evaluate(next_log_);
+    auto r = Sample(next_log_); const auto &g = r.poses;
     auto &s = output_->samples;
     s << next_log_;
     for (const auto &v : {g.a, g.b}) s << ',' << v.x() << ',' << v.y() << ',' << v.z();
     s << ',' << r.distance << ',' << r.rssi_ab << ',' << r.rssi_ba << ',' << r.gain_a << ',' << r.gain_b;
-    for (const auto &v : {g.antenna_a_rpy, g.antenna_b_rpy}) s << ',' << v.z()*180/pi << ',' << -v.y()*180/pi;
+    // アンテナ正面方向の方位・仰角（ワールド座標）。
+    for (const auto &m : {g.antenna_a, g.antenna_b}) {
+      const Eigen::Vector3d f = m * Eigen::Vector3d::UnitX();
+      s << ',' << std::atan2(f.y(), f.x())*180/pi << ',' << std::asin(std::clamp(f.z(), -1.0, 1.0))*180/pi;
+    }
     s << ',' << r.off_axis_a_deg << ',' << r.off_axis_b_deg
       << ',' << r.rssi_ab-config_.ab.sensitivity_dbm << ',' << r.rssi_ba-config_.ba.sensitivity_dbm;
     s << ',' << protocol_->State() << ',' << protocol_->Connected() << ',' << Stats().delivered_mb;
@@ -751,7 +916,9 @@ void DroneRun::Advance(double time) {
         << ',' << b.isotropic_rx_dbm << ',' << b.antenna_rx_dbm << ',' << b.after_lna_dbm
         << ',' << b.after_mixer_dbm << ',' << b.receiver_input_dbm << ',' << b.thermal_noise_dbm
         << ',' << b.input_referred_noise_dbm << ',' << b.receiver_noise_dbm << ',' << b.snr_db;
-    s << ',' << r.ab_ok << ',' << r.ba_ok << '\n';
+    s << ',' << r.ab_ok << ',' << r.ba_ok;
+    for (const auto &m : {g.body_a, g.body_b}) { const auto e = rpy_deg(m); s << ',' << e.x() << ',' << e.y() << ',' << e.z(); }
+    s << ',' << r.deflection_a_deg << ',' << r.deflection_b_deg << ',' << r.rate_ab_gbps << ',' << r.rate_ba_gbps << '\n';
     next_log_ = next_log_ >= config_.duration_s ? std::numeric_limits<double>::infinity()
       : std::min((++log_index_) * config_.log_interval_s, config_.duration_s);
   }
@@ -781,12 +948,14 @@ void DroneRun::Finish() {
   std::ofstream summary(config_.output_dir + "/summary.csv");
   if (!summary) throw std::runtime_error("サマリーを保存できません");
   auto s = Stats();
-  summary << "scenario,antenna_mode,speed_a_kmh,speed_b_kmh,total_data_MB,connected_time_s,connections,attempts,timeouts,failed_frames,acked_data_frames,first_connected_s,last_setup_ms,awgn_trials,awgn_errors,disconnections\n";
+  summary << "scenario,antenna_mode,speed_a_kmh,speed_b_kmh,total_data_MB,connected_time_s,connections,attempts,timeouts,failed_frames,acked_data_frames,first_connected_s,last_setup_ms,awgn_trials,awgn_errors,disconnections,"
+    << encounter_summary_header() << '\n';
   summary << std::fixed << std::setprecision(9) << config_.scenario << ',' << config_.antenna_mode << ','
     << config_.a.speed_kmh << ',' << config_.b.speed_kmh << ',' << s.delivered_mb << ',' << s.connected_s
     << ',' << s.connections << ',' << s.attempts << ',' << s.timeouts << ',' << s.failed_frames << ','
     << s.data_frames << ',' << s.first_connected_s << ',' << s.last_setup_ms
-    << ',' << s.awgn_trials << ',' << s.awgn_errors << ',' << s.disconnections << '\n';
+    << ',' << s.awgn_trials << ',' << s.awgn_errors << ',' << s.disconnections
+    << ',' << encounter_summary_row(config_, s, encounter_) << '\n';
   summary.flush(); output_->samples.flush(); output_->events.flush();
   if (!summary || !output_->samples || !output_->events) throw std::runtime_error("CSV書き込みに失敗しました");
   if (config_.protocol.awgn.enabled || config_.protocol.hrcp.enabled) {

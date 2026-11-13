@@ -87,6 +87,7 @@ GUIの有無はシミュレーション起動時に選ぶ。通常の実験で�
 | BER/PERの受信曲線による確率モデルを使う | [drone_statistical_parallel_1mps.yaml](src/comms_sim_pkg/config/drone_statistical_parallel_1mps.yaml)、[統計モデルの使い方](specification_review/statistical_model_usage_ja.txt) |
 | HRCPの波形・接続処理を使う | [drone_hrcp.yaml](src/comms_sim_pkg/config/drone_hrcp.yaml)、[HRCP実装の説明](specification_review/runtime_hrcp_ja.txt) |
 | 試作I/Q PHYを使う | [drone_lab_phy.yaml](src/comms_sim_pkg/config/drone_lab_phy.yaml)、[試作PHYの説明](specification_review/runtime_lab_phy_ja.txt) |
+| 規格の表と簡易リンク確立で構成を比べる | [drone_simple_c1.yaml](src/comms_sim_pkg/config/drone_simple_c1.yaml)（両方向 60 GHz）、`drone_simple_c2.yaml`・`c3_2`・`c3_4`（下り 300 GHz、ボンディング 1・2・4）。[下の節](#規格の表と簡易リンク確立による掃引) |
 
 `config/` には短時間の動作確認用やモニター用の設定もある。モデルによって受信判定・接続処理・集計の定義が異なるため、比較する設定の説明を先に確認する。
 
@@ -114,6 +115,27 @@ Docker内ではリポジトリのルートが `/workspace` になる。YAML内�
 | 結果の保存先 | 単独実行は `output_dir:=/workspace/sim_results/my_run`、全組み合わせは `--output sim_results/my_runs` |
 
 既存結果のある保存先への上書きは拒否する。条件を変えて再実行するときは新しい保存先を使う。
+
+### 規格の表と簡易リンク確立による掃引
+
+`drone_simple_*.yaml` は、受信判定とレートを IEEE Std 802.15.3-2023 の表から決める設定。
+
+- `radio_ab` / `radio_ba` の `phy`（`hrcp_sc` または `thz_sc`）で表を選ぶ。`thz_sc` では `bonding_channels`（1, 2, 4）で帯域幅の表が切り替わる。しきい値は表の最低値（MCS0 の基準受信感度）になる。
+- 表の CSV は [tools/make_rate_tables.py](tools/make_rate_tables.py) で生成する。
+- `protocol.mode: simple_setup` では、両リンクがしきい値以上の状態が `setup_time_ms`（既定 2 ms）続いたら接続し、どちらかが下回ったら切断する。
+- `drone_a` / `drone_b` の `mount_azimuth_offset_deg`・`mount_elevation_offset_deg` で、固定アンテナの取り付けの向きを既定（真横・`fixed_elevation_deg`）から回す。
+
+Gazebo を起動せずに通信だけを計算できる。コンテナ内でビルドした後に実行する。
+
+```bash
+# 最接近距離 × 仰角オフセットを4構成で掃引（1条件1行の results.csv を出力）
+python3 tools/run_comms_replay_sweep.py --d-min 1:10:0.5,10:20:2 --offset-el 0:10:1
+
+# 1条件だけを実行し、timeseries.csv などを出力
+install/drone/comms_sim_pkg/lib/comms_sim_pkg/drone_offline_run src/comms_sim_pkg/config/drone_simple_c2.yaml 新規出力ディレクトリ
+```
+
+`summary.csv` と `results.csv` の追加列：`config_id`、`bonding_channels`、`d_min_m`（最接近距離）、`min_relative_angle_a_deg` / `_b_deg`（アンテナ正面方向と相手方向のなす角の最小値）、`window_s`（両リンクがしきい値以上だった時間）、`delivered_mb`、`mean_throughput_gbps`（= 総転送量 ÷ `window_s`。`window_s` が 0 なら 0）、`setup_time_ms`。
 
 ## 結果の確認
 

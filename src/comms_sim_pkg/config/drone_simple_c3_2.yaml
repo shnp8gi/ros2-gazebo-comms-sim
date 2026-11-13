@@ -1,0 +1,61 @@
+# 拡張仕様書 §6.7 の構成③-2。下りリンク（B→A、データ）= 300 GHz帯、戻りリンク（A→B）= 60 GHz帯。
+# 受信判定とレートは IEEE Std 802.15.3-2023 の表（phy で選択）。しきい値は各表の MCS0 の基準受信感度。
+# リンク確立は簡易モデル：両リンクがしきい値以上の状態が 2 ms 続いたら接続。
+config_id: "3-2"
+scenario: parallel
+antenna_mode: fixed
+drone_a:
+  speed_kmh: 7.2                # 2 m/s（暫定の代表速度）
+  altitude_m: 20.0
+  fixed_elevation_deg: 45.0
+  mount_azimuth_offset_deg: 0.0
+  mount_elevation_offset_deg: 0.0
+drone_b:
+  speed_kmh: 7.2
+  altitude_m: 23.5355339059     # 高度差 = 横方向間隔 = d_min/√2（d_min = 5 m）
+  fixed_elevation_deg: -45.0
+  mount_azimuth_offset_deg: 0.0
+  mount_elevation_offset_deg: 0.0
+lateral_separation_m: 3.5355339059
+encounter_time_s: 20.0
+duration_s: 40.0
+radio_ab:                       # 戻りリンク（60 GHz帯、−8 dBm、LNA なし）
+  frequency_hz: 60.48e9
+  power_mw: 0.15848931924611134
+  phy: hrcp_sc
+  tx_antenna_gain_dbi: 23.0
+  rx_antenna_gain_dbi: 23.0
+  tx_insertion_loss_db: 3.0
+  rx_lna_gain_db: 0.0
+  rx_conversion_gain_db: 0.0
+  rx_insertion_loss_db: 3.0
+  noise_bandwidth_hz: 2.1648e9
+  required_snr_db: null
+radio_ba:                       # 下りリンク（300 GHz帯、−1 dBm、LNA 25 dB）
+  frequency_hz: 271.08e9
+  power_mw: 0.7943282347242815
+  phy: thz_sc
+  bonding_channels: 2           # 4.32 GHz 幅。総送信電力は一定
+  tx_antenna_gain_dbi: 24.0
+  rx_antenna_gain_dbi: 24.0
+  tx_insertion_loss_db: 0.0
+  rx_lna_gain_db: 25.0
+  rx_conversion_gain_db: 3.0
+  rx_insertion_loss_db: 3.0
+  noise_bandwidth_hz: 4.3296e9
+  receiver_noise_figure_db: 10.0
+  required_snr_db: null
+propagation:
+  exponent: 2.0
+antenna:
+  e_plane: e_plane.csv
+  h_plane: h_plane.csv
+  max_attenuation_db: 30.0
+protocol:
+  mode: simple_setup
+  setup_time_ms: 2.0
+  data_from_prc: true           # B→A でデータを送る
+simulation:
+  physics_step_s: 0.0001        # 通信の判定もこの刻み
+  real_time_factor: 5.0
+  log_interval_s: 0.01

@@ -1,6 +1,7 @@
 #pragma once
 
 #include <Eigen/Dense>
+#include <algorithm>
 #include <functional>
 #include <cstdint>
 #include <memory>
@@ -21,6 +22,8 @@ struct DroneConfig {
   double speed_kmh = 50.0;
   double altitude_m = 20.0;
   double fixed_elevation_deg = 45.0;
+  // 既定の取り付け（真横・fixed_elevation_deg）からの回転量。固定アンテナのみ。
+  double mount_azimuth_offset_deg = 0, mount_elevation_offset_deg = 0;
 };
 struct RadioConfig {
   double frequency_hz = 272e9;
@@ -33,6 +36,10 @@ struct RadioConfig {
   double noise_bandwidth_hz = 0;  // 0なら従来互換で雑音計算なし
   double noise_temperature_k = 300, receiver_noise_figure_db = 0;
   std::optional<double> required_snr_db = std::nullopt;  // 未指定なら記録のみ
+  // phy（thz_sc / hrcp_sc）を指定すると規格の表を使い、感度は表の最低値（MCS0）になる。
+  std::string phy = "";
+  unsigned bonding_channels = 1;  // thz_sc のみ 1, 2, 4
+  std::string rate_table = "";    // 空なら共通の mcs_table
 };
 struct PowerBudget {
   double tx_gain_dbi = 0, rx_gain_dbi = 0, path_loss_db = 0;
@@ -59,12 +66,16 @@ struct ProtocolConfig {
   double inactivity_timeout_s = 0.5;
   double channel_sample_s = 0.0001;
   bool data_from_prc = false;  // true: B(PRC)→A(PRDEV)。未指定の旧設定は従来方向を維持。
+  // 簡易リンク確立：両リンクがしきい値以上の状態が simple_setup_s 続いたら接続。
+  bool simple_setup = false;
+  double simple_setup_s = 0.002;
 };
 struct ScenarioConfig {
   bool preview_mode=false;
   bool monitor_only=false;
   bool allow_pre_encounter_end=false;  // 初回確立までの再生記録用。既定では従来の終了条件を維持。
   std::string scenario = "parallel", antenna_mode = "fixed";
+  std::string config_id;  // 評価する構成の名前。summary.csv にそのまま出す。
   DroneConfig a, b{50.0, 30.0, -45.0};
   RadioConfig ab, ba{60e9, 0.4, -68.5};
   ProtocolConfig protocol;
@@ -82,6 +93,16 @@ struct Geometry {
   double heading_a = 0, heading_b = 0;
 };
 Geometry geometry(const ScenarioConfig &config, double time);
+// 通信コアが受け取る位置・姿勢。回転行列はワールド←各座標系、アンテナの正面は +X。
+struct Poses {
+  Eigen::Vector3d a, b;
+  Eigen::Matrix3d body_a, body_b;
+  Eigen::Matrix3d antenna_a, antenna_b;
+};
+// 供給元：解析軌道／Gazebo の実測値／記録の再生。
+using PoseSource = std::function<Poses(double)>;
+// 解析軌道（kinematic）。取り付けオフセットを含む。
+Poses analytic_poses(const ScenarioConfig &config, double time);
 struct LinkSample {
   double distance = 0;
   double rssi_ab = -999, rssi_ba = -999;
@@ -92,13 +113,19 @@ struct LinkSample {
   PowerBudget budget_ab{}, budget_ba{};
   bool snr_ab_ok = true, snr_ba_ok = true;
   double rate_ba_gbps = 0;
+  Poses poses{};
+  double deflection_a_deg = 0, deflection_b_deg = 0;  // 取り付けの向きからのアンテナのぶれ
 };
 class RadioModel {
  public:
-  explicit RadioModel(const ScenarioConfig &config);
+  // source を省くと解析軌道。外部の供給元には取り付けオフセットを回転として掛ける。
+  explicit RadioModel(const ScenarioConfig &config, PoseSource source = {});
   LinkSample Evaluate(double time) const;
  private:
   ScenarioConfig config_;
+  PoseSource source_;
+  bool fixed_mount_ = false;
+  Eigen::Matrix3d mount_a_, mount_b_, offset_a_, offset_b_;  // 機体←アンテナ、オフセットの回転
   AntennaPatternParser pattern_;
   double pattern_boresight_gain_ = 0;
   std::unique_ptr<CommsCalculator> ab_, ba_;
@@ -127,9 +154,33 @@ struct LinkEvent {
 struct LinkStats {
   double delivered_mb = 0, connected_s = 0;
   double first_connected_s = -1, last_setup_ms = 0;
+  double window_s = 0;  // 両リンクがしきい値以上だった時間（simple_setup のみ）
   unsigned attempts = 0, connections = 0, timeouts = 0, disconnections = 0;
   unsigned data_frames = 0, failed_frames = 0;
   uint64_t awgn_trials = 0, awgn_errors = 0;
+};
+
+// 簡易リンク確立モデル。channel_sample_s ごとに両リンクの受信電力を見る。
+class SimpleSetup {
+ public:
+  using Evaluate = std::function<LinkSample(double)>;
+  using Log = std::function<void(const LinkEvent &)>;
+  SimpleSetup(const ProtocolConfig &config, Evaluate evaluate, Log log);
+  void Advance(double time);
+  bool Connected() const { return connected_; }
+  const LinkStats &Stats() const { return stats_; }
+  const std::string &State() const { return state_; }
+ private:
+  void Emit(double time, const std::string &type, const std::string &detail, double rssi);
+  double step_, setup_s_;
+  bool data_ba_;
+  Evaluate evaluate_;
+  Log log_;
+  LinkStats stats_;
+  uint64_t index_ = 0;
+  double ok_since_ = -1;
+  bool connected_ = false;
+  std::string state_ = "SCANNING";
 };
 
 // イベント時刻で進める。Gazeboのステップ境界への丸めでIFS等を伸ばさない。
@@ -139,9 +190,9 @@ class LinkProtocol {
   using Log = std::function<void(const LinkEvent &)>;
   LinkProtocol(ProtocolConfig config, Evaluate evaluate, Log log = {});
   void Advance(double time);
-  bool Connected() const { return hrcp_?hrcp_->Connected():connected_; }
-  const LinkStats &Stats() const { return hrcp_?hrcp_->Stats():stats_; }
-  const std::string &State() const { return hrcp_?hrcp_->State():state_; }
+  bool Connected() const { return simple_?simple_->Connected():hrcp_?hrcp_->Connected():connected_; }
+  const LinkStats &Stats() const { return simple_?simple_->Stats():hrcp_?hrcp_->Stats():stats_; }
+  const std::string &State() const { return simple_?simple_->State():hrcp_?hrcp_->State():state_; }
  private:
   enum class Action { Idle, Request, Response, Ack, Data, DataAck,
                       FrameEnd, ResponseTimeout, AckTimeout, InactivityDisconnect };
@@ -172,6 +223,7 @@ class LinkProtocol {
   void Emit(const std::string &type, const std::string &detail = "");
   void Integrate(double until);
   std::unique_ptr<HrcpPairnet> hrcp_;
+  std::unique_ptr<SimpleSetup> simple_;
   ProtocolConfig config_;
   AwgnSampler awgn_sampler_;
   Evaluate evaluate_;
@@ -197,13 +249,26 @@ class LinkProtocol {
 // 同一コアをGazeboプラグインと単体検証から使い、集計をCSVの再探索に依存させない。
 class DroneRun {
  public:
-  explicit DroneRun(ScenarioConfig config);
+  explicit DroneRun(ScenarioConfig config, PoseSource source = {});
   ~DroneRun();
   void Advance(double time);
   void Finish();
   const ScenarioConfig &Config() const { return config_; }
   const LinkStats &Stats() const { return protocol_->Stats(); }
+  // 実際の軌跡から求めた最接近距離と、アンテナ正面方向と相手方向のなす角の最小値。
+  struct Encounter {
+    double d_min_m = std::numeric_limits<double>::infinity();
+    double min_angle_a_deg = std::numeric_limits<double>::infinity();
+    double min_angle_b_deg = std::numeric_limits<double>::infinity();
+    void Observe(const LinkSample &s) {
+      d_min_m = std::min(d_min_m, s.distance);
+      min_angle_a_deg = std::min(min_angle_a_deg, s.off_axis_a_deg);
+      min_angle_b_deg = std::min(min_angle_b_deg, s.off_axis_b_deg);
+    }
+  };
+  const Encounter &Observed() const { return encounter_; }
  private:
+  LinkSample Sample(double time);
   struct Output;
   ScenarioConfig config_;
   RadioModel radio_;
@@ -212,5 +277,10 @@ class DroneRun {
   double next_log_ = 0, time_ = 0;
   uint64_t log_index_ = 0;
   bool finished_ = false;
+  Encounter encounter_;
 };
+// summary.csv の追加列（見出しと値）。掃引ツールと共有する。
+std::string encounter_summary_header();
+std::string encounter_summary_row(const ScenarioConfig &config, const LinkStats &stats,
+                                  const DroneRun::Encounter &encounter);
 }  // namespace comms_sim
