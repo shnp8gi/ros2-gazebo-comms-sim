@@ -1,6 +1,10 @@
 // 拡張仕様書 §10.1 の単体テスト（通信層）。
 #include "comms_sim_pkg/drone_link.hpp"
 #include <cmath>
+#include <filesystem>
+#include <fstream>
+#include <unistd.h>
+#include <vector>
 #include <iomanip>
 #include <iostream>
 #include <sstream>
@@ -131,6 +135,46 @@ int main(int argc, char **argv) {
       s.window_s = 0; s.delivered_mb = 0;
       check(encounter_summary_row(c2, s, e).find(",0.000000000,0.000000000,0.000000000,2.000000000")
             != std::string::npos, "通信できる時間が 0 のとき平均スループットは 0");
+    }
+    // --- 飛行の記録の再生：解析軌道を記録の形式で書き出すと、解析軌道と同じ結果になる
+    {
+      const auto directory = std::filesystem::temp_directory_path() / ("trace-test-" + std::to_string(getpid()));
+      std::filesystem::create_directories(directory);
+      auto base = c2;                       // 記録は d_min = 5 m、オフセットなし
+      base.duration_s = 2; base.encounter_s = 1;
+      const double step = 1e-3; const size_t rows = 2000;
+      {
+        std::ofstream out(directory / "trace.bin", std::ios::binary);
+        for (size_t i = 0; i < rows; ++i) {
+          const double t = (i + 1) * step; const auto p = analytic_poses(base, t);
+          std::vector<double> row{t};
+          auto add = [&](const Eigen::Vector3d &x, const Eigen::Matrix3d &r) {
+            const Eigen::Quaterniond q(r);
+            for (double v : {x.x(), x.y(), x.z(), q.w(), q.x(), q.y(), q.z()}) row.push_back(v); };
+          add(p.a, p.body_a); add(p.a, p.antenna_a); row.insert(row.end(), 4, 0.0);
+          add(p.b, p.body_b); add(p.b, p.antenna_b); row.insert(row.end(), 4, 0.0);
+          out.write(reinterpret_cast<const char *>(row.data()), static_cast<std::streamsize>(row.size() * sizeof(double)));
+        }
+        std::ofstream meta(directory / "trace.json");
+        meta << "{\"rows\": " << rows << ", \"columns\": 37, \"step_s\": " << step << "}\n";
+      }
+      auto replay = base; replay.backend = "physics"; replay.trace = directory.string();
+      auto wide = base;                     // d_min を 8 m に変え、オフセットも与える
+      wide.lateral_separation_m = 8 / std::sqrt(2.0); wide.b.altitude_m = wide.a.altitude_m + 8 / std::sqrt(2.0);
+      wide.a.mount_elevation_offset_deg = 3; wide.b.mount_azimuth_offset_deg = -4;
+      auto wide_replay = wide; wide_replay.backend = "physics"; wide_replay.trace = directory.string();
+      for (double t : {0.5, 1.0, 1.5}) {
+        const auto x = RadioModel(replay).Evaluate(t), y = RadioModel(base).Evaluate(t);
+        near(x.rssi_ab, y.rssi_ab, 1e-9); near(x.rssi_ba, y.rssi_ba, 1e-9); near(x.distance, y.distance, 1e-9);
+        const auto u = RadioModel(wide_replay).Evaluate(t), v = RadioModel(wide).Evaluate(t);
+        near(u.rssi_ab, v.rssi_ab, 1e-9); near(u.rssi_ba, v.rssi_ba, 1e-9); near(u.distance, v.distance, 1e-9);
+        near(u.off_axis_a_deg, v.off_axis_a_deg, 1e-6);
+      }
+      near(RadioModel(wide_replay).Evaluate(1.0).distance, 8, 1e-9);
+      auto wrong = replay; wrong.a.fixed_elevation_deg = 30;
+      bool rejected = false; try { RadioModel radio(wrong); } catch (const std::invalid_argument &) { rejected = true; }
+      check(rejected, "取り付けの仰角が記録と違う設定を受理しています");
+      std::filesystem::remove_all(directory);
     }
     std::cout << "取り付けオフセット・ボンディング・簡易リンク確立・集計テスト成功\n";
   } catch (const std::exception &e) { std::cerr << e.what() << '\n'; return 1; }

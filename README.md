@@ -137,6 +137,28 @@ install/drone/comms_sim_pkg/lib/comms_sim_pkg/drone_offline_run src/comms_sim_pk
 
 `summary.csv` と `results.csv` の追加列：`config_id`、`bonding_channels`、`d_min_m`（最接近距離）、`min_relative_angle_a_deg` / `_b_deg`（アンテナ正面方向と相手方向のなす角の最小値）、`window_s`（両リンクがしきい値以上だった時間）、`delivered_mb`、`mean_throughput_gbps`（= 総転送量 ÷ `window_s`。`window_s` が 0 なら 0）、`setup_time_ms`。
 
+### 物理ベースの飛行を記録して再生する
+
+機体を Gazebo の物理エンジンで飛ばし、その位置・姿勢を記録して、通信の計算に使う。
+通信の結果は飛行に影響しないので、飛行は条件ごとに1回だけ実行し、通信は記録を再生して何度でも計算する。
+
+```bash
+# 1. 飛行を記録する（40 秒の飛行で 2 分ほど）。条件は flight_default.yaml、--set で上書き
+python3 tools/run_flight_record.py --output sim_results/flight_main
+python3 tools/run_flight_record.py --set vibration.enabled=false drag.enabled=false antenna.joint=fixed --output sim_results/flight_ideal
+
+# 2. 前傾、アンテナのぶれ、最接近距離を確認する
+python3 tools/analyze_flight.py sim_results/flight_main
+
+# 3. 記録を再生して通信を掃引する（--trace を省くと解析軌道）
+python3 tools/run_comms_replay_sweep.py --trace sim_results/flight_main --d-min 1:10:0.5 --offset-el 0:10:1
+```
+
+- 機体：クアッド X 型（1.5 kg）。ロータの推力は Gazebo 標準の `MulticopterMotorModel`、空気抵抗は `DragPlugin`、ロータの揺れは `RotorVibrationPlugin`。アンテナは2軸のばね・ダンパー付き関節で取り付ける。値は実機に合わせたものではなく、オーダーの目安。
+- 制御：多段 PID（[quad_controller.hpp](src/comms_sim_pkg/include/comms_sim_pkg/quad_controller.hpp)）を `QuadControllerPlugin` が物理の刻みに同期して動かす。`/<機体>/state`・`/<機体>/setpoint` を配信し、ロータ回転数の指令は `/<機体>/rotor_cmd`（`gz.msgs.Actuators`）で外部からも与えられる（プラグインに `<external_control>true</external_control>` を指定）。
+- 再生：最接近距離を変えるときは B の軌跡を平行移動し、取り付けオフセットは記録したアンテナの姿勢に一定の回転を掛ける（ばね・ダンパーの揺れ方への影響は無視する近似）。
+- 1条件だけ再生するときは、設定ファイルに `vehicle: {backend: physics, trace: 記録のディレクトリ}` を足して `drone_offline_run` を使う。`timeseries.csv` に機体の roll・pitch・yaw とアンテナのぶれ角が出る。
+
 ## 結果の確認
 
 通常の結果は `sim_results/` に保存される。全組み合わせを実行すると、親ディレクトリの下に各条件の結果と比較表が作成される。

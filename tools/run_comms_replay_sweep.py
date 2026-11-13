@@ -36,6 +36,7 @@ def main():
     parser.add_argument('--offset-az', default='0', help='取り付けの方位オフセット [deg]')
     parser.add_argument('--offset-target', choices=('both', 'a', 'b'), default='both', help='オフセットを与える機体')
     parser.add_argument('--speed', type=float, help='各機の速度 [m/s]。省略時は設定ファイルの値')
+    parser.add_argument('--trace', help='飛行の記録（run_flight_record.py の出力ディレクトリ）。指定すると解析軌道の代わりに再生する')
     parser.add_argument('--output', help='新規の出力ディレクトリ')
     parser.add_argument('--exe', default=str(ROOT / 'install/drone/comms_sim_pkg/lib/comms_sim_pkg/comms_sweep'))
     args = parser.parse_args()
@@ -51,6 +52,8 @@ def main():
                     run = {'id': f'{config.stem}_d{d:g}_el{el:g}_az{az:g}', 'config': str(config), 'd_min_m': d}
                     if args.speed:
                         run['speed_mps'] = args.speed
+                    if args.trace:
+                        run['trace'] = str(Path(args.trace).resolve())
                     for drone in ('a', 'b'):
                         if args.offset_target in ('both', drone):
                             run[f'offset_{drone}_el_deg'] = el

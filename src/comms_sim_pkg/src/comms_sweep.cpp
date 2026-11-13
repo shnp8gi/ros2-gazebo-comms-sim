@@ -1,6 +1,6 @@
 // Gazebo を使わずに通信だけを計算する掃引。条件ごとに1行の集計を CSV に書く。
 // manifest.yaml の runs: の各要素
-//   id, config（設定ファイル）, d_min_m, speed_mps,
+//   id, config（設定ファイル）, trace（飛行の記録のディレクトリ）, d_min_m, speed_mps,
 //   offset_a_az_deg, offset_a_el_deg, offset_b_az_deg, offset_b_el_deg（すべて省略可）
 #include "comms_sim_pkg/drone_link.hpp"
 #include <yaml-cpp/yaml.h>
@@ -14,7 +14,7 @@
 
 namespace {
 struct Job {
-  std::string id, config;
+  std::string id, config, trace;
   double d_min = -1, speed = -1;
   double a_az = 0, a_el = 0, b_az = 0, b_el = 0;
 };
@@ -22,6 +22,8 @@ std::string run(const Job &job) {
   using namespace comms_sim;
   auto c = ScenarioConfig::Load(job.config);
   if (job.speed > 0) c.a.speed_kmh = c.b.speed_kmh = job.speed * 3.6;
+  // trace を指定すると、物理ベースの飛行の記録を再生する（速度は記録のもの）。
+  if (!job.trace.empty()) { c.backend = "physics"; c.trace = job.trace; }
   if (job.d_min > 0) {
     // 横方向間隔と高度差をどちらも d_min/√2 にして、最接近時の相手方向を 45° に保つ。
     if (c.scenario != "parallel") throw std::invalid_argument("d_min_m は並行すれ違いでのみ使えます");
@@ -54,6 +56,7 @@ int main(int argc, char **argv) {
     for (const auto &node : YAML::LoadFile(argv[1])["runs"]) {
       Job j;
       j.id = node["id"].as<std::string>(); j.config = node["config"].as<std::string>();
+      if (node["trace"]) j.trace = node["trace"].as<std::string>();
       auto number = [&](const char *key, double fallback) {
         return node[key] ? node[key].as<double>() : fallback; };
       j.d_min = number("d_min_m", -1); j.speed = number("speed_mps", -1);

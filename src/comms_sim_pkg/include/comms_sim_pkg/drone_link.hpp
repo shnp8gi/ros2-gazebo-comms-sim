@@ -76,6 +76,8 @@ struct ScenarioConfig {
   bool allow_pre_encounter_end=false;  // 初回確立までの再生記録用。既定では従来の終了条件を維持。
   std::string scenario = "parallel", antenna_mode = "fixed";
   std::string config_id;  // 評価する構成の名前。summary.csv にそのまま出す。
+  // kinematic: 解析軌道。physics: 物理ベースの飛行の記録（trace のディレクトリ）を再生する。
+  std::string backend = "kinematic", trace;
   DroneConfig a, b{50.0, 30.0, -45.0};
   RadioConfig ab, ba{60e9, 0.4, -68.5};
   ProtocolConfig protocol;
@@ -103,6 +105,21 @@ struct Poses {
 using PoseSource = std::function<Poses(double)>;
 // 解析軌道（kinematic）。取り付けオフセットを含む。
 Poses analytic_poses(const ScenarioConfig &config, double time);
+// 物理ベースの飛行の記録（FlightRecorderPlugin の trace.bin / trace.json）。
+class FlightTrace {
+ public:
+  explicit FlightTrace(const std::string &directory);
+  Poses At(double time) const;                 // 最も近い時刻の行
+  double Duration() const { return rows_ * step_; }
+  double Step() const { return step_; }
+  static constexpr size_t columns = 37;
+ private:
+  std::vector<double> data_;
+  size_t rows_ = 0;
+  double step_ = 0;
+};
+// 記録を再生する供給元。B の軌跡を平行移動して、設定の横方向間隔と高度差に合わせる。
+PoseSource trace_pose_source(const ScenarioConfig &config);
 struct LinkSample {
   double distance = 0;
   double rssi_ab = -999, rssi_ba = -999;

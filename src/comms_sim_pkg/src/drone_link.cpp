@@ -7,6 +7,9 @@
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <map>
+#include <memory>
+#include <mutex>
 #include <sstream>
 #include <stdexcept>
 
@@ -37,6 +40,14 @@ ScenarioConfig ScenarioConfig::Load(const std::string &path) {
     d.mount_elevation_offset_deg = number(y[key], "mount_elevation_offset_deg", 0);
   };
   if (y["config_id"]) c.config_id = y["config_id"].as<std::string>();
+  if (y["vehicle"]) {
+    if (y["vehicle"]["backend"]) c.backend = y["vehicle"]["backend"].as<std::string>();
+    if (y["vehicle"]["trace"]) {
+      auto trace = std::filesystem::path(y["vehicle"]["trace"].as<std::string>());
+      if (trace.is_relative()) trace = std::filesystem::path(path).parent_path() / trace;
+      c.trace = std::filesystem::absolute(trace).string();
+    }
+  }
   drone("drone_a", c.a); drone("drone_b", c.b);
   auto radio = [&](const char *key, RadioConfig &r) {
     r.frequency_hz = number(y[key], "frequency_hz", r.frequency_hz);
@@ -225,6 +236,10 @@ void ScenarioConfig::Validate() const {
     if ((d.mount_azimuth_offset_deg != 0 || d.mount_elevation_offset_deg != 0) && antenna_mode != "fixed")
       throw std::invalid_argument("取り付けオフセットは固定アンテナでのみ使えます");
   }
+  if (backend != "kinematic" && backend != "physics")
+    throw std::invalid_argument("vehicle.backend は kinematic または physics です");
+  if (backend == "physics" && (trace.empty() || scenario != "parallel" || antenna_mode != "fixed"))
+    throw std::invalid_argument("physics バックエンドには飛行の記録（vehicle.trace）と、並行・固定アンテナの設定が必要です");
   if (protocol.simple_setup) {
     positive(protocol.simple_setup_s, "setup_time_ms");
     if (protocol.awgn.enabled || protocol.hrcp.enabled || protocol.lab_phy.enabled ||
@@ -345,8 +360,58 @@ PowerBudget calculate_power_budget(const RadioConfig &r, double path_loss,
   return b;
 }
 
+FlightTrace::FlightTrace(const std::string &directory) {
+  const auto meta = YAML::LoadFile(directory + "/trace.json");
+  rows_ = meta["rows"].as<size_t>(); step_ = meta["step_s"].as<double>();
+  if (meta["columns"].as<size_t>() != columns || rows_ == 0 || !(step_ > 0))
+    throw std::runtime_error("飛行の記録の形式が違います: " + directory);
+  data_.resize(rows_ * columns);
+  std::ifstream in(directory + "/trace.bin", std::ios::binary);
+  in.read(reinterpret_cast<char *>(data_.data()), static_cast<std::streamsize>(data_.size() * sizeof(double)));
+  if (!in) throw std::runtime_error("飛行の記録を読めません: " + directory);
+}
+Poses FlightTrace::At(double time) const {
+  // 行 i の時刻は (i+1)·step。
+  const auto index = static_cast<size_t>(std::clamp<long long>(std::llround(time / step_) - 1, 0,
+                                                              static_cast<long long>(rows_) - 1));
+  const double *r = &data_[index * columns];
+  auto position = [&](size_t o) { return Eigen::Vector3d(r[o], r[o + 1], r[o + 2]); };
+  auto rotation = [&](size_t o) {
+    return Eigen::Quaterniond(r[o + 3], r[o + 4], r[o + 5], r[o + 6]).normalized().toRotationMatrix(); };
+  // アンテナの位置は機体の位置で代表する（既存の解析軌道と同じ扱い）。
+  return {position(1), position(19), rotation(1), rotation(19), rotation(8), rotation(26)};
+}
+PoseSource trace_pose_source(const ScenarioConfig &c) {
+  // 掃引では同じ記録を何度も使うので、読み込みは1回にする。
+  static std::mutex mutex;
+  static std::map<std::string, std::shared_ptr<const FlightTrace>> cache;
+  std::shared_ptr<const FlightTrace> trace;
+  {
+    std::lock_guard<std::mutex> lock(mutex);
+    auto &entry = cache[c.trace];
+    if (!entry) entry = std::make_shared<FlightTrace>(c.trace);
+    trace = entry;
+  }
+  if (c.duration_s > trace->Duration() + 1e-9)
+    throw std::invalid_argument("duration_s が飛行の記録より長くなっています");
+  const auto first = trace->At(0);
+  // 記録のアンテナは既定の取り付け。設定の仰角と合っていることを確かめる。
+  auto zero = c;
+  zero.a.mount_azimuth_offset_deg = zero.a.mount_elevation_offset_deg = 0;
+  zero.b.mount_azimuth_offset_deg = zero.b.mount_elevation_offset_deg = 0;
+  const auto nominal = analytic_poses(zero, 0);
+  if (((first.body_a.transpose() * first.antenna_a) - (nominal.body_a.transpose() * nominal.antenna_a)).norm() > 1e-3 ||
+      ((first.body_b.transpose() * first.antenna_b) - (nominal.body_b.transpose() * nominal.antenna_b)).norm() > 1e-3)
+    throw std::invalid_argument("飛行の記録のアンテナの取り付けが、設定（fixed_elevation_deg）と合いません");
+  // d_min を変えるのは B の軌跡を平行移動するだけ（2機の飛行は互いに独立）。
+  const Eigen::Vector3d recorded = first.b - first.a;
+  const Eigen::Vector3d shift(0, c.lateral_separation_m - recorded.y(),
+                              (c.b.altitude_m - c.a.altitude_m) - recorded.z());
+  return [trace, shift](double time) { auto p = trace->At(time); p.b += shift; return p; };
+}
 RadioModel::RadioModel(const ScenarioConfig &c, PoseSource source)
     : config_(c), source_(std::move(source)), pattern_(c.attenuation_limit_db) {
+  if (!source_ && c.backend == "physics") source_ = trace_pose_source(c);
   fixed_mount_ = c.antenna_mode == "fixed";
   if (fixed_mount_) {
     // 固定搭載では機体←アンテナの回転は時刻によらない。
