@@ -48,7 +48,7 @@ target_link_libraries(DroneEncounterPlugin PRIVATE drone_link_core gz-sim8::gz-s
 set_target_properties(DroneEncounterPlugin PROPERTIES PREFIX "")
 install(TARGETS DroneEncounterPlugin DESTINATION lib/${PROJECT_NAME}/plugins)
 # 物理ベースの飛行（physics バックエンド）のプラグイン
-foreach(plugin QuadControllerPlugin:quad_controller_plugin DragPlugin:drag_plugin FlightRecorderPlugin:flight_recorder_plugin)
+foreach(plugin QuadControllerPlugin:quad_controller_plugin DragPlugin:drag_plugin FlightRecorderPlugin:flight_recorder_plugin RotorVibrationPlugin:rotor_vibration_plugin)
   string(REPLACE ":" ";" pair ${plugin})
   list(GET pair 0 target)
   list(GET pair 1 source)

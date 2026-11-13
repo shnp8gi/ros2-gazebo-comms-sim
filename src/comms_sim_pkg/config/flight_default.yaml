@@ -33,13 +33,15 @@ controller:
 antenna:
   mass_kg: 0.15
   elevation_deg: 45.0         # A は上向き、B は下向きに同じ角度
-  joint: fixed                # fixed / spring
-  natural_frequency_hz: 40.0  # spring のとき
+  joint: spring               # fixed / spring（ばね・ダンパー付きの2軸の関節）
+  # 仕様書の目安（30〜50 Hz、m·e = 1 g·mm）ではぶれが約 0.005° にとどまる。
+  # ぶれを 0.1° 程度にするため、固有振動数をロータ回転数（約 104 Hz）に近づけ、アンバランスを大きくしている。
+  natural_frequency_hz: 90.0
   damping_ratio: 0.07
 vibration:
-  enabled: false
-  unbalance_kgm: 1.0e-06      # m·e（ロータ1つあたり）
-  thrust_ripple: 0.015        # 推力の脈動の割合 α
+  enabled: true
+  unbalance_kgm: 1.5e-05      # m·e（ロータ1つあたり）。15 g·mm。0 にするとアンバランスなし
+  thrust_ripple: 0.015        # 推力の脈動の割合 α。0 にすると脈動なし
   seed: 20261113
 simulation:
   physics_step_s: 0.0001

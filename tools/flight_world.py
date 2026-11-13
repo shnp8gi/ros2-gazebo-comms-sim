@@ -64,14 +64,18 @@ def model(name, config, position, heading, elevation_deg, seed):
         omega = 2 * math.pi * a['natural_frequency_hz']
         about_joint = ay + a['mass_kg'] * ANTENNA_COM ** 2
         stiffness, damping = about_joint * omega ** 2, 2 * a['damping_ratio'] * about_joint * omega
-        dynamics = f'<dynamics><damping>{damping}</damping><spring_stiffness>{stiffness}</spring_stiffness><spring_reference>0</spring_reference></dynamics>'
+        # 重心が関節から離れているので、重力でピッチ方向にたわむ。水平姿勢でつり合うように基準角をずらす。
+        sag = a['mass_kg'] * 9.81 * ANTENNA_COM * math.cos(math.radians(elevation_deg)) / stiffness
+        def dynamics(reference):
+            return (f'<dynamics><damping>{damping}</damping><spring_stiffness>{stiffness}</spring_stiffness>'
+                    f'<spring_reference>{reference}</spring_reference></dynamics>')
         parts.append(
             f'<link name="antenna_gimbal"><pose relative_to="base_link">{mount}</pose>'
             f'{inertial(GIMBAL_MASS, 1e-06, 1e-06, 1e-06)}</link>'
             '<joint name="antenna_pitch_joint" type="revolute"><parent>base_link</parent><child>antenna_gimbal</child>'
-            f'<axis><xyz>0 1 0</xyz><limit><lower>-0.5</lower><upper>0.5</upper></limit>{dynamics}</axis></joint>'
+            f'<axis><xyz>0 1 0</xyz><limit><lower>-0.5</lower><upper>0.5</upper></limit>{dynamics(-sag)}</axis></joint>'
             '<joint name="antenna_yaw_joint" type="revolute"><parent>antenna_gimbal</parent><child>antenna_link</child>'
-            f'<axis><xyz>0 0 1</xyz><limit><lower>-0.5</lower><upper>0.5</upper></limit>{dynamics}</axis></joint>')
+            f'<axis><xyz>0 0 1</xyz><limit><lower>-0.5</lower><upper>0.5</upper></limit>{dynamics(0)}</axis></joint>')
     else:
         parts.append('<joint name="antenna_joint" type="fixed"><parent>base_link</parent><child>antenna_link</child></joint>')
     s = config['scenario']

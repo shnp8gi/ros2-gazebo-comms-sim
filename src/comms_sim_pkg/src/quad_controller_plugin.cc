@@ -17,6 +17,7 @@
 #include <chrono>
 #include <cmath>
 #include <iostream>
+#include <vector>
 
 namespace comms_sim {
 class QuadControllerPlugin : public gz::sim::System,
@@ -49,6 +50,7 @@ class QuadControllerPlugin : public gz::sim::System,
     inner_steps_ = std::max(1, sdf->Get<int>("inner_steps", 10).first);    // 姿勢・角速度：1 kHz
     outer_steps_ = std::max(1, sdf->Get<int>("outer_steps", 100).first);   // 位置・速度：100 Hz
     external_ = sdf->Get<bool>("external_control", false).first;
+    rate_history_.assign(std::max(1, sdf->Get<int>("rate_window", 10).first), Eigen::Vector3d::Zero());
     link_ = gz::sim::Link(model_.LinkByName(ecm, sdf->Get<std::string>("link_name", "base_link").first));
     if (!link_.Valid(ecm)) { std::cerr << "制御器: 機体のリンクがありません: " << name_ << std::endl; return; }
     link_.EnableVelocityChecks(ecm);
@@ -71,12 +73,33 @@ class QuadControllerPlugin : public gz::sim::System,
       s.rotation = Eigen::Quaterniond(q.W(), q.X(), q.Y(), q.Z()).toRotationMatrix();
       s.body_rate = s.rotation.transpose() * Eigen::Vector3d(rate->X(), rate->Y(), rate->Z());
       const auto setpoint = path_.At(time);
+      // 各ループには、その周期の間の平均を渡す。ロータの揺れ（約 100 Hz 以上）が
+      // 制御周期で折り返して低い周波数の動きに化けるのを防ぐ（揺れは制御で打ち消さない）。
+      outer_position_ += s.position; outer_velocity_ += s.velocity; ++outer_count_;
+      inner_rate_ += s.body_rate; ++inner_count_;
       if (step_ % outer_steps_ == 0) {
         const double dt = std::chrono::duration<double>(info.dt).count() * outer_steps_;
-        controller_->UpdateOuter(s, setpoint, dt);
+        QuadState mean = s;
+        mean.position = outer_position_ / outer_count_; mean.velocity = outer_velocity_ / outer_count_;
+        // 平均は周期の中央の値なので、目標も同じだけ前の時刻のものと比べる。
+        const double lag = 0.5 * (outer_count_ - 1) * std::chrono::duration<double>(info.dt).count();
+        auto reference = path_.At(time - lag);
+        reference.acceleration = setpoint.acceleration;
+        controller_->UpdateOuter(mean, reference, dt);
         Publish(time, s, setpoint);
+        outer_position_.setZero(); outer_velocity_.setZero(); outer_count_ = 0;
       }
-      if (step_ % inner_steps_ == 0) command_ = controller_->UpdateInner(s);
+      if (step_ % inner_steps_ == 0) {
+        // 角速度は直近 rate_window_ 回分（既定 10 ms = ロータ約1回転）の移動平均を使う。
+        rate_history_[rate_index_++ % rate_history_.size()] = inner_rate_ / inner_count_;
+        const size_t filled = std::min<size_t>(rate_index_, rate_history_.size());
+        QuadState mean = s;
+        mean.body_rate.setZero();
+        for (size_t i = 0; i < filled; ++i) mean.body_rate += rate_history_[i];
+        mean.body_rate /= filled;
+        command_ = controller_->UpdateInner(mean);
+        inner_rate_.setZero(); inner_count_ = 0;
+      }
     }
     ++step_;
     if (external_) return;
@@ -118,6 +141,11 @@ class QuadControllerPlugin : public gz::sim::System,
   std::unique_ptr<QuadController> controller_;
   LinePath path_;
   Eigen::Vector4d command_ = Eigen::Vector4d::Zero();
+  Eigen::Vector3d outer_position_ = Eigen::Vector3d::Zero(), outer_velocity_ = Eigen::Vector3d::Zero();
+  Eigen::Vector3d inner_rate_ = Eigen::Vector3d::Zero();
+  int outer_count_ = 0, inner_count_ = 0;
+  std::vector<Eigen::Vector3d> rate_history_;
+  size_t rate_index_ = 0;
   double hover_ = 0;
   int inner_steps_ = 10, outer_steps_ = 100;
   uint64_t step_ = 0;
